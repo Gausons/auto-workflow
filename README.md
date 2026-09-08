@@ -12,24 +12,31 @@
 ```mermaid
 flowchart TB
   User["组织成员"] --> Web["Web 工作台<br/>public/"]
-  subgraph Service["Node.js 服务 · server.mjs"]<br/>    Auth["登录与 RBAC
-identity / authHttp / rbac"]<br/>    Runtime["组织独立运行时
-tenantRuntime"]<br/>    Sources["TypeScript 数据源接口
-issueSources"]<br/>    Jira["Jira Cloud 适配器
-认证 · 分页 · 字段转换"]<br/>    Workflow["修复流水线
-信息补全 · 路由 · 分配"]<br/>    History["Agent 历史读取
-agentHistory"]
+  subgraph Service["Node.js 服务 · server.mjs"]
+    Auth["登录与 RBAC<br/>identity / authHttp / rbac"]
+    Runtime["组织独立运行时<br/>tenantRuntime"]
+    Sources["TypeScript 数据源接口<br/>issueSources"]
+    Jira["Jira Cloud 适配器<br/>认证 · 分页 · 字段转换"]
+    Workflow["修复流水线<br/>信息补全 · 路由 · 分配"]
+    History["Agent 历史读取<br/>agentHistory"]
     Auth --> Runtime
     Runtime --> Sources
     Sources --> Jira
     Runtime --> Workflow
     Runtime --> History
   end
-  Web -->|"成员会话 / API"| Auth<br/>  Jira <-->|"查询 · 附件 · 分配"| JiraAPI["Jira Cloud REST API"]<br/>  Workflow --> AI["AI 模型服务"]<br/>  Workflow --> IDE["Codex / Claude Code CLI"]<br/>  IDE --> Git["目标代码仓库
-任务分支 · 验证分支"]<br/>  Git --> Review["验证报告与人工审核"]
+  Web -->|"成员会话 / API"| Auth
+  Jira <-->|"查询 · 附件 · 分配"| JiraAPI["Jira Cloud REST API"]
+  Workflow --> AI["AI 模型服务"]
+  Workflow --> IDE["Codex / Claude Code CLI"]
+  IDE --> Git["目标代码仓库<br/>任务分支 · 验证分支"]
+  Git --> Review["验证报告与人工审核"]
   Review --> Web
-  subgraph Local["运行环境 · 不纳入版本控制"]<br/>    DB[("SQLite
-组织 · 用户 · 问题 · 流水线 · 审计")]<br/>    Secrets["组织环境文件与凭据"]<br/>    Files["Agent 会话 · 日志 · 附件"]<br/>    Extensions["可选本地数据源扩展"]
+  subgraph Local["运行环境 · 不纳入版本控制"]
+    DB[("SQLite<br/>组织 · 用户 · 问题 · 流水线 · 审计")]
+    Secrets["组织环境文件与凭据"]
+    Files["Agent 会话 · 日志 · 附件"]
+    Extensions["可选本地数据源扩展"]
   end
   Runtime <--> DB
   Secrets -.-> Runtime
