@@ -1,0 +1,17 @@
+{
+  "name": "auto-bug-workflow-workbench",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs",
+    "kill:port": "node scripts/kill-port.mjs",
+    "test": "node --test",
+    "tenant": "node scripts/tenant.mjs"
+  },
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "license": "MIT"
+}

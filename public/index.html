@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>自动 Bug 工作流</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <section class="login-screen" id="loginScreen">
+      <div class="login-card">
+        <p class="eyebrow">BugFlow · 组织工作台</p>
+        <h1>登录你的组织</h1>
+        <form id="loginForm">
+          <label for="loginOrganization">组织 ID</label>
+          <input id="loginOrganization" name="tenantId" value="default" required autocomplete="organization" />
+          <label for="loginUsername">用户名</label>
+          <input id="loginUsername" name="username" required autocomplete="username" />
+          <label for="loginPassword">密码</label>
+          <input id="loginPassword" name="password" type="password" required autocomplete="current-password" maxlength="128" />
+          <p id="loginError" class="login-error" role="alert"></p>
+          <button class="button primary" type="submit">登录</button>
+        </form>
+        <details class="setup-details" id="setupDetails">
+          <summary>首次使用？初始化组织所有者</summary>
+          <p>使用原组织令牌创建首位所有者。初始化后，所有成员均使用个人账号登录。</p>
+          <form id="setupForm">
+            <label>组织初始化令牌<input name="token" type="password" required autocomplete="off" /></label>
+            <label>所有者用户名<input name="username" required minlength="3" maxlength="80" autocomplete="username" /></label>
+            <label>显示名称<input name="displayName" required maxlength="80" autocomplete="name" /></label>
+            <label>密码（12–128 位）<input name="password" type="password" required minlength="12" maxlength="128" autocomplete="new-password" /></label>
+            <p id="setupError" class="login-error" role="alert"></p>
+            <button class="button primary" type="submit">创建组织所有者</button>
+          </form>
+        </details>
+      </div>
+    </section>
+    <div class="app-shell" id="workspaceShell" hidden>
+      <aside class="sidebar">
+        <div class="brand">
+          <svg class="brand-mark" viewBox="0 0 36 36" aria-hidden="true">
+            <rect x="4" y="5" width="28" height="26" rx="6"></rect>
+            <path d="M11 14h18M11 21h10M24 20l4 4-4 4"></path>
+          </svg>
+          <div>
+            <strong>BugFlow</strong>
+            <span>Codex 工作台</span>
+          </div>
+        </div>
+        <nav class="nav-list" aria-label="主导航">
+          <a href="#workbench" class="active" data-nav="workbench">工作台</a>
+          <a href="#pipeline" data-nav="pipeline">执行流水线</a>
+          <a href="#records" data-nav="records">执行记录</a>
+          <a href="#history" data-nav="history">Agent 历史会话</a>
+          <a href="#assignment" data-nav="assignment">分配规则</a>
+          <a href="#config" data-nav="config">对接配置</a>
+          <a href="#members" data-nav="members">组织成员</a>
+          <a href="#account" data-nav="account">我的账号</a>
+        </nav>
+        <div class="sidebar-note">
+          <span class="status-dot" id="sidebarCredentialDot"></span>
+          <span id="sidebarCredentialText">读取配置中</span>
+        </div>
+        <div class="tenant-panel">
+          <span>当前团队</span>
+          <strong id="tenantName"></strong>
+          <span id="currentUser"></span>
+          <button class="button secondary" type="button" id="logoutTenant">退出 / 切换团队</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">个人缺陷自动处理原型</p>
+            <h1>自动拉取、交给 Codex、验证并准备回写</h1>
+          </div>
+          <div class="top-actions">
+            <button class="button secondary" id="assignAll" type="button">一键分配</button>
+            <button class="button secondary" id="syncNow" type="button">立即拉取</button>
+            <button class="button primary" id="openPipeline" type="button">进入流水线</button>
+          </div>
+        </header>
+
+        <section class="page history-page" data-page="history" hidden>
+          <div class="history-heading"><h1>会话</h1><span>Agent 历史记录</span></div>
+          <div class="history-layout">
+            <aside class="history-browser" aria-label="历史会话列表">
+              <form id="historyFilters" class="history-filters">
+                <label class="history-search">搜索会话<input id="historyQuery" placeholder="搜索会话…" maxlength="200" /></label>
+                <div class="history-selects">
+                  <label>Agent<select id="historyAgent"><option value="">全部 Agent</option></select></label>
+                  <label>工作区<select id="historyWorkspace"><option value="">全部工作区</option></select></label>
+                </div>
+                <button class="button secondary" type="submit">刷新会话</button>
+              </form>
+              <p id="historyStatus" role="status" aria-live="polite"></p>
+              <div id="historyList" class="history-list"></div>
+              <div class="history-pagination">
+                <button id="historyPrev" class="button secondary" type="button" disabled aria-label="上一页">←</button>
+                <span id="historyPage"></span>
+                <button id="historyNext" class="button secondary" type="button" disabled aria-label="下一页">→</button>
+              </div>
+              <details class="history-source-details"><summary>数据来源</summary><p id="historySources" class="history-meta"></p></details>
+            </aside>
+            <div id="historyDetail" class="history-detail" aria-live="polite"><div class="history-empty"><span>◎</span><h2>从一个会话开始</h2><p>选择历史会话，查看对话与工作过程</p></div></div>
+          </div>
+        </section>
+        <section class="page" data-page="members" hidden>
+          <div class="config-band">
+            <h2>组织成员</h2>
+            <p>所有者管理全部成员；管理员只能管理操作员和只读成员。停用账号会立即撤销其登录会话。</p>
+            <form id="memberForm" class="fields-grid">
+              <label>用户名<input name="username" required minlength="3" maxlength="80" autocomplete="off" /></label>
+              <label>显示名称<input name="displayName" required maxlength="80" /></label>
+              <label>初始密码<input name="password" type="password" required minlength="12" maxlength="128" autocomplete="new-password" /></label>
+              <label>角色<select name="role" id="newMemberRole"></select></label>
+              <button class="button primary" type="submit">添加成员</button>
+            </form>
+            <p id="memberStatus" role="status"></p>
+            <div id="memberList" class="member-list"></div>
+            <h3>角色权限</h3>
+            <div class="table-scroll"><table class="role-table">
+              <thead><tr><th>角色</th><th>查看数据</th><th>同步 / 分配 / 执行</th><th>审核 / 配置</th><th>成员管理</th></tr></thead>
+              <tbody>
+                <tr><td>组织所有者</td><td>✓</td><td>✓</td><td>✓</td><td>全部角色</td></tr>
+                <tr><td>管理员</td><td>✓</td><td>✓</td><td>✓</td><td>操作员、只读成员</td></tr>
+                <tr><td>操作员</td><td>✓</td><td>✓</td><td>—</td><td>—</td></tr>
+                <tr><td>只读成员</td><td>✓</td><td>—</td><td>—</td><td>—</td></tr>
+              </tbody>
+            </table></div>
+            <h3>组织审计记录</h3>
+            <button class="button secondary" id="refreshMembers" type="button">刷新成员与记录</button>
+            <div id="auditList" class="member-list"></div>
+          </div>
+        </section>
+        <section class="page" data-page="account" hidden>
+          <div class="config-band">
+            <h2>我的账号</h2>
+            <p id="accountIdentity"></p>
+            <form id="passwordForm" class="fields-grid">
+              <label>当前密码<input name="currentPassword" type="password" required autocomplete="current-password" maxlength="128" /></label>
+              <label>新密码（12–128 位）<input name="password" type="password" required autocomplete="new-password" minlength="12" maxlength="128" /></label>
+              <button class="button primary" type="submit">修改密码并退出所有会话</button>
+            </form>
+            <p id="passwordStatus" role="status"></p>
+          </div>
+        </section>
+
+        <section class="page" data-page="config" hidden>
+          <div class="config-band" id="config">
+          <form class="config-form" id="configForm">
+            <div class="form-heading">
+              <div>
+                <h2>对接配置</h2>
+                <p>AK/SK 只从服务端环境变量读取，不进入浏览器。</p>
+              </div>
+            </div>
+
+            <div class="fields-grid">
+              <label>
+                <span>PM API 地址</span>
+                <input name="baseUrl" autocomplete="off" />
+              </label>
+              <label>
+                <span>产品线 lineId</span>
+                <input name="lineId" autocomplete="off" />
+              </label>
+              <label>
+                <span>筛选器 filterId</span>
+                <input name="filterId" autocomplete="off" placeholder="可选，推荐用于个人缺陷" />
+              </label>
+              <label>
+                <span>经办人 assignee</span>
+                <div class="combo-field">
+                  <input name="assignee" autocomplete="off" placeholder="员工号、邮箱或人员ID" />
+                  <select id="assigneeSelect" aria-label="选择经办人">
+                    <option value="">选择员工</option>
+                  </select>
+                </div>
+              </label>
+              <label>
+                <span>操作人 operatorId</span>
+                <input name="operatorId" autocomplete="off" placeholder="流程流转时使用" />
+              </label>
+              <label>
+                <span>IDE 执行器</span>
+                <select name="ideExecutor">
+                  <option value="codex">Codex</option>
+                  <option value="claude">Claude Code</option>
+                </select>
+              </label>
+              <label>
+                <span>IDE 执行路径</span>
+                <input name="codexWorkspaceDir" autocomplete="off" placeholder="/srv/bugflow/repos/my-project" />
+                <small id="workspacePolicy" hidden>工作目录由团队管理员配置；需要调整时请联系管理员。</small>
+              </label>
+              <label class="ide-model-field" data-ide-model="codex">
+                <span>Codex 模型</span>
+                <select name="codexModel">
+                  <option value="gpt-5.6-sol">GPT-5.6 Sol</option>
+                  <option value="gpt-5.6-terra">GPT-5.6 Terra</option>
+                  <option value="gpt-5.6-luna">GPT-5.6 Luna</option>
+                  <option value="gpt-5.5">GPT-5.5</option>
+                  <option value="gpt-5.4">GPT-5.4</option>
+                  <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
+                </select>
+              </label>
+              <label class="ide-model-field" data-ide-model="codex">
+                <span>推理强度</span>
+                <select name="codexReasoningEffort">
+                  <option value="low">低</option>
+                  <option value="medium">中</option>
+                  <option value="high">高</option>
+                  <option value="xhigh">超高</option>
+                </select>
+              </label>
+              <label class="ide-model-field" data-ide-model="claude" hidden>
+                <span>Claude 模型</span>
+                <select name="claudeModel">
+                  <option value="claude-opus-4-8">Claude Opus 4.8</option>
+                  <option value="claude-opus-4-6">claude-opus-4-6</option>
+                  <option value="claude-sonnet-4-8">claude-sonnet-4-8</option>
+                  <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
+                  <option value="claude-haiku-4-5">claude-haiku-4-5</option>
+                </select>
+              </label>
+              <label>
+                <span>主分支</span>
+                <input name="codexBaseBranch" autocomplete="off" placeholder="main" />
+              </label>
+              <label>
+                <span>允许 IDE 自主修复优先级</span>
+                <input name="allowedAutoFixPriorities" autocomplete="off" placeholder="P2,P3" />
+              </label>
+              <label>
+                <span>轮询间隔（分钟）</span>
+                <input name="intervalMinutes" type="number" min="1" max="240" />
+              </label>
+              <label>
+                <span>每页数量</span>
+                <input name="pageSize" type="number" min="1" max="300" />
+              </label>
+              <label>
+                <span>最多页数</span>
+                <input name="maxPages" type="number" min="1" max="50" />
+              </label>
+              <label>
+                <span>请求间隔（ms）</span>
+                <input name="requestDelayMs" type="number" min="0" max="10000" />
+              </label>
+              <label>
+                <span>限流重试等待（ms）</span>
+                <input name="rateLimitRetryMs" type="number" min="1000" max="30000" />
+              </label>
+              <label>
+                <span>Review 最大轮数</span>
+                <input name="codexReviewMaxRounds" type="number" min="1" max="10" />
+              </label>
+              <label class="checkbox-field">
+                <input name="selfOnly" type="checkbox" value="true" />
+                <span>只看当前个人 Token 数据</span>
+              </label>
+              <label class="checkbox-field">
+                <input name="enableBugInfoCompletion" type="checkbox" value="true" />
+                <span>开启 Bug 信息补全</span>
+              </label>
+              <label class="checkbox-field">
+                <input name="allowSkipInfoCompletion" type="checkbox" value="true" />
+                <span>允许跳过信息补全</span>
+              </label>
+              <label class="checkbox-field">
+                <input name="enableAIRouting" type="checkbox" value="true" />
+                <span>开启 AI 路由分类</span>
+              </label>
+              <label class="checkbox-field">
+                <input name="enableAIAssignment" type="checkbox" value="true" />
+                <span>开启 AI 分配建议</span>
+              </label>
+              <label class="checkbox-field">
+                <input name="enableAutoAssignment" type="checkbox" value="true" />
+                <span>开启自动分配</span>
+              </label>
+              <label>
+                <span>AI 分配模型</span>
+                <select name="aiAssignmentModel">
+                  <option value="gpt-5.6-sol">GPT-5.6 Sol</option>
+                  <option value="gpt-5.6-terra">GPT-5.6 Terra</option>
+                  <option value="gpt-5.6-luna">GPT-5.6 Luna</option>
+                  <option value="gpt-5.5">GPT-5.5</option>
+                  <option value="gpt-5.4">GPT-5.4</option>
+                  <option value="gpt-5.4-mini" selected>GPT-5.4 Mini</option>
+                </select>
+              </label>
+              <label>
+                <span>AI 路由模型</span>
+                <select name="aiRoutingModel">
+                  <option value="gpt-5.6-sol">GPT-5.6 Sol</option>
+                  <option value="gpt-5.6-terra">GPT-5.6 Terra</option>
+                  <option value="gpt-5.6-luna">GPT-5.6 Luna</option>
+                  <option value="gpt-5.5">GPT-5.5</option>
+                  <option value="gpt-5.4">GPT-5.4</option>
+                  <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
+                </select>
+              </label>
+              <label>
+                <span>AI 路由 Base URL</span>
+                <input name="aiRoutingBaseUrl" autocomplete="off" placeholder="https://api.openai.com/v1" />
+              </label>
+              <label>
+                <span>AI 路由超时（ms）</span>
+                <input name="aiRoutingTimeoutMs" type="number" min="5000" max="120000" />
+              </label>
+              <label class="checkbox-field">
+                <input name="requireVerificationReport" type="checkbox" value="true" />
+                <span>强制生成验证报告</span>
+              </label>
+              <label class="checkbox-field">
+                <input name="requireRegressionTest" type="checkbox" value="true" />
+                <span>强制要求回归测试</span>
+              </label>
+              <label class="checkbox-field">
+                <input name="requireHumanReview" type="checkbox" value="true" />
+                <span>要求人工 Review</span>
+              </label>
+            </div>
+
+            <div class="form-actions">
+              <div class="credential-state" id="credentialState">凭证状态读取中</div>
+              <button class="button secondary" type="button" id="toggleScheduler">开启定时</button>
+              <button class="button primary" type="submit">保存配置</button>
+            </div>
+          </form>
+          </div>
+        </section>
+
+        <section class="page" data-page="assignment" hidden>
+          <section class="pipeline-actions-panel">
+            <div class="panel-title">
+              <div>
+                <h2>分配规则</h2>
+                <p class="panel-subtitle">维护 AI 分配建议可选人员和职责，保存后用于下一次推荐。</p>
+              </div>
+              <span id="assignmentPeopleState">读取中</span>
+            </div>
+            <form class="config-form" id="assignmentPeopleForm">
+              <div class="fields-grid assignment-add-grid">
+                <label>
+                  <span>姓名</span>
+                  <input name="name" autocomplete="off" required />
+                </label>
+                <label>
+                  <span>员工号</span>
+                  <input name="employeeId" autocomplete="off" required />
+                </label>
+                <label class="wide-field">
+                  <span>职责</span>
+                  <textarea name="responsibility" rows="3" required></textarea>
+                </label>
+              </div>
+              <div class="form-actions">
+                <button class="button primary" type="submit">添加人员</button>
+              </div>
+            </form>
+          </section>
+
+          <section class="task-band">
+            <div class="panel-title">
+              <h2>人员职责</h2>
+              <span>编辑后逐条保存</span>
+            </div>
+            <div class="assignment-people-list" id="assignmentPeopleList"></div>
+          </section>
+        </section>
+
+        <section class="page" data-page="workbench">
+          <section class="metric-grid" aria-label="缺陷概览">
+            <div class="metric">
+              <span>缺陷总数</span>
+              <strong id="metricTotal">0</strong>
+            </div>
+            <div class="metric">
+              <span>未处理</span>
+              <strong id="metricPending">0</strong>
+            </div>
+            <div class="metric">
+              <span>处理中</span>
+              <strong id="metricProcessing">0</strong>
+            </div>
+            <div class="metric">
+              <span>已解决</span>
+              <strong id="metricResolved">0</strong>
+            </div>
+          </section>
+
+        <section class="workbench" id="workbench">
+          <div class="bug-list-panel">
+            <div class="panel-title">
+              <h2>个人缺陷</h2>
+              <span id="syncState">尚未同步</span>
+            </div>
+            <div class="bug-list" id="bugList"></div>
+          </div>
+
+          <div class="bug-detail-panel">
+            <div class="panel-title">
+              <h2>缺陷详情</h2>
+              <span id="selectedState">未选择</span>
+            </div>
+            <article class="bug-detail" id="bugDetail"></article>
+          </div>
+        </section>
+        </section>
+
+        <section class="page github-records-page" data-page="records" hidden>
+          <section class="records-page-header">
+            <div class="github-breadcrumb" aria-label="当前位置">
+              <span>Actions</span><b>/</b><strong>Execution history</strong>
+            </div>
+            <div class="records-title-row">
+              <div>
+                <h2>执行记录</h2>
+                <p>查看当前用户的工作流事件；点击带流水线的记录可返回对应运行详情。</p>
+              </div>
+              <span class="records-user" id="executionRecordUser"></span>
+            </div>
+          </section>
+
+          <section class="records-summary" aria-label="执行记录概览">
+            <div class="records-summary-card">
+              <span>事件总数</span>
+              <strong id="executionRecordCount">0</strong>
+            </div>
+            <div class="records-summary-card">
+              <span>关联流水线</span>
+              <strong id="executionRecordRunCount">0</strong>
+            </div>
+          </section>
+
+          <section class="execution-records-panel">
+            <div class="panel-title">
+              <div>
+                <p class="github-section-kicker">Workflow activity</p>
+                <h2>全部事件</h2>
+              </div>
+              <span class="panel-hint">按时间倒序</span>
+            </div>
+            <div class="execution-record-list" id="executionRecordList"></div>
+          </section>
+        </section>
+
+        <section class="page github-pipeline-page" data-page="pipeline" hidden>
+          <section class="pipeline-actions-panel github-run-header">
+            <div class="github-breadcrumb" aria-label="当前位置">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 2.5h4.5l1.5 2h6.5v9h-12.5z"></path></svg>
+              <span>Actions</span><b>/</b><strong>Bug fix workflow</strong>
+            </div>
+            <div class="github-run-title-row">
+              <div>
+                <h2>Bug 修复流水线</h2>
+                <p class="panel-subtitle">生成任务、跟踪节点输出，并在进入 Review 前检查完整技术闭环。</p>
+              </div>
+              <span class="github-status-pill" id="runState">等待执行</span>
+            </div>
+            <div class="form-actions github-run-actions">
+              <label class="executor-picker">
+                <span>IDE 执行器</span>
+                <select id="ideExecutorPicker">
+                  <option value="codex">Codex</option>
+                  <option value="claude">Claude Code</option>
+                </select>
+              </label>
+              <button class="button secondary" id="runManual" type="button">生成人工流水线</button>
+              <button class="button primary" id="runAuto" type="button">生成自动流水线</button>
+            </div>
+          </section>
+
+          <section class="pipeline-page-grid" id="pipeline">
+            <aside class="run-list-panel github-sidebar-box">
+              <div class="panel-title">
+                <h2><span class="github-panel-icon" aria-hidden="true">#</span> 缺陷</h2>
+              </div>
+              <div class="pipeline-bug-list" id="pipelineBugList"></div>
+              <div class="panel-title compact-title">
+                <h2><span class="github-panel-icon" aria-hidden="true">▶</span> 运行记录</h2>
+              </div>
+              <div class="run-list" id="runList"></div>
+            </aside>
+
+            <div class="pipeline-workspace">
+              <div class="pipeline-panel github-checks-box">
+                <div class="panel-title">
+                  <div>
+                    <p class="github-section-kicker">Workflow run</p>
+                    <h2>Checks</h2>
+                  </div>
+                  <span class="github-panel-label" id="pipelineNodeCount">0 个节点</span>
+                </div>
+                <div class="pipeline" id="pipelineSteps"></div>
+              </div>
+
+              <div class="node-detail-panel github-detail-box">
+                <div class="panel-title">
+                  <div>
+                    <p class="github-section-kicker">Job details</p>
+                    <h2>节点详情</h2>
+                  </div>
+                  <div class="panel-actions">
+                    <button class="button primary" id="startNode" type="button" hidden>执行任务</button>
+                    <button class="button primary" id="startReview" type="button" hidden>开始 Review</button>
+                    <button class="button primary" id="startVerify" type="button" hidden>开始验证</button>
+                    <button class="button secondary" id="stopNode" type="button" hidden>停止任务</button>
+                    <button class="button ghost" id="completeNode" type="button" hidden>标记完成</button>
+                    <button class="button ghost" id="reviewNode" type="button" hidden>标记复核</button>
+                  </div>
+                </div>
+                <article class="bug-detail" id="nodeDetail"></article>
+              </div>
+            </div>
+          </section>
+
+        <section class="task-band github-artifact-box" id="ideSupplementPanel" hidden>
+          <div class="panel-title">
+            <div>
+              <h2>IDE 执行前补充信息</h2>
+              <p class="panel-subtitle">启动 IDE 任务前可补充复现说明、账号环境、截图等材料，图片会保存到目标仓库并写入任务包。</p>
+            </div>
+            <span id="ideSupplementState">可选</span>
+          </div>
+          <div class="supplement-form">
+            <label>
+              <span>补充文本</span>
+              <textarea id="ideSupplementText" rows="4" placeholder="例如：复现账号、环境、关键路径、截图说明、期望 Codex 重点检查的位置"></textarea>
+            </label>
+            <label>
+              <span>补充图片</span>
+              <input id="ideSupplementImages" type="file" accept="image/*" multiple />
+              <small id="ideSupplementFileState">最多 8 张，每张不超过 10MB。</small>
+            </label>
+          </div>
+          <div class="supplement-saved" id="ideSupplementSaved"></div>
+        </section>
+
+        <section class="task-band github-artifact-box">
+          <div class="panel-title">
+            <div>
+              <p class="github-section-kicker">Artifact</p>
+              <h2>IDE 任务包</h2>
+            </div>
+            <div class="panel-actions">
+              <button class="button ghost" id="copyCommand" type="button">复制命令</button>
+              <button class="button ghost" id="copyTask" type="button">复制任务包</button>
+            </div>
+          </div>
+          <div class="handoff-meta" id="handoffMeta" hidden></div>
+          <pre id="taskPacket">选择一个缺陷并生成 IDE 任务包。</pre>
+        </section>
+
+        <section class="task-band github-artifact-box">
+          <div class="panel-title">
+            <div>
+              <p class="github-section-kicker">Raw logs</p>
+              <h2>执行日志</h2>
+            </div>
+          </div>
+          <div class="log-box" id="logBox">暂无日志</div>
+        </section>
+        </section>
+      </main>
+    </div>
+
+    <div class="attachment-preview-modal" id="attachmentPreviewModal" hidden>
+      <div class="attachment-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="attachmentPreviewTitle">
+        <div class="attachment-preview-header">
+          <strong id="attachmentPreviewTitle">图片预览</strong>
+          <div class="attachment-preview-actions">
+            <a class="button secondary" id="attachmentPreviewDownload" href="#" download>下载</a>
+            <button class="preview-close" id="attachmentPreviewClose" type="button" aria-label="关闭图片预览" title="关闭">×</button>
+          </div>
+        </div>
+        <div class="attachment-preview-stage">
+          <img id="attachmentPreviewImage" alt="" />
+          <p id="attachmentPreviewState">图片加载中</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
