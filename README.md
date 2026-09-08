@@ -5,13 +5,14 @@
 - 定时或手动拉取个人缺陷
 - 选择缺陷并生成 Loop / IDE 分工明确的修复流水线
 - 在独立流水线页面中预览、启动、停止并审核 Codex 任务
-- 预留 PM 研发管理平台接口适配
+- 通过统一数据源接口同步内部 PM 或 Jira Cloud 的问题与附件
 
 ## 运行
 
-需要 **Node.js >= 22.16**。数据库使用 Node.js 内置 `node:sqlite`，无需安装数据库服务或额外 npm 依赖。
+需要 **Node.js >= 22.16**。数据库使用 Node.js 内置 `node:sqlite`，无需安装数据库服务。新增数据源模块使用 TypeScript，通过 `tsx` 运行；首次运行前安装依赖。
 
 ```bash
+pnpm install --frozen-lockfile
 cp .env.example .env
 # 编辑 .env，配置自己的 PM 地址、凭据、产品线和工作目录
 npm start
@@ -115,11 +116,52 @@ npm run tenant -- migrate team-a
 PM_ACCESS_KEY=你的AK PM_ACCESS_SECRET=你的SK npm start
 ```
 
-当前原型只使用真实 PM 数据。配置：
+内部 PM 模式使用实际平台接口，配置示例：
 
 ```bash
-PM_MODE=pm PM_LINE_ID=产品线ID PM_FILTER_ID=筛选器ID npm start
+ISSUE_PROVIDER=pm PM_LINE_ID=产品线ID PM_FILTER_ID=筛选器ID npm start
 ```
+
+## 问题数据源（TypeScript）
+
+每个组织当前选择一个数据源。默认 `ISSUE_PROVIDER=pm` 保留原内部 API、字段映射、筛选和已有数据；设置 `ISSUE_PROVIDER=jira` 使用 Jira Cloud。新增适配器、类型声明和测试全部使用 TypeScript，旧 `.mjs` 文件只调整集成入口。开发时运行：
+
+```bash
+npm run typecheck
+npm test
+npm run dev
+```
+
+Jira Cloud 最小配置（默认组织放在根 `.env`，其他组织放在 `.workflow-data/tenants/<tenant-id>.env`）：
+
+```env
+ISSUE_PROVIDER=jira
+JIRA_BASE_URL=https://your-team.atlassian.net
+JIRA_EMAIL=your-account@example.com
+JIRA_API_TOKEN=
+JIRA_JQL=project = DEMO AND issuetype = Bug
+ENABLE_AUTO_ASSIGNMENT=false
+```
+
+在本地填写自己的 API token 后重启。凭据不进入浏览器、问题记录或版本控制。Jira 配置由服务器管理员管理；页面中的 PM 地址、产品线、经办人、分页参数仍仅作用于 PM。Jira 经办人筛选写在 `JIRA_JQL` 中，例如 `project = DEMO AND assignee = currentUser()`。不限制任务类型，移除 `issuetype = Bug` 即可同步其他类型。JQL 只填写过滤表达式，不包含 `ORDER BY`。
+
+支持邮箱 + API token 的 Basic 认证，也可通过 `JIRA_ACCESS_TOKEN` 使用已取得的 OAuth Bearer token（优先于 Basic）；适配器不负责 OAuth 授权或自动刷新。使用 OAuth 网关或有作用域的 token 时，按 Atlassian 要求将 `JIRA_BASE_URL` 设置为 `https://api.atlassian.com/ex/jira/<cloud-id>`，并设置 `JIRA_SITE_URL=https://your-team.atlassian.net` 用于问题链接。当前接入范围为 Jira Cloud REST v3，不包含 Jira Server / Data Center v2。
+
+Jira 功能包括：
+
+- 手动全量查询、定时增量查询、游标分页和问题 ID 去重。`JIRA_PAGE_SIZE` 默认 100，`JIRA_MAX_PAGES` 默认 50；达到分页上限、格式错误或任何一页失败时不覆盖已有数据或推进同步时间。
+- 增量查询使用同步开始时间，并向前重叠 5 分钟以覆盖常见索引延迟；重启后首次同步为全量。增量不会删除已不匹配 JQL、已删除或权限撤回的问题，需手动“立即拉取”校准；长时间索引延迟也需全量校准。
+- ADF 富文本转换为纯文本；保留问题编号、原始状态和源链接。状态分类 `new / indeterminate / done` 分别映射待处理、处理中、已完成。默认 `Highest / High / Medium / Low / Lowest` 映射 `P0 / P1 / P2 / P3 / P3`；自定义名称使用 `JIRA_PRIORITY_MAP` JSON 映射，未知值显示“未设置”。
+- 附件元数据查询与限大小下载，跳转到 CDN 时不传递认证头。人员分配使用 Jira `accountId`，在“分配人员”的人员 ID 字段中配置；自动分配沿用现有开关与角色权限。Jira 状态流转与关闭仍需在原平台人工执行。
+- 查询超时与有限 429 重试。`JIRA_TIMEOUT_MS` 默认 30000；遵循 `Retry-After`，长于 30 秒的等待直接提示稍后重试。其他 HTTP 错误不重试写入，也不回显可能包含凭据的响应正文。
+
+Jira 的本地存储按组织、服务地址与 JQL 隔离，问题 ID 带 `jira:` 前缀。切回 PM 可恢复原来的数据；更改 Jira 地址或 JQL 会使用新的数据分组，旧分组保留。组织成员共享本组织查询范围，Jira 不使用页面中的 PM 经办人字段划分数据。
+
+诊断接口 `GET /api/issues/diagnostics` 要求管理员权限，按当前数据源执行查询检查；旧 `/api/pm/diagnostics` 保留为兼容别名。
+
+扩展其他平台时，在 `src/issueSources/` 下新增 `.ts` 适配器，实现 `types.ts` 中的 `IssueSource`（`sync`、`attachments`、`assign`、`diagnose`、配置校验、存储范围及可选附件下载），在 `index.ts` 的工厂表中注册。只输出统一 `WorkIssue`，将平台认证、分页、原始格式转换留在适配器内；在租户环境变量前缀白名单中加入所需配置，并添加虚构响应测试。无需修改工作台同步、附件或分配主流程。
+
+API 依据：[Jira 查询与分页](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/)、[认证](https://developer.atlassian.com/cloud/jira/platform/basic-auth-for-rest-apis/)、[JQL 时间字段](https://support.atlassian.com/jira-software-cloud/docs/jql-fields/)、[附件](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-attachments/)。
 
 ## 筛选
 

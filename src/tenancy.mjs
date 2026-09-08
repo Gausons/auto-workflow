@@ -36,7 +36,7 @@ export function tenantEnvironment(tenant, rootDir, environment) {
   for (const key of ['PATH', 'HOME', 'USER', 'SHELL', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL', 'SYSTEMROOT']) {
     if (environment[key] !== undefined) result[key] = environment[key];
   }
-  const prefix = /^(PM_|CODEX_|CLAUDE_|IDE_|OPENAI_|ANTHROPIC_|AI_|ENABLE_|ALLOW_|ALLOWED_|REQUIRE_|OPERATION_LOG_|POLL_)/;
+  const prefix = /^(ISSUE_|JIRA_|PM_|CODEX_|CLAUDE_|IDE_|OPENAI_|ANTHROPIC_|AI_|ENABLE_|ALLOW_|ALLOWED_|REQUIRE_|OPERATION_LOG_|POLL_)/;
   if (tenant.id === 'default') {
     for (const [key, value] of Object.entries(environment)) {
       if (prefix.test(key)) result[key] = value;

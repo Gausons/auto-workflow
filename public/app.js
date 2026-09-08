@@ -446,7 +446,7 @@ async function syncNow() {
 async function saveConfig() {
   const form = new FormData(els.configForm);
   const payload = Object.fromEntries(form.entries());
-  payload.mode = "pm";
+  payload.mode = state.config.mode;
   payload.intervalMinutes = Number(payload.intervalMinutes);
   payload.pageSize = Number(payload.pageSize);
   payload.maxPages = Number(payload.maxPages);
@@ -990,11 +990,11 @@ function ideExecutorLabel(runOrExecutor) {
 }
 
 function renderCredentials() {
-  const ok = state.config.accessKeyConfigured && state.config.accessSecretConfigured;
+  const ok = state.config.issueSourceConfigured;
   const aiOk = Boolean(state.config.aiRoutingKeyConfigured);
-  els.credentialState.textContent = `PM 联调 · ${ok ? "服务端已配置 AK/SK" : "服务端未配置 AK/SK"} · AI 路由 ${aiOk ? "已配置 Key" : "未配置 Key"}`;
+  els.credentialState.textContent = `${state.config.issueSourceLabel} · ${ok ? "服务端已配置凭据" : "服务端未配置凭据"} · AI 路由 ${aiOk ? "已配置 Key" : "未配置 Key"}`;
   els.sidebarCredentialDot.classList.toggle("ok", ok && aiOk);
-  els.sidebarCredentialText.textContent = ok ? `PM 已配置 · AI ${aiOk ? "已配置" : "未配置"}` : "服务端未配置 PM AK/SK";
+  els.sidebarCredentialText.textContent = ok ? `${state.config.issueSourceLabel} 已配置 · AI ${aiOk ? "已配置" : "未配置"}` : "服务端未配置数据源凭据";
 }
 
 function renderMetrics() {

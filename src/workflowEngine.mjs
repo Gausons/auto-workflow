@@ -1,3 +1,4 @@
+import { sourceTransitionPlan } from "./issueSources/workflow.ts";
 import { DEFAULT_OPERATION_LOG_ENDPOINT } from "./operationLogClient.mjs";
 import { getIdeExecutorLabel, normalizeIdeExecutor } from "./ideExecutor.mjs";
 
@@ -34,7 +35,7 @@ export function createCodexTaskPacket(bug, config = {}, options = {}) {
     bug.description || "无描述",
     ``,
     `## 复现步骤`,
-    steps || "1. 查看 PM 缺陷详情并补充复现步骤",
+    steps || "1. 查看原平台问题详情并补充复现步骤",
     ``,
     `## 期望结果`,
     bug.expected || "按缺陷验收标准恢复正常。",
@@ -66,7 +67,7 @@ export function createCodexTaskPacket(bug, config = {}, options = {}) {
     `- 不要修改与缺陷无关的文件。`,
     `- 不要绕过原有校验逻辑，不要静默吞掉异常。`,
     `- 不要把 PM AK/SK 或其他密钥写入代码、日志或提交内容。`,
-    `- 提交信息或回写备注中包含缺陷编码 ${bug.code}，便于 PM 与 Git 绑定。`,
+    `- 提交信息或回写备注中包含缺陷编码 ${bug.code}，便于问题平台与 Git 绑定。`,
     `- 修复完成后 Loop 会把 Bug 分支合并到个人当天验证分支，再等待人工 Review；不要自行关闭工单。`
   ].join("\n");
 }
@@ -255,7 +256,7 @@ export function runFixWorkflow(bug, config = {}, options = {}) {
       label: "原始工单",
       status: "done",
       message: `已读取 ${bug.code} 的原始工单信息。`,
-      detail: "缺陷基础信息来自 PM 缺陷查询接口，附件会在创建流水线前尽量补齐。"
+      detail: "缺陷基础信息来自已配置的问题数据源，附件会在创建流水线前尽量补齐。"
     },
     {
       id: "infoCompletion",
@@ -266,7 +267,7 @@ export function runFixWorkflow(bug, config = {}, options = {}) {
         : normalizedBug.missing.length
         ? `缺陷信息已按模板整理，缺失字段：${normalizedBug.missing.join("、")}。`
         : "缺陷信息已按模板整理，关键字段完整。",
-      detail: "Loop 调用 AI/规则把 PM 原始字段整理成标准 Bug 模板，缺失字段只提示，不强制补齐。"
+      detail: "Loop 调用 AI/规则把问题字段整理成标准 Bug 模板，缺失字段只提示，不强制补齐。"
     },
     {
       id: "routing",
@@ -350,7 +351,7 @@ export function runFixWorkflow(bug, config = {}, options = {}) {
     normalizedBug,
     routing,
     patchSummary: buildPatchSummary(bug),
-    pmTransitionPlan: buildPmTransitionPlan(bug, config),
+    pmTransitionPlan: sourceTransitionPlan(bug, () => buildPmTransitionPlan(bug, config)),
     steps,
     logs: buildLogs(bug, executionMode, ideExecutor),
     validation: {
@@ -626,7 +627,7 @@ function buildPatchSummary(bug) {
     `定位入口：${bug.repositoryHint || "待 Codex 搜索仓库"}`,
     "修复策略：由 IDE Agent 先输出根因分析和 Fix Plan，再做最小必要改动。",
     "验证策略：由 IDE Agent 执行自动化测试并生成 Verification Report。",
-    `PM/Git 绑定：提交信息包含 ${bug.code}。`
+    `问题/Git 绑定：提交信息包含 ${bug.code}。`
   ];
 }
 

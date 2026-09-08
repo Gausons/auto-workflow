@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { gunzip } from "node:zlib";
 import { applyAssignmentBusinessRules, buildAssignmentJsonSchema, buildAssignmentSystemPrompt, buildAssignmentUserPayload, isAssignmentCandidate, normalizeAssignmentPeople, normalizeAssignmentRecommendation } from "./assignmentEngine.mjs";
 import { DEFAULT_OPERATION_LOG_ENDPOINT, uploadOperationLogs } from "./operationLogClient.mjs";
-import { diagnosePm, fetchBugAttachmentsFromPm, fetchDefectsFromPm, moveDefectInPm } from "./pmClient.mjs";
+import { createIssueSource, sourceStorageKey, syncCheckpoint } from "./issueSources/index.ts";
 import {
   buildIdeCommand,
   buildIdeExecArgs,
@@ -38,7 +38,7 @@ const maxSupplementUploadBytes = 30 * 1024 * 1024;
 const maxSupplementImageBytes = 10 * 1024 * 1024;
 const maxSupplementImages = 8;
 const gunzipAsync = promisify(gunzip);
-const mode = "pm";
+const mode = (environment.ISSUE_PROVIDER || "pm").trim().toLowerCase();
 const storedSettings = database.readSettings(tenant.id);
 const persistedConfig = storedSettings.config;
 const persistedAssignmentPeople = normalizeAssignmentPeople(storedSettings.assignmentPeople, { fallback: [] });
@@ -104,7 +104,7 @@ const state = {
 };
 
 const workflowStore = database.createStore(tenant.id);
-loadWorkflowUserState(resolveUserStorageKey(state.config));
+loadWorkflowUserState(sourceStorageKey(issueSource(), resolveUserStorageKey(state.config)));
 
 let schedulerTimer = null;
 let assignmentJobSeq = 0;
@@ -191,7 +191,7 @@ function recordRunExecution(run, event, message, { nodeId = "", meta = {}, immed
 }
 
 async function switchWorkflowUserContext(nextConfig) {
-  const nextUserKey = resolveUserStorageKey(nextConfig);
+  const nextUserKey = sourceStorageKey(issueSource(), resolveUserStorageKey(nextConfig));
   if (nextUserKey === state.storageUserKey) return;
 
   await persistWorkflowState({ immediate: true });
@@ -326,13 +326,8 @@ async function handleApi(req, res, url) {
     return;
   }
 
-  if (req.method === "GET" && url.pathname === "/api/pm/diagnostics") {
-    ensurePmCredentials();
-    const checks = await diagnosePm({
-      ...state.config,
-      accessKey: environment.PM_ACCESS_KEY,
-      accessSecret: environment.PM_ACCESS_SECRET
-    });
+  if (req.method === "GET" && ["/api/pm/diagnostics", "/api/issues/diagnostics"].includes(url.pathname)) {
+    const checks = await issueSource().diagnose();
     sendJson(res, 200, { checks });
     return;
   }
@@ -352,12 +347,7 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    const attachments = await fetchBugAttachmentsFromPm({
-      ...state.config,
-      accessKey: environment.PM_ACCESS_KEY,
-      accessSecret: environment.PM_ACCESS_SECRET,
-      aid: bug.aid
-    });
+    const attachments = await issueSource().attachments(bug);
 
     bug.attachments = attachments;
     bug.attachmentsLoaded = true;
@@ -628,6 +618,8 @@ function getBootstrap() {
     config: {
       ...state.config,
       workspaceManaged: Boolean(environment.CODEX_WORKSPACE_DIR) || database.listTenants().length > 1,
+      issueSourceLabel: issueSource().label,
+      issueSourceConfigured: issueSource().configured,
       accessKeyConfigured: Boolean(environment.PM_ACCESS_KEY),
       accessSecretConfigured: Boolean(environment.PM_ACCESS_SECRET),
       aiRoutingKeyConfigured: Boolean(environment.OPENAI_API_KEY),
@@ -1114,7 +1106,7 @@ async function applyBugAssignment(bug, body = {}) {
 }
 
 async function applyBugAssignmentUnlocked(bug, body = {}) {
-  ensurePmCredentials();
+  issueSource().validate();
   if (!isAssignableBugStatus(bug.status)) {
     throw new Error(`仅待处理和处理中的缺陷允许分配，当前状态为：${bug.status || "未知"}。`);
   }
@@ -1122,17 +1114,10 @@ async function applyBugAssignmentUnlocked(bug, body = {}) {
   const recommendation = bug.assignmentRecommendation;
   const targetAssignee = String(body.assigneeId || recommendation?.assigneeId || "").trim();
   if (!targetAssignee) {
-    throw new Error("缺少目标经办人工号，请先生成分配建议。");
+    throw new Error("缺少目标经办人 ID，请先生成分配建议。");
   }
 
-  const fieldData = buildDefectMoveFieldData(bug, targetAssignee);
-  const result = await moveDefectInPm({
-    ...state.config,
-    accessKey: environment.PM_ACCESS_KEY,
-    accessSecret: environment.PM_ACCESS_SECRET,
-    aid: bug.aid,
-    fieldData
-  });
+  const result = await issueSource().assign(bug, targetAssignee);
 
   bug.assignee = recommendation?.assigneeName || targetAssignee;
   bug.assigneeId = targetAssignee;
@@ -1142,8 +1127,8 @@ async function applyBugAssignmentUnlocked(bug, body = {}) {
     assigned: true,
     assignedAt: new Date().toISOString(),
     assignmentOperation: {
-      operationCode: "base/move",
-      operationName: "移动缺陷/更新经办人"
+      operationCode: issueSource().assignmentOperationCode,
+      operationName: "更新问题经办人"
     },
     assignmentResult: result
   };
@@ -1151,8 +1136,8 @@ async function applyBugAssignmentUnlocked(bug, body = {}) {
   return {
     ok: true,
     assigneeId: targetAssignee,
-    operationCode: "base/move",
-    operationName: "移动缺陷/更新经办人",
+    operationCode: issueSource().assignmentOperationCode,
+    operationName: "更新问题经办人",
     pm: result
   };
 }
@@ -1248,10 +1233,6 @@ async function runReadyAssignmentBatch({ source }) {
   }, { persist: false });
   await persistWorkflowState({ immediate: true });
   return summary;
-}
-
-function buildDefectMoveFieldData(bug, assignee) {
-  return { assignee };
 }
 
 async function startIdeExecution(run) {
@@ -2574,12 +2555,7 @@ async function ensureBugAttachmentsLoaded(bug) {
   if (bug.attachmentsLoaded) return;
 
   try {
-    const attachments = await fetchBugAttachmentsFromPm({
-      ...state.config,
-      accessKey: environment.PM_ACCESS_KEY,
-      accessSecret: environment.PM_ACCESS_SECRET,
-      aid: bug.aid
-    });
+    const attachments = await issueSource().attachments(bug);
 
     bug.attachments = attachments;
     bug.attachmentsLoaded = true;
@@ -2623,6 +2599,11 @@ async function localizeBugAttachments(bug, workspaceDir) {
 }
 
 async function downloadAttachment(url, filePath) {
+  const source = issueSource();
+  if (source.downloadAttachment) {
+    await writeFile(filePath, await source.downloadAttachment(url, maxAttachmentDownloadBytes));
+    return;
+  }
   try {
     await retryDownload(() => downloadAttachmentWithFetch(url, filePath));
   } catch (fetchError) {
@@ -3095,7 +3076,7 @@ function updateConfig(body) {
 
   state.config = {
     ...state.config,
-    mode: "pm",
+    mode,
     baseUrl: stringConfig(next, "baseUrl", state.config.baseUrl),
     lineId: stringConfig(next, "lineId", state.config.lineId),
     filterId: stringConfig(next, "filterId", state.config.filterId),
@@ -3166,24 +3147,20 @@ async function syncBugs({ incremental = false } = {}) {
   state.scheduler.lastRunMessage = "正在同步缺陷";
 
   try {
-    ensurePmCredentials();
-    const bugs = await fetchDefectsFromPm({
-      ...state.config,
-      accessKey: environment.PM_ACCESS_KEY,
-      accessSecret: environment.PM_ACCESS_SECRET,
-      lastSyncTime: incremental ? state.scheduler.lastSyncTime : null
-    });
+    const source = issueSource();
+    const startedAt = new Date();
+    const bugs = await source.sync({ lastSyncTime: incremental ? state.scheduler.lastSyncTime : null });
 
     state.bugs = incremental ? mergeBugs(state.bugs, bugs) : bugs;
     startAssignmentRecommendationsForBugs(state.bugs);
-    state.scheduler.lastRunMessage = `PM 同步完成，获取 ${bugs.length} 条缺陷；AI 分配建议后台生成中`;
+    state.scheduler.lastRunMessage = `${issueSource().label} 同步完成，获取 ${bugs.length} 条缺陷；AI 分配建议后台生成中`;
 
     state.scheduler.lastRunStatus = "success";
-    state.scheduler.lastSyncTime = formatPmTime(new Date());
+    state.scheduler.lastSyncTime = syncCheckpoint(source, startedAt);
     state.scheduler.nextRunAt = nextRunIso();
     recordExecution({
       event: incremental ? "bugs-synced-incremental" : "bugs-synced",
-      message: `PM 同步完成，获取 ${bugs.length} 条缺陷（当前本地共 ${state.bugs.length} 条）`,
+      message: `${issueSource().label} 同步完成，获取 ${bugs.length} 条缺陷（当前本地共 ${state.bugs.length} 条）`,
       status: "success",
       meta: { fetched: bugs.length, total: state.bugs.length, incremental, userKey: state.storageUserKey }
     }, { immediate: true });
@@ -3198,14 +3175,8 @@ async function syncBugs({ incremental = false } = {}) {
   }
 }
 
-function ensurePmCredentials() {
-  if (!environment.PM_ACCESS_KEY || !environment.PM_ACCESS_SECRET) {
-    throw new Error("PM 联调模式需要配置 PM_ACCESS_KEY 和 PM_ACCESS_SECRET 环境变量。");
-  }
-
-  if (!state.config.filterId && !state.config.lineId) {
-    throw new Error("PM 联调模式需要配置 filterId 或 lineId。");
-  }
+function issueSource() {
+  return createIssueSource({ config: state.config, environment });
 }
 
 function configureScheduler(enabled) {
@@ -3448,15 +3419,6 @@ function sortBugsByUpdatedAt(bugs) {
   return [...bugs].sort((left, right) => Date.parse(right.updatedAt.replace(" ", "T")) - Date.parse(left.updatedAt.replace(" ", "T")));
 }
 
-function formatPmTime(date) {
-  const pad = (value) => String(value).padStart(2, "0");
-  return [
-    date.getFullYear(),
-    pad(date.getMonth() + 1),
-    pad(date.getDate())
-  ].join("-") + ` ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-}
-
 function nextRunIso() {
   return new Date(Date.now() + state.config.intervalMinutes * 60 * 1000).toISOString();
 }
@@ -3467,7 +3429,7 @@ function sleep(ms) {
 
 function sanitizeError(error) {
   let message = String(error.message || error);
-  for (const key of ["PM_ACCESS_KEY", "PM_ACCESS_SECRET", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPERATION_LOG_COOKIE", "OPERATION_LOG_TOKEN"]) {
+  for (const key of ["PM_ACCESS_KEY", "PM_ACCESS_SECRET", "PM_ACCESS_TOKEN", "JIRA_API_TOKEN", "JIRA_ACCESS_TOKEN", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPERATION_LOG_COOKIE", "OPERATION_LOG_TOKEN"]) {
     if (environment[key]) message = message.split(environment[key]).join("[redacted]");
   }
   return message;

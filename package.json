@@ -4,14 +4,22 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node server.mjs",
-    "dev": "node server.mjs",
+    "start": "node --import tsx server.mjs",
+    "dev": "node --import tsx --watch server.mjs",
     "kill:port": "node scripts/kill-port.mjs",
-    "test": "node --test",
-    "tenant": "node scripts/tenant.mjs"
+    "test": "node --import tsx --test test/*.test.mjs test/*.test.ts",
+    "tenant": "node scripts/tenant.mjs",
+    "typecheck": "tsc --noEmit"
   },
   "engines": {
     "node": ">=22.16.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "tsx": "^4.23.13"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^7.0.2"
+  }
 }

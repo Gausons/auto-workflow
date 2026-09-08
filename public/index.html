@@ -153,7 +153,7 @@
             <div class="form-heading">
               <div>
                 <h2>对接配置</h2>
-                <p>AK/SK 只从服务端环境变量读取，不进入浏览器。</p>
+                <p>数据源由服务端 ISSUE_PROVIDER 选择：pm 或 jira。凭据只从服务端读取；Jira 地址和 JQL 请在组织环境文件中配置，修改后重启。</p>
               </div>
             </div>
 
@@ -163,24 +163,24 @@
                 <input name="baseUrl" autocomplete="off" />
               </label>
               <label>
-                <span>产品线 lineId</span>
+                <span>PM 产品线 lineId</span>
                 <input name="lineId" autocomplete="off" />
               </label>
               <label>
-                <span>筛选器 filterId</span>
+                <span>PM 筛选器 filterId</span>
                 <input name="filterId" autocomplete="off" placeholder="可选，推荐用于个人缺陷" />
               </label>
               <label>
-                <span>经办人 assignee</span>
+                <span>PM 经办人 assignee</span>
                 <div class="combo-field">
-                  <input name="assignee" autocomplete="off" placeholder="员工号、邮箱或人员ID" />
+                  <input name="assignee" autocomplete="off" placeholder="PM 员工号、邮箱或人员 ID" />
                   <select id="assigneeSelect" aria-label="选择经办人">
                     <option value="">选择员工</option>
                   </select>
                 </div>
               </label>
               <label>
-                <span>操作人 operatorId</span>
+                <span>PM 操作人 operatorId</span>
                 <input name="operatorId" autocomplete="off" placeholder="流程流转时使用" />
               </label>
               <label>
