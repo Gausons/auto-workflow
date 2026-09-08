@@ -66,7 +66,7 @@ export function createCodexTaskPacket(bug, config = {}, options = {}) {
     config.requireRegressionTest ? `- 必须补充或说明对应回归测试。` : `- 优先补充对应测试；无法补充时说明原因。`,
     `- 不要修改与缺陷无关的文件。`,
     `- 不要绕过原有校验逻辑，不要静默吞掉异常。`,
-    `- 不要把 PM AK/SK 或其他密钥写入代码、日志或提交内容。`,
+    `- 不要把 数据源凭据或其他密钥写入代码、日志或提交内容。`,
     `- 提交信息或回写备注中包含缺陷编码 ${bug.code}，便于问题平台与 Git 绑定。`,
     `- 修复完成后 Loop 会把 Bug 分支合并到个人当天验证分支，再等待人工 Review；不要自行关闭工单。`
   ].join("\n");
@@ -351,7 +351,7 @@ export function runFixWorkflow(bug, config = {}, options = {}) {
     normalizedBug,
     routing,
     patchSummary: buildPatchSummary(bug),
-    pmTransitionPlan: sourceTransitionPlan(bug, () => buildPmTransitionPlan(bug, config)),
+    sourceTransitionPlan: sourceTransitionPlan(bug),
     steps,
     logs: buildLogs(bug, executionMode, ideExecutor),
     validation: {
@@ -629,27 +629,6 @@ function buildPatchSummary(bug) {
     "验证策略：由 IDE Agent 执行自动化测试并生成 Verification Report。",
     `问题/Git 绑定：提交信息包含 ${bug.code}。`
   ];
-}
-
-function buildPmTransitionPlan(bug, config) {
-  return {
-    operationsEndpoint: "/tm/oauth/rest/v1/bip/api/workflow/operations",
-    convertEndpoint: "/tm/oauth/rest/v1/bip/api/workflow/processConvert",
-    query: {
-      lineId: bug.lineId || config.lineId || "",
-      entityType: "DEFECT",
-      aid: bug.aid,
-      operatorId: config.operatorId || "需配置 PM_OPERATOR_ID"
-    },
-    bodyPreview: {
-      aid: bug.aid,
-      fieldData: {
-        implementScheme: "Codex 自动修复并通过验证",
-        influenceRange: "按缺陷影响模块回归",
-        properties: []
-      }
-    }
-  };
 }
 
 function buildLogs(bug, executionMode, ideExecutor = "codex") {

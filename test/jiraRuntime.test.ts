@@ -3,11 +3,13 @@ import test from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { registerIssueSource, createIssueSource } from '../src/issueSources/index.ts';
 import { createApp } from '../server.mjs';
 import { openDatabase } from '../src/database.mjs';
 import type { Environment } from '../src/issueSources/types.ts';
 
 test('Jira runtime sync, attachment/assignment dispatch, auth, failure atomicity and source switching', async () => {
+  registerIssueSource('fixture', { create: context => ({ ...createIssueSource({ ...context, environment: { ...context.environment, ISSUE_PROVIDER: 'jira' } }), id: 'fixture', storageScope: '' }) });
   const rootDir = await mkdtemp(path.join(os.tmpdir(), 'jira-runtime-'));
   const originalFetch = globalThis.fetch;
   const setupToken = 'synthetic-setup-token-'.repeat(3);
@@ -77,11 +79,11 @@ test('Jira runtime sync, attachment/assignment dispatch, auth, failure atomicity
     // Persisted legacy keys remain recoverable and are never mixed with Jira IDs.
     await app!.close(); app = undefined;
     const db = openDatabase(path.join(rootDir, '.workflow-data/workflow.sqlite'));
-    await db.createStore('default').writeUserState('default', { bugs: [{ id: '100', aid: '100', title: 'Legacy PM issue' }], runs: [], executionRecords: [] });
+    await db.createStore('default').writeUserState('default', { bugs: [{ id: '100', aid: '100', title: 'Archived fixture issue' }], runs: [], executionRecords: [] });
     db.close();
-    environment.ISSUE_PROVIDER = 'pm';
+    environment.ISSUE_PROVIDER = 'fixture';
     await start();
-    assert.equal((await request(owner, '/api/bootstrap')).body.bugs[0].title, 'Legacy PM issue');
+    assert.equal((await request(owner, '/api/bootstrap')).body.bugs[0].title, 'Archived fixture issue');
     await app!.close(); app = undefined;
     environment.ISSUE_PROVIDER = 'jira';
     await start();

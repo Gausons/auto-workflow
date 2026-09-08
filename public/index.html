@@ -153,34 +153,22 @@
             <div class="form-heading">
               <div>
                 <h2>对接配置</h2>
-                <p>数据源由服务端 ISSUE_PROVIDER 选择：pm 或 jira。凭据只从服务端读取；Jira 地址和 JQL 请在组织环境文件中配置，修改后重启。</p>
+                <p>默认数据源为 Jira Cloud。地址、JQL 和凭据在组织环境文件中配置，修改后重启。</p>
               </div>
             </div>
 
             <div class="fields-grid">
               <label>
-                <span>PM API 地址</span>
-                <input name="baseUrl" autocomplete="off" />
-              </label>
-              <label>
-                <span>PM 产品线 lineId</span>
-                <input name="lineId" autocomplete="off" />
-              </label>
-              <label>
-                <span>PM 筛选器 filterId</span>
-                <input name="filterId" autocomplete="off" placeholder="可选，推荐用于个人缺陷" />
-              </label>
-              <label>
-                <span>PM 经办人 assignee</span>
+                <span>扩展数据源经办人</span>
                 <div class="combo-field">
-                  <input name="assignee" autocomplete="off" placeholder="PM 员工号、邮箱或人员 ID" />
+                  <input name="assignee" autocomplete="off" placeholder="人员 ID（Jira 请通过 JQL 筛选）" />
                   <select id="assigneeSelect" aria-label="选择经办人">
                     <option value="">选择员工</option>
                   </select>
                 </div>
               </label>
               <label>
-                <span>PM 操作人 operatorId</span>
+                <span>扩展数据源操作人</span>
                 <input name="operatorId" autocomplete="off" placeholder="流程流转时使用" />
               </label>
               <label>
@@ -236,22 +224,6 @@
               <label>
                 <span>轮询间隔（分钟）</span>
                 <input name="intervalMinutes" type="number" min="1" max="240" />
-              </label>
-              <label>
-                <span>每页数量</span>
-                <input name="pageSize" type="number" min="1" max="300" />
-              </label>
-              <label>
-                <span>最多页数</span>
-                <input name="maxPages" type="number" min="1" max="50" />
-              </label>
-              <label>
-                <span>请求间隔（ms）</span>
-                <input name="requestDelayMs" type="number" min="0" max="10000" />
-              </label>
-              <label>
-                <span>限流重试等待（ms）</span>
-                <input name="rateLimitRetryMs" type="number" min="1000" max="30000" />
               </label>
               <label>
                 <span>Review 最大轮数</span>

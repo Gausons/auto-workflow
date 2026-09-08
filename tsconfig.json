@@ -15,7 +15,6 @@
   },
   "include": [
     "src/issueSources/**/*.ts",
-    "src/pmClient.d.mts",
     "test/**/*.test.ts"
   ]
 }

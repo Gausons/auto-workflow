@@ -5,7 +5,41 @@
 - 定时或手动拉取个人缺陷
 - 选择缺陷并生成 Loop / IDE 分工明确的修复流水线
 - 在独立流水线页面中预览、启动、停止并审核 Codex 任务
-- 通过统一数据源接口同步内部 PM 或 Jira Cloud 的问题与附件
+- 通过统一数据源接口同步 Jira Cloud 的问题与附件
+
+## 架构
+
+```mermaid
+flowchart TB
+  User["组织成员"] --> Web["Web 工作台<br/>public/"]
+  subgraph Service["Node.js 服务 · server.mjs"]<br/>    Auth["登录与 RBAC
+identity / authHttp / rbac"]<br/>    Runtime["组织独立运行时
+tenantRuntime"]<br/>    Sources["TypeScript 数据源接口
+issueSources"]<br/>    Jira["Jira Cloud 适配器
+认证 · 分页 · 字段转换"]<br/>    Workflow["修复流水线
+信息补全 · 路由 · 分配"]<br/>    History["Agent 历史读取
+agentHistory"]
+    Auth --> Runtime
+    Runtime --> Sources
+    Sources --> Jira
+    Runtime --> Workflow
+    Runtime --> History
+  end
+  Web -->|"成员会话 / API"| Auth<br/>  Jira <-->|"查询 · 附件 · 分配"| JiraAPI["Jira Cloud REST API"]<br/>  Workflow --> AI["AI 模型服务"]<br/>  Workflow --> IDE["Codex / Claude Code CLI"]<br/>  IDE --> Git["目标代码仓库
+任务分支 · 验证分支"]<br/>  Git --> Review["验证报告与人工审核"]
+  Review --> Web
+  subgraph Local["运行环境 · 不纳入版本控制"]<br/>    DB[("SQLite
+组织 · 用户 · 问题 · 流水线 · 审计")]<br/>    Secrets["组织环境文件与凭据"]<br/>    Files["Agent 会话 · 日志 · 附件"]<br/>    Extensions["可选本地数据源扩展"]
+  end
+  Runtime <--> DB
+  Secrets -.-> Runtime
+  History --> Files
+  Extensions -.->|"启动时注册"| Sources
+```
+
+浏览器只访问经过认证与角色授权的业务 API。每个组织拥有独立运行状态和凭据；适配器将外部问题转换为统一 `WorkIssue`，工作流无需理解平台原始格式。数据库表结构由 `migrations/` 管理，实际业务数据和本地扩展均不提交。
+
+公开检出只包含 Jira 适配器，可直接安装依赖并运行。需要机器专用集成时，在被忽略的 `.local/register.ts` 中调用 `registerIssueSource`；启动和组织管理命令会自动预加载此文件，文件不存在时照常启动。扩展可提供配置映射、环境变量前缀和同步时间格式；测试默认不加载本地扩展。
 
 ## 运行
 
@@ -14,7 +48,7 @@
 ```bash
 pnpm install --frozen-lockfile
 cp .env.example .env
-# 编辑 .env，配置自己的 PM 地址、凭据、产品线和工作目录
+# 编辑 .env，配置自己的 Jira 地址、凭据、JQL 和工作目录
 npm start
 ```
 
@@ -26,7 +60,7 @@ npm start
 
 所有者创建成功后，使用“组织 ID + 用户名 + 密码”登录，在“组织成员”页面创建其他用户并分配角色。原组织令牌仅用于首次初始化，不能调用任何业务 API；初始化完成后即使轮换组织令牌，也不能重新初始化或绕过成员权限。
 
-页面“对接配置”、分配人员、缺陷、流水线和执行记录写入数据库。组织内的成员共享业务数据，通过角色控制操作权限。现有 `user_key` 是 PM 经办人的数据分组，**不等于登录账号**；修改经办人筛选会影响组织当前工作台，只有管理员和所有者有权修改。每个组织拥有独立的定时任务、运行进程、分配任务和 PM/AI 凭据。重启后执行中的流水线标记为中断，定时任务默认暂停，需要手动重新启用。
+页面“对接配置”、分配人员、缺陷、流水线和执行记录写入数据库。组织内的成员共享业务数据，通过角色控制操作权限。现有 `user_key` 是数据源的业务分组，**不等于登录账号**；修改经办人筛选会影响组织当前工作台，只有管理员和所有者有权修改。每个组织拥有独立的定时任务、运行进程、分配任务和 数据源与 AI 凭据。重启后执行中的流水线标记为中断，定时任务默认暂停，需要手动重新启用。
 
 ## 用户与角色权限
 
@@ -62,10 +96,11 @@ npm run tenant -- reset-password team-a 用户名
 为新增租户创建 `.workflow-data/tenants/team-a.env`：
 
 ```env
-PM_BASE_URL=https://pm.example.com
-PM_ACCESS_KEY=团队A的AK
-PM_ACCESS_SECRET=团队A的SK
-PM_LINE_ID=团队A产品线
+ISSUE_PROVIDER=jira
+JIRA_BASE_URL=https://your-team.atlassian.net
+JIRA_EMAIL=owner@example.com
+JIRA_API_TOKEN=
+JIRA_JQL=project = TEAM_A
 OPENAI_API_KEY=团队A的AI密钥
 CODEX_WORKSPACE_DIR=/srv/bugflow/repos/team-a
 ENABLE_AUTO_ASSIGNMENT=false
@@ -110,21 +145,11 @@ npm run tenant -- migrate team-a
 
 ## 密钥
 
-不要把 AK/SK 写进前端或提交到仓库。服务端从环境变量读取：
-
-```bash
-PM_ACCESS_KEY=你的AK PM_ACCESS_SECRET=你的SK npm start
-```
-
-内部 PM 模式使用实际平台接口，配置示例：
-
-```bash
-ISSUE_PROVIDER=pm PM_LINE_ID=产品线ID PM_FILTER_ID=筛选器ID npm start
-```
+数据源凭据与 AI 密钥仅从服务器环境文件读取，不进入浏览器或版本控制。请按 `.env.example` 创建本地 `.env`，不要将实际 token 填入示例文件。
 
 ## 问题数据源（TypeScript）
 
-每个组织当前选择一个数据源。默认 `ISSUE_PROVIDER=pm` 保留原内部 API、字段映射、筛选和已有数据；设置 `ISSUE_PROVIDER=jira` 使用 Jira Cloud。新增适配器、类型声明和测试全部使用 TypeScript，旧 `.mjs` 文件只调整集成入口。开发时运行：
+每个组织当前选择一个数据源。公开版本默认 `ISSUE_PROVIDER=jira`，使用 Jira Cloud。新增适配器、类型声明和测试全部使用 TypeScript，旧 `.mjs` 文件只调整集成入口。开发时运行：
 
 ```bash
 npm run typecheck
@@ -143,7 +168,7 @@ JIRA_JQL=project = DEMO AND issuetype = Bug
 ENABLE_AUTO_ASSIGNMENT=false
 ```
 
-在本地填写自己的 API token 后重启。凭据不进入浏览器、问题记录或版本控制。Jira 配置由服务器管理员管理；页面中的 PM 地址、产品线、经办人、分页参数仍仅作用于 PM。Jira 经办人筛选写在 `JIRA_JQL` 中，例如 `project = DEMO AND assignee = currentUser()`。不限制任务类型，移除 `issuetype = Bug` 即可同步其他类型。JQL 只填写过滤表达式，不包含 `ORDER BY`。
+在本地填写自己的 API token 后重启。凭据不进入浏览器、问题记录或版本控制。Jira 配置由服务器管理员管理；查询范围与分页参数均通过组织环境文件设置。Jira 经办人筛选写在 `JIRA_JQL` 中，例如 `project = DEMO AND assignee = currentUser()`。不限制任务类型，移除 `issuetype = Bug` 即可同步其他类型。JQL 只填写过滤表达式，不包含 `ORDER BY`。
 
 支持邮箱 + API token 的 Basic 认证，也可通过 `JIRA_ACCESS_TOKEN` 使用已取得的 OAuth Bearer token（优先于 Basic）；适配器不负责 OAuth 授权或自动刷新。使用 OAuth 网关或有作用域的 token 时，按 Atlassian 要求将 `JIRA_BASE_URL` 设置为 `https://api.atlassian.com/ex/jira/<cloud-id>`，并设置 `JIRA_SITE_URL=https://your-team.atlassian.net` 用于问题链接。当前接入范围为 Jira Cloud REST v3，不包含 Jira Server / Data Center v2。
 
@@ -155,64 +180,13 @@ Jira 功能包括：
 - 附件元数据查询与限大小下载，跳转到 CDN 时不传递认证头。人员分配使用 Jira `accountId`，在“分配人员”的人员 ID 字段中配置；自动分配沿用现有开关与角色权限。Jira 状态流转与关闭仍需在原平台人工执行。
 - 查询超时与有限 429 重试。`JIRA_TIMEOUT_MS` 默认 30000；遵循 `Retry-After`，长于 30 秒的等待直接提示稍后重试。其他 HTTP 错误不重试写入，也不回显可能包含凭据的响应正文。
 
-Jira 的本地存储按组织、服务地址与 JQL 隔离，问题 ID 带 `jira:` 前缀。切回 PM 可恢复原来的数据；更改 Jira 地址或 JQL 会使用新的数据分组，旧分组保留。组织成员共享本组织查询范围，Jira 不使用页面中的 PM 经办人字段划分数据。
+Jira 的本地存储按组织、服务地址与 JQL 隔离，问题 ID 带 `jira:` 前缀。更改 Jira 地址或 JQL 会使用新的数据分组，旧分组保留。组织成员共享本组织查询范围，Jira 不使用扩展数据源的经办人字段划分数据。
 
-诊断接口 `GET /api/issues/diagnostics` 要求管理员权限，按当前数据源执行查询检查；旧 `/api/pm/diagnostics` 保留为兼容别名。
+诊断接口 `GET /api/issues/diagnostics` 要求管理员权限，按当前数据源执行查询检查。
 
-扩展其他平台时，在 `src/issueSources/` 下新增 `.ts` 适配器，实现 `types.ts` 中的 `IssueSource`（`sync`、`attachments`、`assign`、`diagnose`、配置校验、存储范围及可选附件下载），在 `index.ts` 的工厂表中注册。只输出统一 `WorkIssue`，将平台认证、分页、原始格式转换留在适配器内；在租户环境变量前缀白名单中加入所需配置，并添加虚构响应测试。无需修改工作台同步、附件或分配主流程。
+扩展其他平台时，在 `src/issueSources/` 下新增 `.ts` 适配器，实现 `types.ts` 中的 `IssueSource`（`sync`、`attachments`、`assign`、`diagnose`、配置校验、存储范围及可选附件下载），通过 `registerIssueSource` 注册。只输出统一 `WorkIssue`，将平台认证、分页、原始格式转换留在适配器内；通过注册项 `environmentPrefixes` 声明所需环境变量前缀，并添加虚构响应测试。无需修改工作台同步、附件或分配主流程。
 
 API 依据：[Jira 查询与分页](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/)、[认证](https://developer.atlassian.com/cloud/jira/platform/basic-auth-for-rest-apis/)、[JQL 时间字段](https://support.atlassian.com/jira-software-cloud/docs/jql-fields/)、[附件](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-attachments/)。
-
-## 筛选
-
-可在 `.env` 或页面“对接配置”里设置：
-
-```env
-PM_ASSIGNEE=
-```
-
-`PM_ASSIGNEE` 是缺陷经办人，支持填写员工号、邮箱或人员 ID。填了经办人后，服务端会走缺陷分页接口并追加 `assignee` 条件；为空时优先使用 `PM_FILTER_ID` 对应的 PM 筛选器。
-
-如果只想拉当前个人 Token 对应人员的数据，设置：
-
-```env
-PM_SELF_ONLY=true
-```
-
-默认按文档示例使用：
-
-```env
-PM_SELF_ONLY=false
-```
-
-缺陷普通分页默认拉 300 条一页、最多 10 页：
-
-```env
-PM_PAGE_SIZE=300
-PM_MAX_PAGES=10
-```
-
-PM 网关限制 5 秒内最多 5 次请求，因此分页请求默认间隔 1200ms；如果仍触发限流，会等待 5200ms 后重试一次：
-
-```env
-PM_REQUEST_DELAY_MS=1200
-PM_RATE_LIMIT_RETRY_MS=5200
-```
-
-页面“立即拉取”会做全量查询；定时任务才会使用更新时间做增量查询，避免手动刷新后只剩最近更新的少量缺陷。
-
-## PM 接口映射
-
-当前 PM 适配器使用以下接口（请根据你部署的平台确认接口兼容性）：
-
-- 个人 Token 推荐认证：请求头 `X-Access-Key` / `X-Access-Secret`
-- 缺陷分页查询：`POST /tm/oauth/rest/v1/bip/api/base/page`
-- 缺陷筛选器分页：`POST /tm/oauth/rest/v1/bip/api/base/pageByFilter/{filterId}`
-- 附件查询：`GET /tm/oauth/rest/v1/bip/api/base/attachments/{aid}`
-- 流程可用操作：`GET /tm/oauth/rest/v1/bip/api/workflow/operations`
-- 流程流转：`POST /tm/oauth/rest/v1/bip/api/workflow/processConvert`
-
-打开 PM 联调模式并配置环境变量后，`/api/sync` 会尝试调用缺陷分页或筛选器接口。
 
 ## 交给 IDE Agent（Codex / Claude Code）
 
@@ -247,8 +221,8 @@ REQUIRE_HUMAN_REVIEW=true
 
 `CODEX_REASONING_EFFORT` 支持 `low / medium / high / xhigh`，对应页面里的低 / 中 / 高 / 超高。
 `ENABLE_AI_ROUTING=true` 时，服务端会使用 `OPENAI_API_KEY` 调用 `AI_ROUTING_MODEL` 做 Bug 类型和优先级分类；如果模型调用失败，会在路由结果中标记 `local-rule-fallback` 并使用本地规则兜底。
-`ENABLE_AI_ASSIGNMENT=true` 时，服务端会使用 `OPENAI_API_KEY` 调用 `AI_ASSIGNMENT_MODEL`（默认 `gpt-5.4-mini`）生成“推荐分配人”，但不会自动修改 PM 经办人；仅待处理和处理中的缺陷会生成分配建议，需要在页面人工点击“分配给推荐人”后才会调用 PM `base/move` 接口。当前分配场景只向 PM 传 `assignee`。
-`ENABLE_AUTO_ASSIGNMENT=true` 时，AI 分配建议生成完毕后会自动批量调用 PM `base/move`；关闭时可在工作台使用“一键分配”批量确认所有待分配建议。
+`ENABLE_AI_ASSIGNMENT=true` 时，服务端会使用 `OPENAI_API_KEY` 调用 `AI_ASSIGNMENT_MODEL`（默认 `gpt-5.4-mini`）生成“推荐分配人”，但不会自动修改问题经办人；仅待处理和处理中的缺陷会生成分配建议，需要在页面人工点击“分配给推荐人”后才会调用数据源的分配接口。
+`ENABLE_AUTO_ASSIGNMENT=true` 时，AI 分配建议生成完毕后会自动批量调用数据源分配接口；关闭时可在工作台使用“一键分配”批量确认所有待分配建议。
 
 选择一条缺陷后进入“执行流水线”，可以先生成流水线并预览任务包、节点和命令，再到 IDE 自主节点点击“启动 IDE 任务”：
 
@@ -258,7 +232,7 @@ REQUIRE_HUMAN_REVIEW=true
 创建流水线后，服务端会：
 
 - 尽量补齐该缺陷的附件信息
-- 拉取后根据已配置的人员职责为待处理/处理中的 Bug 生成 AI 分配建议，人工确认后通过 `POST /tm/oauth/rest/v1/bip/api/base/move` 分配
+- 拉取后根据已配置的人员职责为待处理/处理中的 Bug 生成 AI 分配建议，人工确认后通过数据源适配器分配
 - 按标准 Bug 模板规范化缺陷信息，并标出缺失字段
 - 调用模型对缺陷做路由分类，判断 Bug 类型、优先级、是否适合 IDE 自主修复
 - 生成结构化 Markdown 任务包

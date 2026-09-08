@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { gunzip } from "node:zlib";
 import { applyAssignmentBusinessRules, buildAssignmentJsonSchema, buildAssignmentSystemPrompt, buildAssignmentUserPayload, isAssignmentCandidate, normalizeAssignmentPeople, normalizeAssignmentRecommendation } from "./assignmentEngine.mjs";
 import { DEFAULT_OPERATION_LOG_ENDPOINT, uploadOperationLogs } from "./operationLogClient.mjs";
-import { createIssueSource, sourceStorageKey, syncCheckpoint } from "./issueSources/index.ts";
+import { createIssueSource, issueSourceConfig, issueSourceId, sourceStorageKey, syncCheckpoint } from "./issueSources/index.ts";
 import {
   buildIdeCommand,
   buildIdeExecArgs,
@@ -38,7 +38,7 @@ const maxSupplementUploadBytes = 30 * 1024 * 1024;
 const maxSupplementImageBytes = 10 * 1024 * 1024;
 const maxSupplementImages = 8;
 const gunzipAsync = promisify(gunzip);
-const mode = (environment.ISSUE_PROVIDER || "pm").trim().toLowerCase();
+const mode = issueSourceId(environment);
 const storedSettings = database.readSettings(tenant.id);
 const persistedConfig = storedSettings.config;
 const persistedAssignmentPeople = normalizeAssignmentPeople(storedSettings.assignmentPeople, { fallback: [] });
@@ -46,16 +46,10 @@ const persistedAssignmentPeople = normalizeAssignmentPeople(storedSettings.assig
 const state = {
   config: {
     mode,
-    baseUrl: persistedConfig.baseUrl ?? environment.PM_BASE_URL ?? "https://pm.example.com",
-    lineId: persistedConfig.lineId ?? environment.PM_LINE_ID ?? "",
-    filterId: persistedConfig.filterId ?? environment.PM_FILTER_ID ?? "",
-    assignee: persistedConfig.assignee ?? environment.PM_ASSIGNEE ?? "",
-    operatorId: persistedConfig.operatorId ?? environment.PM_OPERATOR_ID ?? "",
-    selfOnly: persistedConfig.selfOnly ?? environment.PM_SELF_ONLY === "true",
-    pageSize: clampNumber(persistedConfig.pageSize ?? environment.PM_PAGE_SIZE, 1, 300, 300),
-    maxPages: clampNumber(persistedConfig.maxPages ?? environment.PM_MAX_PAGES, 1, 50, 10),
-    requestDelayMs: clampNumber(persistedConfig.requestDelayMs ?? environment.PM_REQUEST_DELAY_MS, 0, 10000, 1200),
-    rateLimitRetryMs: clampNumber(persistedConfig.rateLimitRetryMs ?? environment.PM_RATE_LIMIT_RETRY_MS, 1000, 30000, 5200),
+    assignee: persistedConfig.assignee ?? "",
+    operatorId: persistedConfig.operatorId ?? "",
+    selfOnly: persistedConfig.selfOnly ?? false,
+    ...issueSourceConfig({ environment, config: persistedConfig }),
     intervalMinutes: clampNumber(persistedConfig.intervalMinutes ?? environment.POLL_INTERVAL_MINUTES, 1, 240, 30),
     ideExecutor: normalizeIdeExecutor(persistedConfig.ideExecutor ?? environment.IDE_EXECUTOR ?? "codex"),
     codexWorkspaceDir: environment.CODEX_WORKSPACE_DIR ? resolveWorkspaceDir(environment.CODEX_WORKSPACE_DIR) : (tenant.id === "default" ? resolveWorkspaceDir(persistedConfig.codexWorkspaceDir || __dirname) : ""),
@@ -117,7 +111,7 @@ const activeProcesses = new Map();
 const activeVerificationProcesses = new Map();
 const activeReviewProcesses = new Map();
 const activeReviewLoops = new Set();
-const YONCLAW_BUG_ROUTE_TYPES = [
+const BUG_ROUTE_TYPES = [
   "chat_session_conversation",
   "gateway_runtime",
   "host_api_boundary",
@@ -209,16 +203,10 @@ async function switchWorkflowUserContext(nextConfig) {
 
 function pickPersistedConfig(config) {
   return {
-    baseUrl: config.baseUrl,
-    lineId: config.lineId,
-    filterId: config.filterId,
+    ...issueSourceConfig({ environment, config }),
     assignee: config.assignee,
     operatorId: config.operatorId,
     selfOnly: Boolean(config.selfOnly),
-    pageSize: config.pageSize,
-    maxPages: config.maxPages,
-    requestDelayMs: config.requestDelayMs,
-    rateLimitRetryMs: config.rateLimitRetryMs,
     intervalMinutes: config.intervalMinutes,
     ideExecutor: config.ideExecutor,
     codexWorkspaceDir: config.codexWorkspaceDir,
@@ -326,7 +314,7 @@ async function handleApi(req, res, url) {
     return;
   }
 
-  if (req.method === "GET" && ["/api/pm/diagnostics", "/api/issues/diagnostics"].includes(url.pathname)) {
+  if (req.method === "GET" && url.pathname === "/api/issues/diagnostics") {
     const checks = await issueSource().diagnose();
     sendJson(res, 200, { checks });
     return;
@@ -415,7 +403,7 @@ async function handleApi(req, res, url) {
         error: "assignment_failed",
         message,
         bug,
-        suggestion: "当前分配使用 PM base/move 接口，仅支持待处理和处理中的缺陷；分配场景只向 PM 传 assignee。"
+        suggestion: "当前分配由数据源适配器执行，仅支持待处理和处理中的问题；请确认目标人员 ID 与数据源匹配。"
       });
     }
     return;
@@ -620,8 +608,6 @@ function getBootstrap() {
       workspaceManaged: Boolean(environment.CODEX_WORKSPACE_DIR) || database.listTenants().length > 1,
       issueSourceLabel: issueSource().label,
       issueSourceConfigured: issueSource().configured,
-      accessKeyConfigured: Boolean(environment.PM_ACCESS_KEY),
-      accessSecretConfigured: Boolean(environment.PM_ACCESS_SECRET),
       aiRoutingKeyConfigured: Boolean(environment.OPENAI_API_KEY),
       operationLogCredentialConfigured: Boolean(environment.OPERATION_LOG_COOKIE || environment.OPERATION_LOG_TOKEN)
     },
@@ -809,7 +795,7 @@ async function classifyBugRouteWithModel(bug, normalized) {
               },
               normalized,
               outputSchema: {
-                bugType: YONCLAW_BUG_ROUTE_TYPES.join(" | "),
+                bugType: BUG_ROUTE_TYPES.join(" | "),
                 priority: "P0 | P1 | P2 | P3",
                 needsHumanIntervention: "boolean",
                 reason: "string"
@@ -828,7 +814,7 @@ async function classifyBugRouteWithModel(bug, normalized) {
               properties: {
                 bugType: {
                   type: "string",
-                  enum: YONCLAW_BUG_ROUTE_TYPES
+                  enum: BUG_ROUTE_TYPES
                 },
                 priority: {
                   type: "string",
@@ -900,7 +886,7 @@ function normalizeModelRoute(route, { model }) {
     : "P2";
   const allowed = normalizePriorityList(state.config.allowedAutoFixPriorities).includes(priority);
   const needsHumanIntervention = Boolean(route?.needsHumanIntervention) || ["P0", "P1"].includes(priority);
-  const bugType = YONCLAW_BUG_ROUTE_TYPES.includes(route?.bugType) ? route.bugType : "unknown";
+  const bugType = BUG_ROUTE_TYPES.includes(route?.bugType) ? route.bugType : "unknown";
 
   return {
     enabled: true,
@@ -1138,7 +1124,7 @@ async function applyBugAssignmentUnlocked(bug, body = {}) {
     assigneeId: targetAssignee,
     operationCode: issueSource().assignmentOperationCode,
     operationName: "更新问题经办人",
-    pm: result
+    providerResult: result
   };
 }
 
@@ -2313,7 +2299,7 @@ function markRunValidated(run, message) {
   };
   updateStep(run, "execute", "done", "执行完成。");
   updateStep(run, "verify", "done", message);
-  updateStep(run, "pm", "ready", "验证通过，可准备 PM 回写参数。");
+  updateStep(run, "release", "ready", "验证通过，可准备问题状态更新。");
   appendRunLog(run, `[verify] PASS ${message}`);
 }
 
@@ -2326,7 +2312,7 @@ function markValidationFailed(run, message) {
     notes: message
   };
   updateStep(run, "verify", "attention", message);
-  updateStep(run, "pm", "blocked", "验证未通过，暂不回写 PM。");
+  updateStep(run, "release", "blocked", "验证未通过，暂不更新问题状态。");
   appendRunLog(run, `[verify] NEEDS_REVIEW ${message}`);
 }
 
@@ -3077,16 +3063,10 @@ function updateConfig(body) {
   state.config = {
     ...state.config,
     mode,
-    baseUrl: stringConfig(next, "baseUrl", state.config.baseUrl),
-    lineId: stringConfig(next, "lineId", state.config.lineId),
-    filterId: stringConfig(next, "filterId", state.config.filterId),
+    ...issueSourceConfig({ environment, config: state.config }, next),
     assignee: stringConfig(next, "assignee", state.config.assignee),
     operatorId: stringConfig(next, "operatorId", state.config.operatorId),
     selfOnly: booleanConfig(next, "selfOnly", state.config.selfOnly),
-    pageSize: numberConfig(next, "pageSize", 1, 300, state.config.pageSize),
-    maxPages: numberConfig(next, "maxPages", 1, 50, state.config.maxPages),
-    requestDelayMs: numberConfig(next, "requestDelayMs", 0, 10000, state.config.requestDelayMs),
-    rateLimitRetryMs: numberConfig(next, "rateLimitRetryMs", 1000, 30000, state.config.rateLimitRetryMs),
     intervalMinutes: numberConfig(next, "intervalMinutes", 1, 240, state.config.intervalMinutes),
     ideExecutor: normalizeIdeExecutor(stringConfig(next, "ideExecutor", state.config.ideExecutor)),
     codexWorkspaceDir: stringConfig(next, "codexWorkspaceDir", state.config.codexWorkspaceDir) ? resolveWorkspaceDir(stringConfig(next, "codexWorkspaceDir", state.config.codexWorkspaceDir)) : "",
@@ -3429,7 +3409,7 @@ function sleep(ms) {
 
 function sanitizeError(error) {
   let message = String(error.message || error);
-  for (const key of ["PM_ACCESS_KEY", "PM_ACCESS_SECRET", "PM_ACCESS_TOKEN", "JIRA_API_TOKEN", "JIRA_ACCESS_TOKEN", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPERATION_LOG_COOKIE", "OPERATION_LOG_TOKEN"]) {
+  for (const key of Object.keys(environment).filter((key) => /KEY|SECRET|TOKEN|COOKIE/.test(key))) {
     if (environment[key]) message = message.split(environment[key]).join("[redacted]");
   }
   return message;

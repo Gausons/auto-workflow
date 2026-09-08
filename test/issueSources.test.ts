@@ -91,7 +91,7 @@ test('Jira retries bounded 429s and never exposes remote bodies or connection se
   await assert.rejects(source(async () => new Response('', { status: 429, headers: { 'retry-after': '120' } })).sync({}), /限流/);
 });
 
-test('Jira assignment uses accountId and attachments use the issue endpoint, not PM', async () => {
+test('Jira assignment uses accountId and attachments use the issue endpoint, not another source', async () => {
   const calls: [string, RequestInit | undefined][] = [];
   const jira = source(async (input, init) => {
     calls.push([String(input), init]);
@@ -119,19 +119,20 @@ test('authenticated attachments strip credentials on CDN redirects and enforce s
   await assert.rejects(source(async () => new Response('too large')).downloadAttachment!(url, 2), /大小限制/);
 });
 
-test('configuration validation, source registration and storage preserve legacy PM isolation', () => {
+test('configuration validation, source registration and storage preserve existing storage isolation', () => {
   const noFetch: typeof fetch = async () => { throw new Error('unexpected network'); };
   assert.throws(() => source(noFetch, { JIRA_BASE_URL: 'http://jira.example.com' }).validate(), /HTTPS/);
   assert.throws(() => source(noFetch, { JIRA_API_TOKEN: '' }).validate(), /JIRA_EMAIL/);
   assert.throws(() => source(noFetch, { JIRA_PRIORITY_MAP: '{"High":"urgent"}' }).validate(), /PRIORITY_MAP/);
   assert.throws(() => createIssueSource({ config: {}, environment: { ISSUE_PROVIDER: 'unknown' } }), /不支持/);
-  const pm = createIssueSource({ config: {}, environment: {} });
-  assert.equal(pm.id, 'pm');
-  assert.equal(sourceStorageKey(pm, 'legacy-user'), 'legacy-user');
+  const primarySource = createIssueSource({ config: {}, environment: {} });
+  const legacySource = { ...primarySource, id: 'fixture', storageScope: '' };
+  assert.equal(primarySource.id, 'jira');
+  assert.equal(sourceStorageKey(legacySource, 'legacy-user'), 'legacy-user');
   assert.notEqual(sourceStorageKey(source(noFetch), 'default'), 'default');
   assert.notEqual(source(noFetch).storageScope, source(noFetch, { JIRA_BASE_URL: 'https://other.example.com' }).storageScope);
   assert.notEqual(source(noFetch).storageScope, source(noFetch, { JIRA_JQL: 'project = OTHER' }).storageScope);
-  const factory: IssueSourceFactory = () => ({ ...pm, id: 'custom' });
+  const factory: IssueSourceFactory = () => ({ ...primarySource, id: 'custom' });
   assert.equal(createIssueSource({ config: {}, environment: { ISSUE_PROVIDER: 'custom' } }, { custom: factory }).id, 'custom');
   assert.equal(syncCheckpoint(source(noFetch), new Date('2026-01-01T00:00:00Z')), '2026-01-01T00:00:00.000Z');
   const other: Environment = tenantEnvironment({ id: 'other' }, '/nonexistent-test-directory', environment);
@@ -142,27 +143,9 @@ test('configuration validation, source registration and storage preserve legacy 
 });
 
 
-test('workflow transition plans preserve PM and expose manual Jira transitions without PM endpoints', () => {
-  const legacy = { operationsEndpoint: '/internal/operations' };
-  assert.equal(sourceTransitionPlan({}, () => legacy), legacy);
-  const plan = sourceTransitionPlan({ source: 'jira', sourceUrl: 'https://jira.example.com/browse/DEMO-1' }, () => { throw new Error('PM plan must not run'); });
+test('workflow transition plan directs users to the original platform without embedded endpoints', () => {
+  const plan = sourceTransitionPlan({ source: 'jira', sourceUrl: 'https://jira.example.com/browse/DEMO-1' });
   assert.equal(plan.automaticTransition, false);
   assert.equal(plan.issueUrl, 'https://jira.example.com/browse/DEMO-1');
-  assert.doesNotMatch(JSON.stringify(plan), /internal|operationsEndpoint/);
-});
-
-test('PM adapter retains assignment request shape and its original operation code', async () => {
-  const original = globalThis.fetch;
-  try {
-    globalThis.fetch = async (input, init) => {
-      assert.match(String(input), /base\/move\?lineId=line-test&aid=issue-test$/);
-      assert.equal(new Headers(init?.headers).get('x-access-key'), 'test-key');
-      assert.equal(new Headers(init?.headers).get('x-access-secret'), 'test-secret');
-      assert.deepEqual(JSON.parse(String(init?.body)), { assignee: 'test-person' });
-      return json({ code: 200, data: {} });
-    };
-    const pm = createIssueSource({ config: { baseUrl: 'https://pm.example.com', lineId: 'line-test' }, environment: { PM_ACCESS_KEY: 'test-key', PM_ACCESS_SECRET: 'test-secret' } });
-    assert.equal(pm.assignmentOperationCode, 'base/move');
-    await pm.assign({ aid: 'issue-test' }, 'test-person');
-  } finally { globalThis.fetch = original; }
+  assert.doesNotMatch(JSON.stringify(plan), /operationsEndpoint/);
 });

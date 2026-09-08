@@ -44,8 +44,9 @@ export interface IssueSource {
   readonly label: string;
   readonly configured: boolean;
   readonly assignmentOperationCode: string;
-  /** Empty preserves legacy PM storage keys. Other sources isolate sites and query scopes. */
+  /** Empty preserves existing storage keys. Other sources isolate sites and query scopes. */
   readonly storageScope: string;
+  checkpoint?(startedAt: Date): string;
   validate(): void;
   sync(options: { lastSyncTime?: string | null }): Promise<WorkIssue[]>;
   attachments(issue: Pick<WorkIssue, 'aid'>): Promise<IssueAttachment[]>;
@@ -56,21 +57,10 @@ export interface IssueSource {
 }
 
 export type Environment = Record<string, string | undefined>;
-export interface PmConfig {
-  baseUrl?: string;
-  lineId?: string;
-  filterId?: string;
-  assignee?: string;
-  operatorId?: string;
-  selfOnly?: boolean;
-  pageSize?: number;
-  maxPages?: number;
-  requestDelayMs?: number;
-  rateLimitRetryMs?: number;
-}
+export type SourceConfig = Record<string, unknown>;
 export interface SourceContext {
   environment: Environment;
-  config: PmConfig;
+  config: SourceConfig;
   fetch?: typeof globalThis.fetch;
 }
 export type IssueSourceFactory = (context: SourceContext) => IssueSource;

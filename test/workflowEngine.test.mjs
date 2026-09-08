@@ -10,7 +10,7 @@ const bug = {
   status: "待处理",
   priority: "Medium",
   severity: "S3",
-  product: "研发管理平台",
+  product: "示例项目",
   description: "保存后刷新丢失。",
   reproduceSteps: ["保存配置", "刷新页面"],
   expected: "配置保留",

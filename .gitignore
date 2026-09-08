@@ -56,3 +56,6 @@ dist/
 *.jpeg
 *.webp
 *.pdf
+
+# Private local integrations and snapshots
+.local/

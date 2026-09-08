@@ -448,10 +448,6 @@ async function saveConfig() {
   const payload = Object.fromEntries(form.entries());
   payload.mode = state.config.mode;
   payload.intervalMinutes = Number(payload.intervalMinutes);
-  payload.pageSize = Number(payload.pageSize);
-  payload.maxPages = Number(payload.maxPages);
-  payload.requestDelayMs = Number(payload.requestDelayMs);
-  payload.rateLimitRetryMs = Number(payload.rateLimitRetryMs);
   payload.aiRoutingTimeoutMs = Number(payload.aiRoutingTimeoutMs);
   if (form.has("codexReviewMaxRounds")) {
     payload.codexReviewMaxRounds = Number(payload.codexReviewMaxRounds);
@@ -949,7 +945,7 @@ function fillConfigForm() {
   document.querySelector("#workspacePolicy").hidden = !state.config.workspaceManaged;
   if (configFormDirty) return;
 
-  const fields = ["baseUrl", "lineId", "filterId", "assignee", "operatorId", "ideExecutor", "codexWorkspaceDir", "codexModel", "claudeModel", "codexReasoningEffort", "codexBaseBranch", "allowedAutoFixPriorities", "aiAssignmentModel", "aiRoutingModel", "aiRoutingBaseUrl", "aiRoutingTimeoutMs", "intervalMinutes", "pageSize", "maxPages", "requestDelayMs", "rateLimitRetryMs", "codexReviewMaxRounds"];
+  const fields = ["assignee", "operatorId", "ideExecutor", "codexWorkspaceDir", "codexModel", "claudeModel", "codexReasoningEffort", "codexBaseBranch", "allowedAutoFixPriorities", "aiAssignmentModel", "aiRoutingModel", "aiRoutingBaseUrl", "aiRoutingTimeoutMs", "intervalMinutes", "codexReviewMaxRounds"];
   fields.forEach((field) => {
     const value = state.config[field];
     if (els.configForm.elements[field]) {

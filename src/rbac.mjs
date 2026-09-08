@@ -13,7 +13,7 @@ export function permissionForRoute(method, pathname) {
   if (method === 'GET' && (pathname === '/api/agent-sessions' || /^\/api\/agent-sessions\/[a-f0-9]{64}$/.test(pathname))) return 'read';
   if (method === 'GET' && ['/api/bootstrap', '/api/workflows/records', '/api/assignment/people'].includes(pathname)) return 'read';
   if (method === 'GET' && /^\/api\/bugs\/[^/]+\/attachments$/.test(pathname)) return 'read';
-  if (method === 'GET' && ['/api/pm/diagnostics', '/api/issues/diagnostics'].includes(pathname)) return 'config.manage';
+  if (method === 'GET' && pathname === '/api/issues/diagnostics') return 'config.manage';
   if (method === 'PUT' && pathname === '/api/config') return 'config.manage';
   if (method === 'PUT' && pathname === '/api/assignment/people') return 'people.manage';
   if (method === 'POST' && pathname === '/api/scheduler') return 'config.manage';

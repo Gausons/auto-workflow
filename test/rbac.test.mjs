@@ -33,7 +33,7 @@ test('organization members, role enforcement, cross-organization access and imme
     assert.equal(owner.user.role, 'owner');
     assert.ok(owner.permissions.includes('members.manage'));
     assert.equal((await request(setupToken, '/api/auth/setup')).status, 409);
-    assert.equal((await request(setupToken, '/api/config', 'PUT', { lineId: 'bypass' })).status, 401);
+    assert.equal((await request(setupToken, '/api/config', 'PUT', { assignee: 'bypass' })).status, 401);
     const users = {};
     for (const role of ['admin', 'operator', 'viewer']) {
       const created = await request(owner.token, '/api/organization/members', 'POST', { username: role, password, role });
@@ -45,7 +45,7 @@ test('organization members, role enforcement, cross-organization access and imme
     assert.equal((await request(viewer.token, '/api/bootstrap')).status, 200);
     assert.equal((await request(viewer.token, '/api/workflows/records')).status, 200);
     for (const [method, endpoint] of [
-      ['PUT', '/api/config'], ['PUT', '/api/assignment/people'], ['POST', '/api/sync'], ['GET', '/api/pm/diagnostics'],
+      ['PUT', '/api/config'], ['PUT', '/api/assignment/people'], ['POST', '/api/sync'], ['GET', '/api/issues/diagnostics'],
       ['POST', '/api/scheduler'], ['POST', '/api/workflows/run'], ['POST', '/api/workflows/x/start'], ['POST', '/api/workflows/x/stop'],
       ['POST', '/api/workflows/x/supplement'], ['POST', '/api/bugs/x/assignment/apply'], ['POST', '/api/bugs/x/assignment/recommend'],
       ['POST', '/api/assignments/apply-all'], ['POST', '/api/workflows/x/nodes/humanReview/complete'],
@@ -56,7 +56,7 @@ test('organization members, role enforcement, cross-organization access and imme
     for (const endpoint of ['/api/config', '/api/organization/members', '/api/workflows/x/nodes/releaseClose/complete']) {
       assert.equal((await request(operator.token, endpoint, endpoint === '/api/config' ? 'PUT' : 'POST', {})).status, 403);
     }
-    assert.equal((await request(admin.token, '/api/config', 'PUT', { lineId: 'admin-line' })).status, 200);
+    assert.equal((await request(admin.token, '/api/config', 'PUT', { assignee: 'admin-assignee' })).status, 200);
     assert.equal((await request(admin.token, '/api/organization/members', 'POST', { username: 'escalate', role: 'owner', password })).status, 403);
     assert.equal((await request(admin.token, `/api/organization/members/${admin.user.id}`, 'PATCH', { role: 'owner' })).status, 403);
     assert.equal((await request(admin.token, `/api/organization/members/${owner.user.id}`, 'PUT', {})).status, 404);
@@ -98,7 +98,7 @@ test('organization members, role enforcement, cross-organization access and imme
     assert.equal((await request(other.token, `/api/organization/members/${owner.user.id}`, 'PATCH', { role: 'viewer' })).status, 404);
     assert.equal((await request(other.token, `/api/organization/members/${owner.user.id}/password`, 'PUT', { password })).status, 404);
     assert.equal((await request(other.token, '/api/organization/members')).data.members.length, 1);
-    assert.equal((await request(other.token, '/api/bootstrap')).data.config.lineId === 'admin-line', false);
+    assert.equal((await request(other.token, '/api/bootstrap')).data.config.assignee === 'admin-assignee', false);
     const audit = (await request(owner.token, '/api/organization/audit')).data.events;
     assert.ok(audit.some((event) => event.action === 'member.password_reset'));
     assert.ok(audit.some((event) => event.action === 'api.request' && event.actorName === 'admin'));
@@ -119,13 +119,13 @@ test('version 1 migration preserves tenant data; salted passwords, session expir
   let raw = new DatabaseSync(filename);
   raw.exec(await readFile(new URL('../migrations/001_initial.sql', import.meta.url), 'utf8'));
   raw.prepare('INSERT INTO tenants VALUES (?, ?, ?, ?)').run('test', 'Legacy organization', hashToken(setupToken), '2026-01-01');
-  raw.prepare('INSERT INTO tenant_settings(tenant_id, config) VALUES (?, ?)').run('test', '{"lineId":"legacy-line"}');
+  raw.prepare('INSERT INTO tenant_settings(tenant_id, config) VALUES (?, ?)').run('test', '{"assignee":"legacy-line"}');
   raw.prepare('INSERT INTO user_states VALUES (?, ?, ?)').run('test', 'person', '2026-01-01');
   raw.prepare('INSERT INTO workflow_items VALUES (?, ?, ?, ?, ?, ?)').run('test', 'person', 'bugs', 'legacy-bug', 0, '{"id":"legacy-bug","title":"preserved"}');
   raw.exec('PRAGMA user_version = 1'); raw.close();
   const db = openDatabase(filename);
   try {
-    assert.equal(db.readSettings('test').config.lineId, 'legacy-line');
+    assert.equal(db.readSettings('test').config.assignee, 'legacy-line');
     assert.equal(db.createStore('test').readUserState('person').bugs[0].title, 'preserved');
     assert.equal(db.hasUsers('test'), false);
     assert.equal(db.authenticate(setupToken).id, 'test');
