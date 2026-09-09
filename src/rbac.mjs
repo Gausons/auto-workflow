@@ -10,6 +10,7 @@ export function permissionsFor(role) {
 }
 
 export function permissionForRoute(method, pathname) {
+  if (method === 'GET' && (pathname === '/api/sessions' || /^\/api\/sessions\/[a-f0-9]{64}(?:\/(events|records))?$/.test(pathname))) return 'read';
   if (method === 'GET' && (pathname === '/api/agent-sessions' || /^\/api\/agent-sessions\/[a-f0-9]{64}$/.test(pathname))) return 'read';
   if (method === 'GET' && ['/api/bootstrap', '/api/workflows/records', '/api/assignment/people'].includes(pathname)) return 'read';
   if (method === 'GET' && /^\/api\/bugs\/[^/]+\/attachments$/.test(pathname)) return 'read';

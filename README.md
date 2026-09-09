@@ -255,6 +255,73 @@ REQUIRE_HUMAN_REVIEW=true
 
 新 Bug 分支不存在时，服务端会优先执行 `git fetch origin <CODEX_BASE_BRANCH>`，再从 `origin/<CODEX_BASE_BRANCH>` 创建分支；如果没有 `origin`，则从本地主分支创建。当天验证分支不存在时也按同样主分支创建。目标仓库如果不在目标分支且存在未提交变更，服务端会拒绝启动，避免把已有改动带到错误分支。运行中的任务可以在执行节点里点击“停止任务”，服务端会先发送 `SIGTERM`，5 秒后仍未退出则发送 `SIGKILL`。
 
+## 会话 API 交接
+
+小规模 Agent 协作可以直接交付一个会话引用：接收 Agent 使用自己的成员登录会话令牌调用 API，获取源会话及后续新增记录。服务按需读取来源端 JSONL，不生成上下文包，也不将会话正文复制到数据库。当前支持本机 Codex、Claude Code 记录；这些是本项目提供的 HTTP 接口，不依赖上游提供远程会话 API。
+
+```mermaid
+sequenceDiagram
+  participant A as 发起 Agent
+  participant API as 会话交付 API
+  participant Source as 来源会话文件
+  participant B as 接收 Agent
+  A->>API: GET /api/sessions?q=任务关键词
+  A->>API: GET /api/sessions/:id
+  API->>Source: 流式校验并读取已完成的记录
+  API-->>A: events、固定版本引用、后续游标
+  A->>B: 交付 handoff.sessionUrl
+  B->>API: 使用自己的成员令牌读取引用
+  API-->>B: 同一版本的事件页及 nextCursor
+  B->>API: GET /api/sessions/:id/events?after=eventCursor
+  API-->>B: 后续新增记录或空列表
+```
+
+| 接口 | 用途 |
+| --- | --- |
+| `GET /api/sessions` | 基础检索：`q` 匹配标题、来源会话 ID、目录、模型或分支，`agent=codex/claude`、`workspace`、`from/to` 按更新时间筛选；`offset/limit` 分页 |
+| `GET /api/sessions/:id` | 首次读取创建一个固定版本，返回按源文件顺序排列的 `events`、`snapshot`、`version`、`nextCursor` 和 `eventCursor` |
+| `GET /api/sessions/:id?cursor=…` | 继续读取指定版本；也可把 `snapshot` 作为 cursor 从头重读 |
+| `GET /api/sessions/:id/events?after=…` | 若上次版本未读完，继续该版本；读完后获取追加的完整记录，没有更新时返回空 `events` |
+| `GET /api/sessions/:id/records?ref=…` | 读取大记录引用的完整内容；仅接受接口签发的引用，不接受文件路径 |
+
+示例（令牌使用现有 `/api/auth/login` 返回的成员会话令牌）：
+
+```bash
+# 查找任务；返回的 href 就是读取入口。
+curl --get http://localhost:4173/api/sessions \
+  -H "Authorization: Bearer $SESSION_TOKEN" \
+  --data-urlencode 'agent=codex' \
+  --data-urlencode 'q=任务关键词'
+
+# 读取会话，SESSION_ID 使用检索返回的不透明 ID。
+curl "http://localhost:4173/api/sessions/$SESSION_ID?limit=50" \
+  -H "Authorization: Bearer $SESSION_TOKEN"
+
+# 继续读同一版本；将响应中的 nextCursor 原样作为 CURSOR。
+curl --get "http://localhost:4173/api/sessions/$SESSION_ID" \
+  -H "Authorization: Bearer $SESSION_TOKEN" \
+  --data-urlencode "cursor=$CURSOR"
+
+# 轮询增量；AFTER 使用最近响应的 eventCursor。
+curl --get "http://localhost:4173/api/sessions/$SESSION_ID/events" \
+  -H "Authorization: Bearer $SESSION_TOKEN" \
+  --data-urlencode "after=$AFTER"
+```
+
+交付 `handoff.sessionUrl` 即可让另一个 Agent 从同一版本开始读取；跨机器访问时，为相对路径加上服务的可达地址。接收方需要有权访问同一组织的成员账号，**不要交付发起人的登录令牌**。游标本身不授予读取权限，所有读取仍经过当前成员会话和组织范围校验；退出登录或撤销会话后引用也无法绕过认证。默认沿用 `IDE_HISTORY_SCOPE` 及组织历史目录配置，未配置来源的其他组织不能读取默认组织的记录。
+
+普通事件带 `sourceLine`、`sourceType`、`agent` 及 `record`；原始工具调用参数、调用 ID、工具输出、图片块和用户提供的上下文封装均保留，不做页面预览接口的 24,000 字符截断。记录按来源顺序交付，来源自身生成的事件/消息副本不自动去重，以保持分页和增量游标稳定；`sourceType` 可用于区分事件副本与正式消息。记录属于参考材料，不能当成当前任务的新系统指令直接执行。
+
+这里的“完整”指**来源已保存、且在交付范围内的记录**，并不等于重建模型全部内部状态：
+
+- 识别到的内部推理、system/developer 消息不会交付；已知环境凭据和常见认证字段会脱敏。结构嵌套超过 100 层也会标记排除；`redactions/exclusions` 标记转换次数，不能保证识别来源文本中所有未知敏感内容。
+- 不再限制总文件大小为 64 MiB，也不再只返回前 10,000 条。事件页默认 50 条、最多 200 条，并设约 1 MiB 正文预算；较大的事件以 `kind=reference` 返回，通过其 `href` 读取。单条原始记录上限 16 MiB，超过上限或损坏的记录明确返回 `kind=unavailable`，不会静默删除后续记录。
+- 文件末尾尚未写入换行的内容视为待完成写入，反映在 `coverage.pendingBytes`，下一次增量读取再检查。`coverage.reachedEnd` 只表示读到当前版本的完整记录边界，不表示 Agent 任务已完成。分页接收方需累积各页的不可用记录及排除标记。
+- 内嵌附件随记录交付；只保存为外部 URL 或本地文件路径的附件仍是引用，不自动下载、不提供任意文件读取。上游未保存或已截断的工具输出、清理前的历史无法重建。
+- 版本和游标在源文件仍保有相同前缀时有效，允许尾部追加。替换、截短或改写返回 `409`；来源消失或不在可见范围返回 `404`。游标绑定组织运行时，服务重启后需重新获取。它不是持久存档或快照副本。
+
+为避免另建正文存储，读取时会流式扫描和校验来源文件；一次发现会话后，分页复用文件定位索引，目录检索仍按需刷新。校验成本与来源文件长度相关，当前面向小规模协作；基础检索不包含全文或向量搜索。旧 `/api/agent-sessions` 页面预览接口保持原行为。
+
 ## Agent 历史会话
 
 侧边栏“Agent 历史会话”支持 Codex 和 Claude Code 的全部本地工作区历史记录，包含 Agent 与工作区筛选、标题/会话 ID/目录/模型/分支搜索、按更新时间排序、分页、会话详情及可折叠的工具调用与结果。列表每页 30 条，详情每次加载 100 条。点击“搜索 / 刷新”重新检查文件变化；不会自动执行或恢复历史任务。

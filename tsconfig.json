@@ -15,6 +15,7 @@
   },
   "include": [
     "src/issueSources/**/*.ts",
+    "src/sessionDelivery/**/*.ts",
     "test/**/*.test.ts"
   ]
 }

@@ -19,7 +19,7 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
     registry.set(adapter.id, adapter);
   }
   const cache = new Map();
-  let pending;
+  let pending, latest;
   function scope() {
     if (environment.IDE_HISTORY_SCOPE !== 'workspace') return '*';
     const value = workspace?.(); return value ? canonicalWorkspace(value) : null;
@@ -128,7 +128,7 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
     return { sessions, providers, files, allowed };
   }
   async function index() {
-    if (!pending) pending = scan().finally(() => { pending = null; });
+    if (!pending) pending = scan().then((result) => { latest = result; return result; }).finally(() => { pending = null; });
     return pending;
   }
   function pagination(params, defaultLimit) {
@@ -140,6 +140,19 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
     return { offset: number('offset', 0, 1000000), limit: number('limit', defaultLimit, 200) };
   }
   return {
+    async catalog() {
+      const result = await index();
+      return { sessions: result.sessions, providers: result.providers, scope: result.allowed === '*' ? 'all' : 'workspace' };
+    },
+    async resolveSource(id) {
+      if (!/^[a-f0-9]{64}$/.test(id)) throw httpError(404, '会话不存在');
+      let result = latest?.allowed === scope() ? latest : await index();
+      if (!result.files.has(id)) result = await index();
+      const source = result.files.get(id);
+      if (!source || scope() !== result.allowed) throw httpError(404, '会话不存在');
+      return { file: source.file, root: source.root, agent: source.adapter.id, allowed: result.allowed,
+        session: result.sessions.find((session) => session.id === id), current: () => scope() === result.allowed };
+    },
     async list(params = new URLSearchParams()) {
       const agent = params.get('agent') || '', q = (params.get('q') || '').trim().toLowerCase();
       if (agent && !registry.has(agent)) throw httpError(400, '不支持的 Agent');

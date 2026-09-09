@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { publicIdentity } from "./rbac.mjs";
+import { createSessionDelivery } from "./sessionDelivery/index.ts";
 import { createAgentHistory } from "./agentHistory/index.mjs";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
@@ -243,6 +244,16 @@ function pickPersistedConfig(config) {
 }
 
 async function handleApi(req, res, url) {
+  if (req.method === "GET" && url.pathname === "/api/sessions") {
+    sendJson(res, 200, await sessionDelivery.list(url.searchParams));
+    return;
+  }
+  const deliveryRoute = /^\/api\/sessions\/([a-f0-9]{64})(?:\/(events|records))?$/.exec(url.pathname);
+  if (req.method === "GET" && deliveryRoute) {
+    const operation = deliveryRoute[2] === "records" ? "record" : deliveryRoute[2] || "detail";
+    sendJson(res, 200, await sessionDelivery[operation](deliveryRoute[1], url.searchParams));
+    return;
+  }
   if (req.method === "GET" && url.pathname === "/api/agent-sessions") {
     sendJson(res, 200, await agentHistory.list(url.searchParams));
     return;
@@ -3429,11 +3440,12 @@ function hasBackgroundWork() {
 }
 
 const agentHistory = createAgentHistory({ environment, tenantId: tenant.id, rootDir, workspace: () => state.config.codexWorkspaceDir });
+const sessionDelivery = createSessionDelivery({ history: agentHistory, environment });
 
 return {
   workspace: () => state.config.codexWorkspaceDir,
   async handleApi(req, res, url, principal) {
-    const historyRead = req.method === "GET" && (url.pathname === "/api/agent-sessions" || url.pathname.startsWith("/api/agent-sessions/"));
+    const historyRead = req.method === "GET" && (url.pathname === "/api/agent-sessions" || url.pathname.startsWith("/api/agent-sessions/") || url.pathname === "/api/sessions" || url.pathname.startsWith("/api/sessions/"));
     const mutation = !historyRead && (req.method !== "GET" || url.pathname !== "/api/bootstrap");
     if (mutation && mutationPending) {
       sendJson(res, 409, { error: "tenant_busy", message: "当前租户正在处理其他请求，请稍后重试" });
