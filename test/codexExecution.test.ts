@@ -16,6 +16,7 @@ class FakeClient extends EventEmitter {
     if (method === 'thread/start') return { thread: { id: '12345678-1234-1234-1234-123456789abc' } };
     if (method === 'turn/start') return { turn: { id: 'turn-1' } };
     if (method === 'thread/read') return { thread: { turns: [{ id: 'turn-1', status: 'completed', items: [{ type: 'agentMessage', text: 'done' }] }] } };
+    if (method === 'thread/unsubscribe') return { status: 'unsubscribed' };
     return {};
   }
   send(message: any) { this.calls.push(message); }
@@ -40,9 +41,11 @@ test('creates durable project thread, starts a real turn and opens desktop witho
   assert.equal(starts[0]!.params.model, undefined);
   assert.deepEqual(opened, ['12345678-1234-1234-1234-123456789abc']);
   assert.equal(updates.at(-1).status, 'running');
-  client.emit('notification', { method: 'item/completed', params: { threadId: opened[0], item: { type: 'agentMessage', text: '验证通过' } } });
-  client.emit('notification', { method: 'turn/completed', params: { threadId: opened[0], turn: { id: 'turn-1', status: 'completed' } } });
+  await runner.notification({ method: 'item/completed', params: { threadId: opened[0], item: { type: 'agentMessage', text: '验证通过' } } });
+  await runner.notification({ method: 'turn/completed', params: { threadId: opened[0], turn: { id: 'turn-1', status: 'completed' } } });
   assert.equal(updates.at(-1).status, 'completed'); assert.equal(updates.at(-1).output, '验证通过');
+  assert.deepEqual(client.calls.at(-1), { method: 'thread/unsubscribe', params: { threadId: opened[0] } });
+  assert.equal(updates.at(-1).subscriptionStatus, 'unsubscribed');
   runner.close(); assert.equal(updates.at(-1).status, 'completed');
 });
 
@@ -54,6 +57,30 @@ test('passes an explicitly selected model and reasoning effort to Codex', async 
   assert.equal(start.params.model, 'gpt-test');
   assert.deepEqual(start.params.config, { model_reasoning_effort: 'high' });
   runner.close();
+})
+test('terminal failures keep their execution result when releasing the desktop subscription fails', async () => {
+  const client = new FakeClient(), updates = [];
+  const originalCall = client.call.bind(client);
+  client.call = async (method, params) => {
+    if (method === 'thread/unsubscribe') { client.calls.push({ method, params }); throw new Error('connection lost'); }
+    return originalCall(method, params);
+  };
+  const runner = new CodexRunner({ clientFactory: () => client, onUpdate: j => updates.push(j), desktopOpener: async () => {} });
+  await runner.start(job());
+  await runner.notification({ method: 'turn/completed', params: { threadId: updates.at(-1).threadId, turn: { id: 'turn-1', status: 'failed', error: { message: 'tests failed' } } } });
+  assert.equal(updates.at(-1).status, 'failed');
+  assert.equal(updates.at(-1).message, 'tests failed');
+  assert.equal(updates.at(-1).releaseError, 'connection lost');
+});
+
+test('reconciliation releases a completed thread subscription', async () => {
+  const client = new FakeClient(), updates = [];
+  const runner = new CodexRunner({ clientFactory: () => client, onUpdate: j => updates.push(j), desktopOpener: async () => {} });
+  const saved = job(); saved.threadId = '12345678-1234-1234-1234-123456789abc'; saved.turnId = 'turn-1'; saved.status = 'unknown';
+  await runner.reconcile(saved);
+  assert.equal(updates.at(-1).status, 'completed');
+  assert.equal(updates.at(-1).subscriptionStatus, 'unsubscribed');
+  assert.deepEqual(client.calls.slice(-2).map(call => call.method), ['thread/read', 'thread/unsubscribe']);
 });
 
 test('approval and input require an explicit answer; stop uses native turn interrupt', async () => {
