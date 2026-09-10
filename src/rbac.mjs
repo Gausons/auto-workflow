@@ -10,6 +10,9 @@ export function permissionsFor(role) {
 }
 
 export function permissionForRoute(method, pathname) {
+  if (pathname === '/api/task-center/codex' && method === 'GET') return 'work.execute';
+  if (['/api/task-center/execute', '/api/task-center/execution-action'].includes(pathname) && method === 'POST') return 'work.execute';
+  if (pathname === '/api/task-center' && ['GET', 'POST'].includes(method)) return method === 'GET' ? 'read' : 'work.execute';
   if (method === 'GET' && (pathname === '/api/sessions' || /^\/api\/sessions\/[a-f0-9]{64}(?:\/(events|records))?$/.test(pathname))) return 'read';
   if (method === 'GET' && (pathname === '/api/agent-sessions' || /^\/api\/agent-sessions\/[a-f0-9]{64}$/.test(pathname))) return 'read';
   if (method === 'GET' && ['/api/bootstrap', '/api/workflows/records', '/api/assignment/people'].includes(pathname)) return 'read';

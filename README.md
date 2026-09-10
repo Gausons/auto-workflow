@@ -357,3 +357,48 @@ IDE_HISTORY_CLAUDE_DIR=/srv/agent-data/claude/projects
 真实凭据、人员信息、业务配置、SQLite 数据库、缺陷与执行记录、Agent 历史、日志、截图和附件均不纳入版本控制。本地数据保留在忽略目录中；不要使用 `git add -f` 强行提交。添加新的文件或目录前，先检查内容及 `git diff --cached`。
 
 本项目采用 MIT 许可证，见 [LICENSE](LICENSE)。
+
+## 多设备任务中心
+
+登录后默认进入「任务中心」（`/#tasks`）。原有缺陷工作台、流水线、历史会话和组织管理继续保留。
+
+- **任务**：按等待输入、执行异常、进行中、待接续、已完成分组。任务的目标、约束、结论、下一步和文件版本保存在组织数据库中；上下文修改产生新版本，并检查并发编辑冲突。
+- **未归属会话**：汇总工作台所在设备的 Codex / Claude 历史，以及其他设备连接器上传的记录。可以关联已有任务，或用会话创建任务。不会自动猜测并合并任务。
+- **接着做**：保存交接快照，目标接收后仍显示“待执行”；在目标 Agent 实际开始新会话并同步后，选择该会话确认开始。运行中的源任务需先在原 Agent 停止或完成当前步骤，再设为待接续。
+- **另开分支**：创建关联分支任务，复制当前上下文，保留原任务和原会话。
+- **引用信息**：明确选择目标设备、Agent 和目标会话，传递信息，不改变原任务执行状态。
+- **设备与 Agent**：远端每 30 秒同步一次，超过 90 秒没有心跳显示离线。离线交接请求保留至重新连接；可取消或报告失败。
+
+### 在其他设备连接同一工作台
+
+各设备需有此项目和 Node.js >= 22.16，先执行 `pnpm install --frozen-lockfile`。工作台服务需要能从这些设备访问，例如使用已有私有网络地址；本项目仍使用原有 Node 服务与 SQLite，不依赖静态托管。
+
+通过环境变量提供连接参数（密码不要写入 Git）：
+
+```sh
+export WORKBENCH_URL=https://your-workbench.example.com
+export WORKBENCH_TENANT=default
+export WORKBENCH_USERNAME=your-operator-account
+# 从终端或已有密码管理工具设置 WORKBENCH_PASSWORD
+export WORKBENCH_DEVICE_NAME=Linux
+pnpm device:sync
+```
+
+也可以用有效的成员登录令牌 `WORKBENCH_TOKEN` 代替用户名和密码。账号需要操作员或以上权限。设备标识绑定首次注册的成员；账号停用或令牌失效时连接器停止，重新登录后启动即可。同一设备更换注册成员时应使用新的 `WORKBENCH_DEVICE_DIR`。
+
+可选参数：
+
+| 参数 | 用途 |
+| --- | --- |
+| `WORKBENCH_DEVICE_DIR` | 设备标识和交接包存储目录，默认 `.workflow-data/device`；每台设备保持独立，避免复制该目录 |
+| `WORKBENCH_SYNC_EXCERPTS=true` | 同步每个会话最近最多 30 条记录中的用户/助手文本，截断至 24,000 字符；默认仅同步索引 |
+| `IDE_HISTORY_CODEX_DIR` / `IDE_HISTORY_CLAUDE_DIR` | 限定要汇总的会话目录；默认读取本机 Agent 的标准目录 |
+| `IDE_HISTORY_SCOPE=workspace` | 只同步 `CODEX_WORKSPACE_DIR` 及子目录所属会话 |
+
+运行 `pnpm device:sync --once` 可单次同步。连接器不读取项目 `.env`，请通过进程环境设置上述参数。
+
+接收到的交接包保存在 `.workflow-data/device/inbox/<交接ID>.json`，写入成功后才回报“已接收”。把其中的任务上下文和指令交给目标 Agent；本地工作台也支持直接复制或下载 Markdown 交接包。连接器**不会启动 Agent、执行指令或自动复制工作区文件**。文件可访问性、版本、权限以及源 Agent 停止情况须在目标设备核对；跨 Agent 接续创建新会话，不恢复原 Agent 内部状态。
+
+取消请求会阻止后续领取，但不会删除已下载的交接包，也不会停止目标 Agent。远端会话目前保留已同步索引，源设备删除记录不会自动删除工作台中的关联。首页每 15 秒刷新，编辑弹窗打开时暂停刷新，避免覆盖输入。
+
+接口：`GET /api/task-center` 返回当前组织快照，`POST /api/task-center` 接收 `create`、`update`、`link`、`handoff`、`ack` 和 `heartbeat` 操作。沿用成员登录和组织隔离；只读成员不能修改。任务/交接存入 SQLite 第 3 版迁移，已有数据升级保留。

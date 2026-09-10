@@ -78,6 +78,7 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
         return;
       }
       const assets = { '/': ['index.html', 'text/html; charset=utf-8'], '/index.html': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/historyView.js': ['historyView.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'] };
+      assets['/taskCenter.js'] = ['taskCenter.js', 'text/javascript; charset=utf-8'];
       const asset = Object.hasOwn(assets, url.pathname) ? assets[url.pathname] : null;
       if (!asset || !['GET', 'HEAD'].includes(req.method)) return sendJson(res, 404, { message: '页面不存在' });
       const content = await readFile(path.join(projectDir, 'public', asset[0]));

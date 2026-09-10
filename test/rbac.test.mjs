@@ -142,7 +142,7 @@ test('version 1 migration preserves tenant data; salted passwords, session expir
     assert.notEqual(hashes[0].password_hash, hashes[1].password_hash);
     raw.prepare('UPDATE user_sessions SET expires_at = ?').run(Date.now() - 1);
     assert.equal(db.authenticateSession(session.token), null);
-    assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 2);
+    assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 3);
     raw.close();
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
 });

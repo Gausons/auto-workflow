@@ -1,4 +1,5 @@
 import { renderMessages } from './historyView.js';
+import { createTaskCenterUI } from './taskCenter.js';
 
 const state = {
   config: {},
@@ -79,6 +80,7 @@ const attachmentRequests = new Set();
 let pollTimer = null;
 let configFormDirty = false;
 
+const taskCenterUI = createTaskCenterUI({ root: document.querySelector('#taskCenter'), api, canEdit: () => state.permissions.includes('work.execute'), toast: showToast });
 init();
 
 const roleLabels = { owner: "组织所有者", admin: "管理员", operator: "操作员", viewer: "只读成员" };
@@ -121,7 +123,7 @@ async function init() {
   });
   bindMemberEvents();
   if (sessionStorage.getItem("bugflow.sessionToken")) {
-    try { await loadBootstrap(); showWorkspace(); if (state.view === "members") await loadMembers(); if (state.view === "history") await loadAgentHistory(); }
+    try { await loadBootstrap(); showWorkspace(); if (state.view === 'tasks') await taskCenterUI.load(); if (state.view === "members") await loadMembers(); if (state.view === "history") await loadAgentHistory(); }
     catch (error) { document.querySelector("#loginError").textContent = error.message; }
   }
 }
@@ -217,6 +219,7 @@ function bindEvents() {
   window.addEventListener("hashchange", () => {
     state.view = currentView();
     render();
+    if (state.view === 'tasks') taskCenterUI.load();
     if (state.view === "members") loadMembers().catch((error) => showToast(error.message));
     if (state.view === "history") loadAgentHistory();
   });
@@ -2134,7 +2137,7 @@ async function api(path, options = {}) {
 
 function currentView() {
   const view = location.hash.replace(/^#/, "");
-  return ["workbench", "pipeline", "records", "history", "assignment", "config", "members", "account"].includes(view) ? view : "workbench";
+  return ["tasks", "workbench", "pipeline", "records", "history", "assignment", "config", "members", "account"].includes(view) ? view : "tasks";
 }
 
 function bindHistoryEvents() {

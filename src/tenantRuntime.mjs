@@ -3,6 +3,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { publicIdentity } from "./rbac.mjs";
 import { createSessionDelivery } from "./sessionDelivery/index.ts";
 import { createAgentHistory } from "./agentHistory/index.mjs";
+import { createTaskCenter } from "./taskCenter.mjs";
+import { createCodexExecution } from "./codexExecution.mjs";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -244,6 +246,20 @@ function pickPersistedConfig(config) {
 }
 
 async function handleApi(req, res, url) {
+  if (url.pathname === '/api/task-center/codex') {
+    sendJson(res, 200, await codexExecution.targets()); return;
+  }
+  if (url.pathname === '/api/task-center/execute') {
+    sendJson(res, 202, await codexExecution.execute(await readJson(req))); return;
+  }
+  if (url.pathname === '/api/task-center/execution-action') {
+    sendJson(res, 200, await codexExecution.action(await readJson(req), requestIdentity.getStore().user)); return;
+  }
+  if (url.pathname === '/api/task-center') {
+    if (req.method === 'GET') sendJson(res, 200, await taskCenter.snapshot());
+    else sendJson(res, 200, await taskCenter.command(await readJson(req), requestIdentity.getStore().user));
+    return;
+  }
   if (req.method === "GET" && url.pathname === "/api/sessions") {
     sendJson(res, 200, await sessionDelivery.list(url.searchParams));
     return;
@@ -3441,6 +3457,8 @@ function hasBackgroundWork() {
 
 const agentHistory = createAgentHistory({ environment, tenantId: tenant.id, rootDir, workspace: () => state.config.codexWorkspaceDir });
 const sessionDelivery = createSessionDelivery({ history: agentHistory, environment });
+const taskCenter = createTaskCenter({ database, tenantId: tenant.id, history: agentHistory });
+const codexExecution = createCodexExecution({ database, tenantId: tenant.id, workspace: () => state.config.codexWorkspaceDir, environment });
 
 return {
   workspace: () => state.config.codexWorkspaceDir,
@@ -3458,6 +3476,7 @@ return {
     finally { if (mutation) mutationPending = false; }
   },
   async close() {
+    codexExecution.close();
     await persistWorkflowState({ immediate: true });
     closing = true;
     configureScheduler(false);

@@ -7,6 +7,7 @@
     "start": "node --import tsx --import ./src/issueSources/preload.ts server.mjs",
     "dev": "node --import tsx --import ./src/issueSources/preload.ts --watch server.mjs",
     "kill:port": "node scripts/kill-port.mjs",
+    "device:sync": "node scripts/device-sync.mjs",
     "test": "node --import tsx --test test/*.test.mjs test/*.test.ts",
     "tenant": "node --import tsx --import ./src/issueSources/preload.ts scripts/tenant.mjs",
     "typecheck": "tsc --noEmit"

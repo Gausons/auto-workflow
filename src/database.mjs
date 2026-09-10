@@ -12,7 +12,7 @@ export function openDatabase(filename) {
   const db = new DatabaseSync(filename);
   db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
   const version = db.prepare('PRAGMA user_version').get().user_version;
-  if (version > 2) { db.close(); throw new Error('数据库版本高于当前程序支持的版本'); }
+  if (version > 3) { db.close(); throw new Error('数据库版本高于当前程序支持的版本'); }
   if (version === 0) {
     transaction(() => {
       db.exec(readFileSync(new URL('../migrations/001_initial.sql', import.meta.url), 'utf8'));
@@ -23,6 +23,13 @@ export function openDatabase(filename) {
     transaction(() => {
       db.exec(readFileSync(new URL('../migrations/002_rbac.sql', import.meta.url), 'utf8'));
       db.exec('PRAGMA user_version = 2');
+    });
+  }
+
+  if (version < 3) {
+    transaction(() => {
+      db.exec(readFileSync(new URL('../migrations/003_task_center.sql', import.meta.url), 'utf8'));
+      db.exec('PRAGMA user_version = 3');
     });
   }
 
@@ -119,6 +126,13 @@ export function openDatabase(filename) {
   }
   return {
     ...createIdentityStore(db, transaction),
+    readTaskCenter: (tenantId) => JSON.parse(db.prepare('SELECT payload FROM task_centers WHERE tenant_id = ?').get(tenantId)?.payload || '{"tasks":[],"devices":[],"sessions":[],"handoffs":[]}'),
+    mutateTaskCenter: (tenantId, update) => transaction(() => {
+      const data = JSON.parse(db.prepare('SELECT payload FROM task_centers WHERE tenant_id = ?').get(tenantId)?.payload || '{"tasks":[],"devices":[],"sessions":[],"handoffs":[]}');
+      const result = update(data);
+      db.prepare('INSERT INTO task_centers VALUES (?, ?) ON CONFLICT(tenant_id) DO UPDATE SET payload = excluded.payload').run(tenantId, JSON.stringify(data));
+      return result;
+    }),
     createTenant, getTenant, authenticate, readSettings, writeSettings, createStore, importLegacy,
     listTenants: () => db.prepare('SELECT id, name, created_at AS createdAt FROM tenants ORDER BY id').all(),
     rotateToken: (id, token) => {

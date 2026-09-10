@@ -2380,3 +2380,73 @@ body[data-view="history"] .main { padding: 0; min-width: 0; }
 .history-images img { display: block; max-width: 100%; width: auto; height: auto; max-height: 650px; object-fit: contain; border: 1px solid #e5e5e5; border-radius: 10px; background: #fff; }
 .history-images figcaption { font-size: 11px; color: #999; margin-top: 5px; }
 .history-image-unavailable { font-size: 12px; color: #999; }
+
+/* Task-first workspace, sharing the existing BugFlow palette. */
+body[data-view="tasks"] .topbar { display: none; }
+.task-center { font-size: 16px; line-height: 1.6; }
+.task-center h1 { margin: 0; font-size: 28px; }
+.task-center h2 { margin: 0; font-size: 20px; }
+.task-center h3 { font-size: 15px; margin: 16px 0 8px; }
+.tc-heading, .tc-detail-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; flex-wrap: wrap; }
+.tc-heading { margin-bottom: 24px; }
+.tc-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tc-actions .button { font-size: 14px; }
+.tc-nav, .tc-tabs { display: flex; gap: 22px; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+.tc-nav { margin-bottom: 24px; }
+.tc-nav button, .tc-tabs button { border: 0; background: transparent; padding: 12px 0; color: var(--muted); cursor: pointer; font-size: 14px; }
+.tc-nav button[aria-pressed="true"], .tc-tabs button[aria-pressed="true"] { color: var(--teal-dark); box-shadow: inset 0 -2px var(--teal); }
+.tc-nav span { margin-left: 8px; font-size: 12px; }
+.tc-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.tc-list { padding: 18px 12px; border-right: 1px solid var(--line); min-width: 0; }
+.tc-list h3 { margin: 6px 10px 12px; color: var(--muted); font-size: 14px; }
+.tc-list h3 span { margin-left: 8px; }
+.tc-task { width: 100%; display: grid; gap: 6px; text-align: left; padding: 14px; border: 1px solid transparent; border-radius: 8px; background: transparent; cursor: pointer; color: var(--text); margin-bottom: 8px; overflow-wrap: anywhere; }
+.tc-task:hover { background: var(--bg); }
+.tc-task[aria-pressed="true"] { background: #edf6f4; border-color: #bbd9d3; }
+.tc-task strong { font-size: 15px; }
+.tc-task span { font-size: 14px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.tc-task small, .tc-meta { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.tc-detail { padding: 26px; min-width: 0; }
+.tc-detail-head { margin-bottom: 18px; }
+.tc-detail-head h2 { margin-top: 8px; overflow-wrap: anywhere; }
+.tc-tag { display: inline-block; font-size: 13px; color: var(--teal-dark); background: #edf6f4; border-radius: 5px; padding: 3px 8px; }
+.tc-next { margin: 22px 0; padding: 16px; border-radius: 8px; background: var(--bg); }
+.tc-next p { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tc-timeline { margin-top: 24px; }
+.tc-timeline article { border-left: 2px solid var(--line); padding: 0 0 24px 18px; }
+.tc-timeline p { margin: 6px 0 0; overflow-wrap: anywhere; }
+.tc-context p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.tc-session, .tc-handoff { border-bottom: 1px solid var(--line); padding: 18px 0; overflow-wrap: anywhere; }
+.tc-session p { margin: 5px 0; }
+.tc-session .tc-actions { margin-top: 12px; }
+.tc-inbox { padding: 24px; background: var(--surface); border-radius: 12px; border: 1px solid var(--line); }
+.tc-search { margin-left: auto; min-width: 0; font-size: 14px; }
+.tc-search input { max-width: 100%; width: 290px; display: block; padding: 10px; border: 1px solid var(--line); border-radius: 6px; }
+.tc-devices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 20px; }
+.tc-devices article { background: var(--surface); border: 1px solid var(--line); padding: 22px; border-radius: 10px; overflow-wrap: anywhere; }
+.tc-empty { padding: 56px 16px; text-align: center; }
+.tc-empty p { color: var(--muted); }
+.tc-dialog { width: min(680px, calc(100% - 32px)); max-height: calc(100dvh - 48px); padding: 26px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: var(--surface); }
+.tc-dialog::backdrop { background: rgb(17 24 39 / 45%); }
+.tc-dialog header { justify-content: space-between; margin-bottom: 20px; }
+.tc-dialog h2 { font-size: 21px; margin: 0; }
+.tc-dialog label { display: block; font-size: 14px; margin: 14px 0; }
+.tc-dialog input:not([type="checkbox"]), .tc-dialog select, .tc-dialog textarea { display: block; width: 100%; margin-top: 6px; border: 1px solid var(--line); border-radius: 6px; padding: 10px; font-size: 16px; background: var(--surface); color: var(--text); }
+.tc-dialog textarea { resize: vertical; }
+.tc-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 14px; }
+.tc-dialog .tc-check { display: flex; align-items: center; gap: 8px; }
+.tc-dialog .tc-check input { width: auto; }
+.tc-dialog footer { display: flex; justify-content: flex-end; }
+.tc-form-error { color: var(--red); }
+.tc-callout { background: var(--bg); padding: 12px; font-size: 14px; }
+.tc-two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.tc-message { border-bottom: 1px solid var(--line); margin: 18px 0; }
+#tc-messages { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 1100px) { .tc-layout { grid-template-columns: 230px minmax(0, 1fr); } .tc-detail { padding: 20px; } }
+@media (max-width: 800px) { .tc-layout { grid-template-columns: 1fr; } .tc-list { border-right: 0; border-bottom: 1px solid var(--line); } .tc-two { grid-template-columns: 1fr; gap: 0; } .tc-search { margin-left: 0; } .tc-nav { gap: 16px; } }
+body[data-can-execute="false"] .task-center [data-tc="new"], body[data-can-execute="false"] .task-center [data-tc="edit"], body[data-can-execute="false"] .task-center [data-tc="handoff-dialog"] { display: none; }
+.tc-execution { margin: 18px 0; padding: 18px; border: 1px solid #bbd9d3; border-radius: 8px; background: #f7fbfa; }
+.tc-execution p { margin: 8px 0; overflow-wrap: anywhere; }
+.tc-execution pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 14px; }
+.tc-execution details { margin-top: 12px; }
+.tc-execution a.button { text-decoration: none; }
