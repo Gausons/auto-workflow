@@ -24,8 +24,8 @@ export function createTaskCenter({ database, tenantId, history }) {
   }
   function snapshot(local) {
     const data = database.readTaskCenter(tenantId);
-    const synthetic = new Set(data.sessions.filter(s => s.source === 'codexExecution' && s.deviceId === 'local').map(s => s.nativeId));
-    const sessions = [...local.sessions.filter(s => !synthetic.has(s.nativeId)), ...data.sessions.map(s => s.source === 'codexExecution' ? { ...s, historyId: local.sessions.find(l => l.nativeId === s.nativeId)?.historyId } : s)];
+    const synthetic = new Set(data.sessions.filter(s => s.source === 'codexExecution').map(s => `${s.deviceId}:${s.nativeId}`));
+    const sessions = [...local.sessions.filter(s => !synthetic.has(`local:${s.nativeId}`)), ...data.sessions.filter(s => s.source === 'codexExecution' || !synthetic.has(`${s.deviceId}:${s.nativeId}`)).map(s => s.source === 'codexExecution' && s.deviceId === 'local' ? { ...s, historyId: local.sessions.find(l => l.nativeId === s.nativeId)?.historyId } : s)];
     return { ...data, devices: [local.device, ...data.devices].map(d => ({ ...d, online: online(d) })),
       sessions, tasks: data.tasks.sort((a, b) => statuses.indexOf(a.status) - statuses.indexOf(b.status) || b.updatedAt.localeCompare(a.updatedAt)) };
   }

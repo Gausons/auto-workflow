@@ -43,6 +43,7 @@ export async function syncDeviceOnce({ request, history, deviceId, name, outputD
 
 async function main() {
   const environment = { ...process.env };
+  if (environment.WORKBENCH_EXECUTE_CODEX === 'true' && process.argv.includes('--once')) throw new Error('Codex 执行模式需要保持连接器运行，请移除 --once');
   if (!environment.WORKBENCH_URL) throw new Error('请设置 WORKBENCH_URL，连接参数见 README「多设备任务中心」');
   const base = new URL(environment.WORKBENCH_URL);
   if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password) throw new Error('工作台地址无效');

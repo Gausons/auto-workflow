@@ -142,7 +142,8 @@ export function recordExecution(data, job) {
         if (!task.sessionIds.includes(id)) task.sessionIds.push(id);
       }
       const taskStatus = { launching: 'running', running: 'running', waiting: 'waiting', completed: 'completed', failed: 'error', unknown: 'error', interrupted: 'ready' }[job.status];
-      if (taskStatus) task.status = taskStatus;
+      const current = data.executions.filter(j => j.taskId === task.id).at(-1)?.id === job.id;
+      if (current && taskStatus && previous !== job.status) task.status = taskStatus;
       if (previous !== job.status) { task.revision++; task.updatedAt = timestamp(); task.events.unshift({ id: randomUUID(), at: task.updatedAt, message: job.message }); }
 
 }
@@ -190,6 +191,14 @@ export function createCodexExecution({ database, tenantId, workspace, environmen
     async action(input, actor) {
       const job = database.readTaskCenter(tenantId).executions?.find(j => j.id === input.executionId);
       if (!job) throw httpError(404, '执行不存在');
+      if (input.action === 'stop' && job.status === 'queued') {
+        database.mutateTaskCenter(tenantId, data => {
+          const saved = data.executions.find(j => j.id === job.id);
+          if (saved.status !== 'queued') throw httpError(409, '任务已被领取，请刷新后停止执行');
+          recordExecution(data, { ...saved, status: 'interrupted', message: '已取消等待执行', updatedAt: timestamp() });
+        });
+        return { executionId: job.id };
+      }
       if (job.deviceId !== 'local') {
         if (['claim', 'report'].includes(input.action)) {
           return database.mutateTaskCenter(tenantId, data => {
@@ -204,7 +213,7 @@ export function createCodexExecution({ database, tenantId, workspace, environmen
             if (!report || !['launching', 'running', 'waiting', 'completed', 'failed', 'interrupted', 'unknown'].includes(report.status)) throw httpError(400, '执行回报格式无效');
             if (saved.status === 'queued') throw httpError(409, '请先领取任务');
             if (report.threadId && !/^[a-f0-9-]{36}$/.test(report.threadId)) throw httpError(400, 'Codex 会话标识无效');
-            if (saved.threadId && report.threadId && saved.threadId !== report.threadId) throw httpError(409, '不能替换已绑定的 Codex 会话');
+            if (saved.threadId && report.threadId !== undefined && saved.threadId !== report.threadId) throw httpError(409, '不能替换已绑定的 Codex 会话');
             if (['completed', 'failed', 'interrupted'].includes(saved.status) && report.status !== saved.status) throw httpError(409, '执行已经结束');
             const patch = {};
             for (const key of ['threadId', 'turnId', 'message', 'output', 'desktopMessage']) if (report[key] !== undefined) {

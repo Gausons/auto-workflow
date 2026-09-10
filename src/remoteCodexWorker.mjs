@@ -12,7 +12,7 @@ export class RemoteCodexWorker {
       this.saved.set(job.id, structuredClone(job)); this.pending.set(job.id, structuredClone(job));
       this.queue = this.queue.then(() => this.persist(job)).catch(error => { this.storageError = error; });
     };
-    this.runner = runnerFactory ? runnerFactory(update) : new CodexRunner({ onUpdate: update });
+    this.runner = runnerFactory ? runnerFactory(update) : new CodexRunner({ executable: process.env.CODEX_EXECUTABLE || 'codex', onUpdate: update });
     this.update = update;
   }
   async persist(job) {

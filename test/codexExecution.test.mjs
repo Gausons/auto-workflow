@@ -86,9 +86,44 @@ test('durable execution reservations isolate tenants, reject duplicates, and rec
   update({ ...db.readTaskCenter('default').executions[0], status: 'completed', message: 'completed', output: 'ok' });
   assert.equal((await center.snapshot()).tasks[0].status, 'completed');
   const latest = (await center.snapshot()).tasks[0];
-  await service.execute({ ...input, revision: latest.revision }); service.close();
+  await service.execute({ ...input, revision: latest.revision });
+  update({ ...db.readTaskCenter('default').executions[0], status: 'completed', desktopOpened: true });
+  assert.equal((await center.snapshot()).tasks[0].status, 'running', 'late updates from an old run must not overwrite the newer run');
+  service.close();
   const restarted = createCodexExecution({ database: db, tenantId: 'default', workspace: () => root, runnerFactory: factory });
   assert.equal(db.readTaskCenter('default').executions.at(-1).status, 'unknown');
   await assert.rejects(restarted.execute({ ...input, revision: (await center.snapshot()).tasks[0].revision }), { statusCode: 409 });
   assert.equal(started, 2); assert.ok(result.executionId); restarted.close();
+});
+
+test('remote device claims once, reports real thread state, and rejects other device accounts', async t => {
+  const { RemoteCodexWorker } = await import('../src/remoteCodexWorker.mjs');
+  const root = await mkdtemp(path.join(os.tmpdir(), 'remote-codex-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const db = openDatabase(':memory:'); t.after(() => db.close()); db.createTenant({ id: 'default', token: 'x'.repeat(32) });
+  const center = createTaskCenter({ database: db, tenantId: 'default', history: { catalog: async () => ({ sessions: [], providers: [] }) } });
+  const owner = { id: 'device-owner' };
+  await center.command({ action: 'heartbeat', deviceId: 'remote', name: 'Remote Mac', agents: ['codex'], sessions: [], codexProjects: [{ id: 'p', name: 'Repo', cwd: root }] }, owner);
+  await center.command({ action: 'create', title: '远端执行' }, owner);
+  const service = createCodexExecution({ database: db, tenantId: 'default', workspace: () => root, runnerFactory: () => ({ projects: async () => [], close() {} }) });
+  t.after(() => service.close());
+  const task = (await center.snapshot()).tasks[0];
+  const { executionId } = await service.execute({ taskId: task.id, revision: task.revision, deviceId: 'remote', projectId: 'p', cwd: root });
+  assert.equal(db.readTaskCenter('default').executions[0].status, 'queued');
+  await assert.rejects(service.action({ action: 'claim', executionId }, { id: 'other' }), { statusCode: 403 });
+  const client = new FakeClient(); let runner;
+  const worker = new RemoteCodexWorker({ deviceId: 'remote', workspace: root, directory: path.join(root, 'journal'), request: (method, body) => method === 'GET' ? center.snapshot() : service.action(body, owner), runnerFactory: update => {
+    runner = new CodexRunner({ clientFactory: () => client, onUpdate: update, desktopOpener: async () => {} });
+    runner.projects = async () => [{ id: 'p', name: 'Repo', cwd: root }]; return runner;
+  } });
+  await worker.sync();
+  let saved = db.readTaskCenter('default').executions[0]; assert.equal(saved.status, 'running'); assert.ok(saved.threadId);
+  await assert.rejects(service.action({ action: 'claim', executionId }, owner), { statusCode: 409 });
+  await assert.rejects(service.action({ action: 'report', executionId, report: { status: 'running', threadId: null } }, owner), { statusCode: 409 });
+  await worker.sync(); assert.equal(client.calls.filter(c => c.method === 'thread/start').length, 1);
+  client.emit('request', { id: 1, method: 'item/commandExecution/requestApproval', params: { threadId: saved.threadId, command: 'npm test' } });
+  await worker.sync(); assert.equal(db.readTaskCenter('default').executions[0].status, 'waiting');
+  await service.action({ action: 'respond', executionId, decision: 'decline' }, owner);
+  await worker.sync(); assert.equal(db.readTaskCenter('default').executions[0].control, null);
+  client.emit('notification', { method: 'turn/completed', params: { threadId: saved.threadId, turn: { id: 'turn-1', status: 'completed' } } });
+  await worker.sync(); assert.equal((await center.snapshot()).tasks[0].status, 'completed'); worker.close();
 });
