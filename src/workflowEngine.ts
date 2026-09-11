@@ -1,10 +1,9 @@
-// @ts-nocheck
 import { sourceTransitionPlan } from "./issueSources/workflow.ts";
 import { DEFAULT_OPERATION_LOG_ENDPOINT } from "./operationLogClient.js";
 import { getIdeExecutorLabel, normalizeIdeExecutor } from "./ideExecutor.js";
 
-export function createCodexTaskPacket(bug, config = {}, options = {}) {
-  const steps = (bug.reproduceSteps || []).map((step, index) => `${index + 1}. ${step}`).join("\n");
+export function createCodexTaskPacket(bug: any, config: any = {}, options: any = {}) {
+  const steps = (bug.reproduceSteps || []).map((step: any, index: any) => `${index + 1}. ${step}`).join("\n");
   const attachments = formatAttachments(bug);
   const infoCompletionEnabled = config.enableBugInfoCompletion !== false;
   const normalized = infoCompletionEnabled ? normalizeBugInfo(bug, config) : null;
@@ -73,9 +72,9 @@ export function createCodexTaskPacket(bug, config = {}, options = {}) {
   ].join("\n");
 }
 
-export function normalizeBugInfo(bug, config = {}) {
+export function normalizeBugInfo(bug: any, config: any = {}) {
   const steps = Array.isArray(bug.reproduceSteps) ? bug.reproduceSteps.filter(Boolean) : [];
-  const fields = {
+  const fields: any = {
     code: valueOrMissing(bug.code),
     aid: valueOrMissing(bug.aid),
     title: valueOrMissing(bug.title),
@@ -98,10 +97,10 @@ export function normalizeBugInfo(bug, config = {}) {
     acceptanceCriteria: valueOrMissing(bug.acceptanceCriteria || bug.expected),
     repositoryHint: valueOrMissing(bug.repositoryHint),
     testHint: valueOrMissing(bug.testHint),
-    attachments: bug.attachments?.length ? bug.attachments.map((attachment) => attachment.name || attachment.url || attachment.aid || "未命名附件") : []
+    attachments: bug.attachments?.length ? bug.attachments.map((attachment: any) => attachment.name || attachment.url || attachment.aid || "未命名附件") : []
   };
 
-  const missing = [];
+  const missing: any[] = [];
   for (const [key, value] of Object.entries(fields)) {
     if (Array.isArray(value)) {
       if (!value.length) missing.push(key);
@@ -118,7 +117,7 @@ export function normalizeBugInfo(bug, config = {}) {
   return { fields, missing };
 }
 
-export function formatBugInfoTemplate(normalized) {
+export function formatBugInfoTemplate(normalized: any) {
   const fields = normalized.fields;
   return [
     `- 缺陷编码：${fields.code}`,
@@ -137,7 +136,7 @@ export function formatBugInfoTemplate(normalized) {
     `- 相关日志：${fields.logs}`,
     `- 问题描述：${fields.description}`,
     `- 复现步骤：`,
-    ...fields.reproduceSteps.map((step, index) => `  ${index + 1}. ${step}`),
+    ...fields.reproduceSteps.map((step: any, index: any) => `  ${index + 1}. ${step}`),
     `- 期望结果：${fields.expected}`,
     `- 实际结果：${fields.actual}`,
     `- 验收标准：${fields.acceptanceCriteria}`,
@@ -148,7 +147,7 @@ export function formatBugInfoTemplate(normalized) {
   ].join("\n");
 }
 
-export function normalizeClientEnv(value) {
+export function normalizeClientEnv(value: any) {
   const parsed = parseJsonLike(value);
   const source = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
   return {
@@ -163,7 +162,7 @@ export function normalizeClientEnv(value) {
   };
 }
 
-function formatClientEnvLines(clientEnv = {}) {
+function formatClientEnvLines(clientEnv: any = {}) {
   return [
     `  - device_type：${clientEnv.device_type || ""}`,
     `  - device_model：${clientEnv.device_model || ""}`,
@@ -176,13 +175,13 @@ function formatClientEnvLines(clientEnv = {}) {
   ];
 }
 
-function missingClientEnvKeys(clientEnv = {}) {
+function missingClientEnvKeys(clientEnv: any = {}) {
   return Object.entries(clientEnv)
     .filter(([, value]) => String(value || "").startsWith("缺失："))
     .map(([key]) => key);
 }
 
-export function classifyBugRoute(bug, normalized = normalizeBugInfo(bug), config = {}) {
+export function classifyBugRoute(bug: any, normalized = normalizeBugInfo(bug), config: any = {}) {
   if (config.enableAIRouting === false) {
     return {
       enabled: false,
@@ -226,7 +225,7 @@ export function classifyBugRoute(bug, normalized = normalizeBugInfo(bug), config
   };
 }
 
-export function formatRoutingResult(route) {
+export function formatRoutingResult(route: any) {
   return [
     route.source ? `- 分类来源：${route.source}${route.model ? `（${route.model}）` : ""}` : "",
     `- Bug 类型：${route.bugType}`,
@@ -238,7 +237,7 @@ export function formatRoutingResult(route) {
   ].filter(Boolean).join("\n");
 }
 
-export function runFixWorkflow(bug, config = {}, options = {}) {
+export function runFixWorkflow(bug: any, config: any = {}, options: any = {}) {
   const now = new Date();
   const runId = `run-${now.getTime()}`;
   const infoCompletionEnabled = config.enableBugInfoCompletion !== false;
@@ -262,10 +261,10 @@ export function runFixWorkflow(bug, config = {}, options = {}) {
     {
       id: "infoCompletion",
       label: "信息补全",
-      status: !infoCompletionEnabled ? "skipped" : normalizedBug.missing.length ? "attention" : "done",
+      status: !infoCompletionEnabled ? "skipped" : normalizedBug?.missing.length ? "attention" : "done",
       message: !infoCompletionEnabled
         ? "配置已关闭信息补全，原始工单直接进入路由分类。"
-        : normalizedBug.missing.length
+        : normalizedBug?.missing.length
         ? `缺陷信息已按模板整理，缺失字段：${normalizedBug.missing.join("、")}。`
         : "缺陷信息已按模板整理，关键字段完整。",
       detail: "Loop 调用 AI/规则把问题字段整理成标准 Bug 模板，缺失字段只提示，不强制补齐。"
@@ -338,7 +337,7 @@ export function runFixWorkflow(bug, config = {}, options = {}) {
   ];
 
   const startedAt = now.toISOString();
-  const run = {
+  const run: any = {
     id: runId,
     bugId: bug.id,
     bugCode: bug.code,
@@ -400,14 +399,14 @@ export function runFixWorkflow(bug, config = {}, options = {}) {
   return run;
 }
 
-export function buildWorkflowOperationLog(bug, config = {}, options = {}) {
+export function buildWorkflowOperationLog(bug: any, config: any = {}, options: any = {}) {
   const startedAt = options.startedAt || new Date().toISOString();
   const normalized = options.normalizedBug || normalizeBugInfo(bug, config);
   const clientEnv = normalized.fields?.client_env || normalizeClientEnv(bug.client_env || bug.clientEnv);
   const sourceType = normalizeSourceType(config.operationLogSourceType);
   const chatSource = normalizeChatSource(config.operationLogChatSource);
   const channel = normalizeChannel(config.operationLogChannel || clientEnv.channel);
-  const item = {
+  const item: any = {
     conversation_id: safeOperationId(options.runId || bug.id || bug.aid || bug.code || startedAt),
     session_id: stringValue(config.operationLogSessionId || config.operatorId || "auto-workflow"),
     user_id: stringValue(config.operationLogUserId || config.operatorId || bug.assigneeId || "auto-workflow"),
@@ -444,7 +443,7 @@ export function buildWorkflowOperationLog(bug, config = {}, options = {}) {
   };
 }
 
-export function updateWorkflowOperationLogOutput(run, { answerText, status, finishedAt = new Date().toISOString() } = {}) {
+export function updateWorkflowOperationLogOutput(run: any, { answerText, status, finishedAt = new Date().toISOString() }: any = {}) {
   if (!run?.operationLog?.item) return run?.operationLog || null;
   const item = run.operationLog.item;
   const start = Date.parse(item.task_start_time || item.create_time || run.startedAt || "");
@@ -469,15 +468,15 @@ const IDE_REPORT_HEADINGS = [
  * Extract the structured sections requested in the IDE task from its terminal output.
  * The last occurrence wins because Codex may print its final answer more than once.
  */
-export function extractIdeReports(output, existing = {}) {
-  const sections = {};
+export function extractIdeReports(output: any, existing: any = {}) {
+  const sections: any = {};
   const lines = String(output || "").replaceAll("\r\n", "\n").split("\n");
   let activeKey = "";
-  let activeLines = [];
+  let activeLines: any = [];
 
   const commitSection = () => {
     if (!activeKey) return;
-    const value = trimReportSection(activeLines);
+    const value: any = trimReportSection(activeLines);
     if (value) sections[activeKey] = value;
     activeKey = "";
     activeLines = [];
@@ -509,7 +508,7 @@ export function extractIdeReports(output, existing = {}) {
   if (!sections.risks && sections.verification) {
     const riskLine = sections.verification
       .split("\n")
-      .find((line) => /^\s*[-*]?\s*(?:剩余风险|remaining\s+risks?)\s*[:：]/i.test(line));
+      .find((line: any) => /^\s*[-*]?\s*(?:剩余风险|remaining\s+risks?)\s*[:：]/i.test(line));
     if (riskLine) sections.risks = riskLine.replace(/^\s*[-*]?\s*(?:剩余风险|remaining\s+risks?)\s*[:：]\s*/i, "").trim();
   }
 
@@ -525,26 +524,26 @@ export function extractIdeReports(output, existing = {}) {
   };
 }
 
-export function hydrateWorkflowIdeReports(run) {
+export function hydrateWorkflowIdeReports(run: any) {
   if (!run || !Array.isArray(run.logs)) return run;
   const reports = extractIdeReports(run.logs.join("\n"), run.ide?.reports || {});
   run.ide = { ...(run.ide || {}), reports };
   return run;
 }
 
-function trimReportSection(lines) {
+function trimReportSection(lines: any) {
   const next = [...lines];
   while (next.length && !next[0].trim()) next.shift();
   while (next.length && !next.at(-1).trim()) next.pop();
   return next.join("\n").trim();
 }
 
-function valueOrMissing(value, hint = "未提供") {
+function valueOrMissing(value: any, hint = "未提供") {
   const text = String(value || "").trim();
   return text || `缺失：${hint}`;
 }
 
-function parseJsonLike(value) {
+function parseJsonLike(value: any) {
   if (!value) return null;
   if (typeof value === "object") return value;
   if (typeof value !== "string") return null;
@@ -556,13 +555,13 @@ function parseJsonLike(value) {
   }
 }
 
-function clampReviewRounds(value) {
+function clampReviewRounds(value: any) {
   const number = Number(value);
   if (!Number.isFinite(number)) return 3;
   return Math.min(10, Math.max(1, Math.trunc(number)));
 }
 
-function inferBugType(text) {
+function inferBugType(text: any) {
   if (/权限|登录|认证|鉴权|permission|auth|login/.test(text)) return "权限问题类 Bug";
   if (/性能|慢|卡顿|timeout|超时|耗时|performance/.test(text)) return "性能问题类 Bug";
   if (/数据|脏数据|缺数|重复|同步|data/.test(text)) return "数据问题类 Bug";
@@ -572,7 +571,7 @@ function inferBugType(text) {
   return "前端展示类 Bug";
 }
 
-function inferRoutePriority(bug, text) {
+function inferRoutePriority(bug: any, text: any) {
   const raw = `${bug.priority || ""} ${bug.severity || ""} ${bug.status || ""}`.toLowerCase();
   if (/p0|s1|blocker|critical|严重线上事故|资损|宕机|崩溃|核心链路不可用/.test(`${raw} ${text}`)) return "P0";
   if (/p1|s2|high|严重|核心|主流程|不可用|会话|对话/.test(`${raw} ${text}`)) return "P1";
@@ -580,7 +579,7 @@ function inferRoutePriority(bug, text) {
   return "P2";
 }
 
-function normalizeAllowedPriorities(value) {
+function normalizeAllowedPriorities(value: any) {
   if (Array.isArray(value)) {
     return value.map((item) => String(item).trim().toUpperCase()).filter((item) => ["P0", "P1", "P2", "P3"].includes(item));
   }
@@ -590,16 +589,16 @@ function normalizeAllowedPriorities(value) {
   return priorities.length ? priorities.filter((item) => ["P0", "P1", "P2", "P3"].includes(item)) : ["P2", "P3"];
 }
 
-function routeRecommendation(priority, allowed) {
+function routeRecommendation(priority: any, allowed: any) {
   if (["P0", "P1"].includes(priority)) return "人工主导，AI 辅助分析，不建议直接自动修复。";
   if (allowed && priority === "P2") return "进入 IDE 自主修复，人工 Review 后合并。";
   if (allowed && priority === "P3") return "优先尝试 IDE 自主修复，走轻量人工 Review。";
   return "不建议自动修复，需人工判断处理。";
 }
 
-function formatAttachments(bug) {
+function formatAttachments(bug: any) {
   if (bug.attachments?.length) {
-    return bug.attachments.map((attachment) => {
+    return bug.attachments.map((attachment: any) => {
       const meta = [
         attachment.size ? `${attachment.size} bytes` : "",
         attachment.ctimeStr || "",
@@ -623,7 +622,7 @@ function formatAttachments(bug) {
   return "无附件或尚未加载附件。";
 }
 
-function buildPatchSummary(bug) {
+function buildPatchSummary(bug: any) {
   return [
     `定位入口：${bug.repositoryHint || "待 Codex 搜索仓库"}`,
     "修复策略：由 IDE Agent 先输出根因分析和 Fix Plan，再做最小必要改动。",
@@ -632,7 +631,7 @@ function buildPatchSummary(bug) {
   ];
 }
 
-function buildLogs(bug, executionMode, ideExecutor = "codex") {
+function buildLogs(bug: any, executionMode: any, ideExecutor = "codex") {
   return [
     `[pull] ${bug.code} ${bug.title}`,
     `[loop] 生成标准 Bug 模板并完成路由分类`,
@@ -644,7 +643,7 @@ function buildLogs(bug, executionMode, ideExecutor = "codex") {
   ];
 }
 
-function buildOperationQuestion(bug, normalized, options) {
+function buildOperationQuestion(bug: any, normalized: any, options: any) {
   const fields = normalized.fields || {};
   return [
     `缺陷编码：${bug.code || fields.code || ""}`,
@@ -660,7 +659,7 @@ function buildOperationQuestion(bug, normalized, options) {
   ].filter((line) => !line.endsWith("：")).join("\n");
 }
 
-function buildInitialOperationAnswer(options) {
+function buildInitialOperationAnswer(options: any) {
   return [
     "已生成 IDE 自主 Bug 修复任务包。",
     `执行模式：${options.executionMode === "auto" ? "自动执行" : "人工执行"}`,
@@ -669,51 +668,51 @@ function buildInitialOperationAnswer(options) {
   ].join("\n");
 }
 
-function buildOperationArtifacts(bug) {
+function buildOperationArtifacts(bug: any) {
   return (bug.attachments || [])
-    .map((attachment) => attachment.name || attachment.localRelativePath || attachment.localPath || "")
+    .map((attachment: any) => attachment.name || attachment.localRelativePath || attachment.localPath || "")
     .filter(Boolean)
     .slice(0, 20)
-    .map((fileName) => ({ file_name: fileName }));
+    .map((fileName: any) => ({ file_name: fileName }));
 }
 
-function normalizeChatSource(value) {
+function normalizeChatSource(value: any) {
   const text = stringValue(value || "yonclaw_cloud");
   return ["yonclaw_client", "yonclaw_cloud", "web"].includes(text) ? text : "yonclaw_cloud";
 }
 
-function normalizeChannel(value) {
+function normalizeChannel(value: any) {
   const text = stringValue(value || "none");
   if (text.startsWith("缺失：")) return "none";
   return ["none", "wechat", "youzone", "web"].includes(text) ? text : "none";
 }
 
-function normalizeSourceType(value) {
+function normalizeSourceType(value: any) {
   const text = stringValue(value || "builtin");
   return ["builtin", "tenant", "personal"].includes(text) ? text : "builtin";
 }
 
-function normalizeOperationStatus(value) {
+function normalizeOperationStatus(value: any) {
   const text = stringValue(value || "success");
   return ["success", "user_abort", "failure"].includes(text) ? text : "success";
 }
 
-function safeOperationId(value) {
+function safeOperationId(value: any) {
   return stringValue(value || `operation-${Date.now()}`)
     .replace(/[^a-zA-Z0-9._:-]+/g, "-")
     .slice(0, 64) || `operation-${Date.now()}`;
 }
 
-function missingToEmpty(value) {
+function missingToEmpty(value: any) {
   const text = stringValue(value);
   return text.startsWith("缺失：") ? "" : text;
 }
 
-function stringValue(value) {
+function stringValue(value: any) {
   return String(value || "").trim();
 }
 
-function truncateUtf8(value, maxBytes) {
+function truncateUtf8(value: any, maxBytes: any) {
   const text = String(value || "");
   if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
 
@@ -728,8 +727,8 @@ function truncateUtf8(value, maxBytes) {
   return `${output}\n...（已截断）`;
 }
 
-function stripEmptyValues(value) {
-  const result = {};
+function stripEmptyValues(value: any) {
+  const result: any = {};
   for (const [key, entry] of Object.entries(value)) {
     if (entry === "" || entry == null) continue;
     if (Array.isArray(entry) && entry.length === 0) continue;

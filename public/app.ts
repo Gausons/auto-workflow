@@ -1,8 +1,11 @@
-// @ts-nocheck
 import { renderMessages } from './historyView.js';
 import { createTaskCenterUI } from './taskCenter.js';
 
-const state = {
+// The page is rendered from a fixed server-owned HTML template. Missing selectors
+// are programming errors, so centralize that invariant at the DOM boundary.
+const select = (selector: string): any => document.querySelector(selector);
+
+const state: any = {
   config: {},
   user: null,
   permissions: [],
@@ -19,79 +22,79 @@ const state = {
   view: currentView()
 };
 
-const historyState = { offset: 0, total: 0, selected: null, listRequest: 0, detailRequest: 0, detail: null, agent: '', query: '', workspace: '' };
+const historyState: any = { offset: 0, total: 0, selected: null, listRequest: 0, detailRequest: 0, detail: null, agent: '', query: '', workspace: '' };
 
-const els = {
-  configForm: document.querySelector("#configForm"),
-  assigneeSelect: document.querySelector("#assigneeSelect"),
-  assignmentPeopleForm: document.querySelector("#assignmentPeopleForm"),
-  assignmentPeopleList: document.querySelector("#assignmentPeopleList"),
-  bugList: document.querySelector("#bugList"),
-  bugDetail: document.querySelector("#bugDetail"),
-  pipelineBugList: document.querySelector("#pipelineBugList"),
-  runList: document.querySelector("#runList"),
-  executionRecordList: document.querySelector("#executionRecordList"),
-  executionRecordUser: document.querySelector("#executionRecordUser"),
-  executionRecordCount: document.querySelector("#executionRecordCount"),
-  executionRecordRunCount: document.querySelector("#executionRecordRunCount"),
-  pipelineSteps: document.querySelector("#pipelineSteps"),
-  pipelineNodeCount: document.querySelector("#pipelineNodeCount"),
-  nodeDetail: document.querySelector("#nodeDetail"),
-  logBox: document.querySelector("#logBox"),
-  taskPacket: document.querySelector("#taskPacket"),
-  ideSupplementPanel: document.querySelector("#ideSupplementPanel"),
-  ideSupplementText: document.querySelector("#ideSupplementText"),
-  ideSupplementImages: document.querySelector("#ideSupplementImages"),
-  ideSupplementFileState: document.querySelector("#ideSupplementFileState"),
-  ideSupplementState: document.querySelector("#ideSupplementState"),
-  ideSupplementSaved: document.querySelector("#ideSupplementSaved"),
-  attachmentPreviewModal: document.querySelector("#attachmentPreviewModal"),
-  attachmentPreviewTitle: document.querySelector("#attachmentPreviewTitle"),
-  attachmentPreviewImage: document.querySelector("#attachmentPreviewImage"),
-  attachmentPreviewState: document.querySelector("#attachmentPreviewState"),
-  attachmentPreviewDownload: document.querySelector("#attachmentPreviewDownload"),
-  attachmentPreviewClose: document.querySelector("#attachmentPreviewClose"),
-  toast: document.querySelector("#toast"),
-  assignAll: document.querySelector("#assignAll"),
-  syncNow: document.querySelector("#syncNow"),
-  openPipeline: document.querySelector("#openPipeline"),
-  runManual: document.querySelector("#runManual"),
-  runAuto: document.querySelector("#runAuto"),
-  ideExecutorPicker: document.querySelector("#ideExecutorPicker"),
-  startNode: document.querySelector("#startNode"),
-  startReview: document.querySelector("#startReview"),
-  startVerify: document.querySelector("#startVerify"),
-  stopNode: document.querySelector("#stopNode"),
-  completeNode: document.querySelector("#completeNode"),
-  reviewNode: document.querySelector("#reviewNode"),
-  toggleScheduler: document.querySelector("#toggleScheduler"),
-  copyTask: document.querySelector("#copyTask"),
-  copyCommand: document.querySelector("#copyCommand"),
-  handoffMeta: document.querySelector("#handoffMeta"),
-  syncState: document.querySelector("#syncState"),
-  selectedState: document.querySelector("#selectedState"),
-  runState: document.querySelector("#runState"),
-  assignmentPeopleState: document.querySelector("#assignmentPeopleState"),
-  credentialState: document.querySelector("#credentialState"),
-  sidebarCredentialDot: document.querySelector("#sidebarCredentialDot"),
-  sidebarCredentialText: document.querySelector("#sidebarCredentialText")
+const els: Record<string, any> = {
+  configForm: select("#configForm"),
+  assigneeSelect: select("#assigneeSelect"),
+  assignmentPeopleForm: select("#assignmentPeopleForm"),
+  assignmentPeopleList: select("#assignmentPeopleList"),
+  bugList: select("#bugList"),
+  bugDetail: select("#bugDetail"),
+  pipelineBugList: select("#pipelineBugList"),
+  runList: select("#runList"),
+  executionRecordList: select("#executionRecordList"),
+  executionRecordUser: select("#executionRecordUser"),
+  executionRecordCount: select("#executionRecordCount"),
+  executionRecordRunCount: select("#executionRecordRunCount"),
+  pipelineSteps: select("#pipelineSteps"),
+  pipelineNodeCount: select("#pipelineNodeCount"),
+  nodeDetail: select("#nodeDetail"),
+  logBox: select("#logBox"),
+  taskPacket: select("#taskPacket"),
+  ideSupplementPanel: select("#ideSupplementPanel"),
+  ideSupplementText: select("#ideSupplementText"),
+  ideSupplementImages: select("#ideSupplementImages"),
+  ideSupplementFileState: select("#ideSupplementFileState"),
+  ideSupplementState: select("#ideSupplementState"),
+  ideSupplementSaved: select("#ideSupplementSaved"),
+  attachmentPreviewModal: select("#attachmentPreviewModal"),
+  attachmentPreviewTitle: select("#attachmentPreviewTitle"),
+  attachmentPreviewImage: select("#attachmentPreviewImage"),
+  attachmentPreviewState: select("#attachmentPreviewState"),
+  attachmentPreviewDownload: select("#attachmentPreviewDownload"),
+  attachmentPreviewClose: select("#attachmentPreviewClose"),
+  toast: select("#toast"),
+  assignAll: select("#assignAll"),
+  syncNow: select("#syncNow"),
+  openPipeline: select("#openPipeline"),
+  runManual: select("#runManual"),
+  runAuto: select("#runAuto"),
+  ideExecutorPicker: select("#ideExecutorPicker"),
+  startNode: select("#startNode"),
+  startReview: select("#startReview"),
+  startVerify: select("#startVerify"),
+  stopNode: select("#stopNode"),
+  completeNode: select("#completeNode"),
+  reviewNode: select("#reviewNode"),
+  toggleScheduler: select("#toggleScheduler"),
+  copyTask: select("#copyTask"),
+  copyCommand: select("#copyCommand"),
+  handoffMeta: select("#handoffMeta"),
+  syncState: select("#syncState"),
+  selectedState: select("#selectedState"),
+  runState: select("#runState"),
+  assignmentPeopleState: select("#assignmentPeopleState"),
+  credentialState: select("#credentialState"),
+  sidebarCredentialDot: select("#sidebarCredentialDot"),
+  sidebarCredentialText: select("#sidebarCredentialText")
 };
 
 const attachmentRequests = new Set();
-let pollTimer = null;
+let pollTimer: any = null;
 let configFormDirty = false;
 
-const taskCenterUI = createTaskCenterUI({ root: document.querySelector('#taskCenter'), api, canEdit: () => state.permissions.includes('work.execute'), toast: showToast });
+const taskCenterUI = createTaskCenterUI({ root: select('#taskCenter'), api, canEdit: () => state.permissions.includes('work.execute'), toast: showToast });
 init();
 
-const roleLabels = { owner: "组织所有者", admin: "管理员", operator: "操作员", viewer: "只读成员" };
-const can = (permission) => state.permissions.includes(permission);
+const roleLabels: any = { owner: "组织所有者", admin: "管理员", operator: "操作员", viewer: "只读成员" };
+const can = (permission: any) => state.permissions.includes(permission);
 
 async function init() {
   bindEvents();
   // Version 0.2 shared organization tokens are never treated as member sessions.
   sessionStorage.removeItem("bugflow.tenantToken");
-  document.querySelector("#loginForm").addEventListener("submit", async (event) => {
+  select("#loginForm").addEventListener("submit", async (event: any) => {
     event.preventDefault();
     const form = event.currentTarget, button = form.querySelector("button");
     button.disabled = true;
@@ -99,33 +102,33 @@ async function init() {
       const data = await api("/api/auth/login", { method: "POST", body: JSON.stringify(Object.fromEntries(new FormData(form))) });
       sessionStorage.setItem("bugflow.sessionToken", data.token);
       location.reload();
-    } catch (error) { document.querySelector("#loginError").textContent = error.message; }
+    } catch (error: any) { select("#loginError").textContent = error.message; }
     finally { button.disabled = false; }
   });
-  document.querySelector("#setupForm").addEventListener("submit", async (event) => {
+  select("#setupForm").addEventListener("submit", async (event: any) => {
     event.preventDefault();
     const form = event.currentTarget, button = form.querySelector("button");
     const { token, ...input } = Object.fromEntries(new FormData(form));
     button.disabled = true;
     try {
-      const data = await api("/api/auth/setup", { method: "POST", headers: { Authorization: `Bearer ${token.trim()}` }, body: JSON.stringify(input) });
-      document.querySelector("#loginOrganization").value = data.tenant.id;
-      document.querySelector("#loginUsername").value = input.username;
+      const data = await api("/api/auth/setup", { method: "POST", headers: { Authorization: `Bearer ${String(token).trim()}` }, body: JSON.stringify(input) });
+      select("#loginOrganization").value = data.tenant.id;
+      select("#loginUsername").value = input.username;
       form.reset();
-      document.querySelector("#setupDetails").open = false;
-      document.querySelector("#loginError").textContent = data.message;
-    } catch (error) { document.querySelector("#setupError").textContent = error.message; }
+      select("#setupDetails").open = false;
+      select("#loginError").textContent = data.message;
+    } catch (error: any) { select("#setupError").textContent = error.message; }
     finally { button.disabled = false; }
   });
-  document.querySelector("#logoutTenant").addEventListener("click", async () => {
+  select("#logoutTenant").addEventListener("click", async () => {
     try { await api("/api/auth/logout", { method: "POST" }); }
-    catch (error) { if (error.status !== 401) { showToast(error.message); return; } }
+    catch (error: any) { if (error.status !== 401) { showToast(error.message); return; } }
     sessionStorage.removeItem("bugflow.sessionToken"); location.reload();
   });
   bindMemberEvents();
   if (sessionStorage.getItem("bugflow.sessionToken")) {
     try { await loadBootstrap(); showWorkspace(); if (state.view === 'tasks') await taskCenterUI.load(); if (state.view === "members") await loadMembers(); if (state.view === "history") await loadAgentHistory(); }
-    catch (error) { document.querySelector("#loginError").textContent = error.message; }
+    catch (error: any) { select("#loginError").textContent = error.message; }
   }
 }
 
@@ -135,11 +138,11 @@ function renderPermissions() {
   }
   if (state.user) {
     const label = `${state.user.displayName} · ${roleLabels[state.user.role]}`;
-    document.querySelector('#currentUser').textContent = label;
-    document.querySelector('#accountIdentity').textContent = `${state.user.username} · ${label}`;
+    select('#currentUser').textContent = label;
+    select('#accountIdentity').textContent = `${state.user.username} · ${label}`;
   }
   if ((state.view === 'members' && !can('members.manage')) || (state.view === 'config' && !can('config.manage'))) state.view = 'workbench';
-  document.querySelectorAll('#assignmentPeopleList input, #assignmentPeopleList textarea').forEach((input) => { input.readOnly = !can('people.manage'); });
+  document.querySelectorAll('#assignmentPeopleList input, #assignmentPeopleList textarea').forEach((input: any) => { input.readOnly = !can('people.manage'); });
 }
 
 function availableRoles() {
@@ -151,9 +154,9 @@ function roleOptions(selected = 'viewer') {
 async function loadMembers() {
   if (!can('members.manage')) return;
   const [data, audit] = await Promise.all([api('/api/organization/members'), api('/api/organization/audit')]);
-  document.querySelector('#newMemberRole').innerHTML = roleOptions();
-  document.querySelector('#memberStatus').textContent = `${data.members.length} 位成员`;
-  document.querySelector('#memberList').innerHTML = data.members.map((member) => {
+  select('#newMemberRole').innerHTML = roleOptions();
+  select('#memberStatus').textContent = `${data.members.length} 位成员`;
+  select('#memberList').innerHTML = data.members.map((member: any) => {
     const editable = state.user.role === 'owner' || !['owner', 'admin'].includes(member.role);
     return `<form class="member-card" data-member-id="${escapeHtml(member.id)}">
       <strong>${escapeHtml(member.username)} · ${roleLabels[member.role]} · ${member.enabled ? '已启用' : '已停用'}</strong>
@@ -167,21 +170,21 @@ async function loadMembers() {
       </div>` : `<p>${escapeHtml(member.displayName)}，由组织所有者管理</p>`}
     </form>`;
   }).join('');
-  document.querySelector('#auditList').innerHTML = audit.events.map((event) => `<div class="member-card"><strong>${escapeHtml(event.actorName)} · ${escapeHtml(event.action)}</strong><p>${escapeHtml(event.createdAt)} · ${escapeHtml(event.target)}</p></div>`).join('') || '<p>暂无审计记录</p>';
+  select('#auditList').innerHTML = audit.events.map((event: any) => `<div class="member-card"><strong>${escapeHtml(event.actorName)} · ${escapeHtml(event.action)}</strong><p>${escapeHtml(event.createdAt)} · ${escapeHtml(event.target)}</p></div>`).join('') || '<p>暂无审计记录</p>';
 }
 function bindMemberEvents() {
-  document.querySelector('#refreshMembers').addEventListener('click', () => loadMembers().catch((error) => showToast(error.message)));
-  document.querySelector('#memberForm').addEventListener('submit', async (event) => {
+  select('#refreshMembers').addEventListener('click', () => loadMembers().catch((error) => showToast(error.message)));
+  select('#memberForm').addEventListener('submit', async (event: any) => {
     event.preventDefault();
     const form = event.currentTarget, button = form.querySelector('button');
     button.disabled = true;
     try {
       await api('/api/organization/members', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) });
       form.reset(); await loadMembers(); showToast('成员已创建');
-    } catch (error) { document.querySelector('#memberStatus').textContent = error.message; }
+    } catch (error: any) { select('#memberStatus').textContent = error.message; }
     finally { button.disabled = false; }
   });
-  document.querySelector('#memberList').addEventListener('submit', async (event) => {
+  select('#memberList').addEventListener('submit', async (event: any) => {
     event.preventDefault();
     const form = event.target.closest('[data-member-id]');
     if (!form) return;
@@ -189,9 +192,9 @@ function bindMemberEvents() {
     try {
       await api(`/api/organization/members/${form.dataset.memberId}`, { method: 'PATCH', body: JSON.stringify({ role, displayName, enabled: enabled === 'true' }) });
       await loadBootstrap({ silent: true }); await loadMembers(); showToast('成员已更新');
-    } catch (error) { showToast(error.message); }
+    } catch (error: any) { showToast(error.message); }
   });
-  document.querySelector('#memberList').addEventListener('click', async (event) => {
+  select('#memberList').addEventListener('click', async (event: any) => {
     if (!event.target.closest('[data-reset-password]')) return;
     const form = event.target.closest('[data-member-id]');
     try {
@@ -199,20 +202,20 @@ function bindMemberEvents() {
       form.elements.newPassword.value = '';
       if (form.dataset.memberId === state.user.id) { sessionStorage.removeItem('bugflow.sessionToken'); location.reload(); return; }
       showToast('密码已重置，原会话已撤销'); await loadMembers();
-    } catch (error) { showToast(error.message); }
+    } catch (error: any) { showToast(error.message); }
   });
-  document.querySelector('#passwordForm').addEventListener('submit', async (event) => {
+  select('#passwordForm').addEventListener('submit', async (event: any) => {
     event.preventDefault();
     try {
       await api('/api/auth/password', { method: 'PUT', body: JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) });
       sessionStorage.removeItem('bugflow.sessionToken'); location.reload();
-    } catch (error) { document.querySelector('#passwordStatus').textContent = error.message; }
+    } catch (error: any) { select('#passwordStatus').textContent = error.message; }
   });
 }
 
 function showWorkspace() {
-  document.querySelector("#loginScreen").hidden = true;
-  document.querySelector("#workspaceShell").hidden = false;
+  select("#loginScreen").hidden = true;
+  select("#workspaceShell").hidden = false;
 }
 
 function bindEvents() {
@@ -241,7 +244,7 @@ function bindEvents() {
   els.copyCommand.addEventListener("click", copyIdeCommand);
   els.ideSupplementImages.addEventListener("change", updateSupplementFileState);
   els.attachmentPreviewClose.addEventListener("click", closeAttachmentPreview);
-  els.attachmentPreviewModal.addEventListener("click", (event) => {
+  els.attachmentPreviewModal.addEventListener("click", (event: any) => {
     if (event.target === els.attachmentPreviewModal) closeAttachmentPreview();
   });
   els.attachmentPreviewImage.addEventListener("load", () => {
@@ -251,7 +254,7 @@ function bindEvents() {
     els.attachmentPreviewState.hidden = false;
     els.attachmentPreviewState.textContent = "图片加载失败，可使用下载按钮获取原文件。";
   });
-  document.addEventListener("keydown", (event) => {
+  document.addEventListener("keydown", (event: any) => {
     if (event.key === "Escape" && !els.attachmentPreviewModal.hidden) {
       closeAttachmentPreview();
     }
@@ -264,7 +267,7 @@ function bindEvents() {
     });
   }
 
-  els.configForm.addEventListener("submit", async (event) => {
+  els.configForm.addEventListener("submit", async (event: any) => {
     event.preventDefault();
     await saveConfig();
   });
@@ -273,7 +276,7 @@ function bindEvents() {
     configFormDirty = true;
   });
 
-  els.configForm.addEventListener("change", (event) => {
+  els.configForm.addEventListener("change", (event: any) => {
     configFormDirty = true;
     if (event.target?.name === "ideExecutor") {
       updateIdeModelFields(event.target.value);
@@ -287,12 +290,12 @@ function bindEvents() {
     configFormDirty = true;
   });
 
-  els.assignmentPeopleForm.addEventListener("submit", async (event) => {
+  els.assignmentPeopleForm.addEventListener("submit", async (event: any) => {
     event.preventDefault();
     await addAssignmentPerson();
   });
 
-  els.assignmentPeopleList.addEventListener("click", async (event) => {
+  els.assignmentPeopleList.addEventListener("click", async (event: any) => {
     const saveButton = event.target.closest("[data-save-person]");
     if (saveButton) {
       await saveAssignmentPerson(saveButton.dataset.savePerson);
@@ -305,7 +308,7 @@ function bindEvents() {
     }
   });
 
-  els.bugList.addEventListener("click", (event) => {
+  els.bugList.addEventListener("click", (event: any) => {
     const button = event.target.closest("[data-bug-id]");
     if (!button) return;
     selectBug(button.dataset.bugId);
@@ -313,7 +316,7 @@ function bindEvents() {
     loadBugAttachments(state.selectedBugId);
   });
 
-  els.pipelineBugList.addEventListener("click", (event) => {
+  els.pipelineBugList.addEventListener("click", (event: any) => {
     const button = event.target.closest("[data-pipeline-bug-id]");
     if (!button) return;
     selectBug(button.dataset.pipelineBugId);
@@ -321,10 +324,10 @@ function bindEvents() {
     loadBugAttachments(state.selectedBugId);
   });
 
-  els.runList.addEventListener("click", (event) => {
+  els.runList.addEventListener("click", (event: any) => {
     const button = event.target.closest("[data-run-id]");
     if (!button) return;
-    const run = state.runs.find((item) => item.id === button.dataset.runId);
+    const run = state.runs.find((item: any) => item.id === button.dataset.runId);
     if (!run) return;
     state.selectedBugId = run.bugId;
     state.selectedRunId = run.id;
@@ -332,10 +335,10 @@ function bindEvents() {
     render();
   });
 
-  els.executionRecordList?.addEventListener("click", (event) => {
+  els.executionRecordList?.addEventListener("click", (event: any) => {
     const button = event.target.closest("[data-record-run-id]");
     if (!button || !button.dataset.recordRunId) return;
-    const run = state.runs.find((item) => item.id === button.dataset.recordRunId);
+    const run = state.runs.find((item: any) => item.id === button.dataset.recordRunId);
     if (!run) return;
     state.selectedBugId = run.bugId;
     state.selectedRunId = run.id;
@@ -343,14 +346,14 @@ function bindEvents() {
     location.hash = "pipeline";
   });
 
-  els.pipelineSteps.addEventListener("click", (event) => {
+  els.pipelineSteps.addEventListener("click", (event: any) => {
     const button = event.target.closest("[data-node-id]");
     if (!button) return;
     state.selectedNodeId = button.dataset.nodeId;
     renderPipeline();
   });
 
-  els.bugDetail.addEventListener("click", (event) => {
+  els.bugDetail.addEventListener("click", (event: any) => {
     const previewButton = event.target.closest("[data-attachment-preview]");
     if (previewButton) {
       openAttachmentPreview(Number(previewButton.dataset.attachmentPreview));
@@ -386,30 +389,30 @@ async function stopSelectedRun() {
       body: JSON.stringify({ target })
     });
 
-    const runIndex = state.runs.findIndex((item) => item.id === data.run.id);
+    const runIndex = state.runs.findIndex((item: any) => item.id === data.run.id);
     if (runIndex >= 0) state.runs[runIndex] = data.run;
     if (data.bug) {
-      const bugIndex = state.bugs.findIndex((item) => item.id === data.bug.id);
+      const bugIndex = state.bugs.findIndex((item: any) => item.id === data.bug.id);
       if (bugIndex >= 0) state.bugs[bugIndex] = data.bug;
     }
     render();
     configurePolling();
     showToast("已发送停止请求");
-  } catch (error) {
+  } catch (error: any) {
     showToast(error.message);
   } finally {
     els.stopNode.disabled = false;
   }
 }
 
-async function loadBootstrap({ silent = false } = {}) {
+async function loadBootstrap({ silent = false }: any = {}) {
   const data = await api("/api/bootstrap");
   applyBootstrap(data);
   if (!silent) showToast("工作台已加载");
 }
 
-function applyBootstrap(data) {
-  if (data.tenant) document.querySelector("#tenantName").textContent = `${data.tenant.name} (${data.tenant.id})`;
+function applyBootstrap(data: any) {
+  if (data.tenant) select("#tenantName").textContent = `${data.tenant.name} (${data.tenant.id})`;
   Object.assign(state, {
     user: data.user || state.user,
     permissions: data.permissions || state.permissions,
@@ -440,7 +443,7 @@ async function syncNow() {
     const data = await api("/api/sync", { method: "POST" });
     applyBootstrap(data);
     showToast(data.scheduler.lastRunMessage);
-  } catch (error) {
+  } catch (error: any) {
     showToast(error.message);
   } finally {
     els.syncNow.disabled = false;
@@ -449,7 +452,7 @@ async function syncNow() {
 
 async function saveConfig() {
   const form = new FormData(els.configForm);
-  const payload = Object.fromEntries(form.entries());
+  const payload: any = Object.fromEntries(form.entries());
   payload.mode = state.config.mode;
   payload.intervalMinutes = Number(payload.intervalMinutes);
   payload.aiRoutingTimeoutMs = Number(payload.aiRoutingTimeoutMs);
@@ -482,7 +485,7 @@ async function saveConfig() {
 
 async function addAssignmentPerson() {
   const form = new FormData(els.assignmentPeopleForm);
-  const person = {
+  const person: any = {
     name: String(form.get("name") || "").trim(),
     employeeId: String(form.get("employeeId") || "").trim(),
     responsibility: String(form.get("responsibility") || "").trim()
@@ -494,14 +497,14 @@ async function addAssignmentPerson() {
   }
 
   const people = [
-    ...state.assignmentPeople.filter((item) => item.employeeId !== person.employeeId),
+    ...state.assignmentPeople.filter((item: any) => item.employeeId !== person.employeeId),
     person
   ];
   await saveAssignmentPeople(people, "人员已添加");
   els.assignmentPeopleForm.reset();
 }
 
-async function saveAssignmentPerson(employeeId) {
+async function saveAssignmentPerson(employeeId: any) {
   const card = els.assignmentPeopleList.querySelector(`[data-person-id="${cssEscape(employeeId)}"]`);
   if (!card) return;
 
@@ -512,25 +515,25 @@ async function saveAssignmentPerson(employeeId) {
   }
 
   const people = state.assignmentPeople
-    .filter((item) => item.employeeId !== employeeId && item.employeeId !== person.employeeId)
+    .filter((item: any) => item.employeeId !== employeeId && item.employeeId !== person.employeeId)
     .concat(person);
   await saveAssignmentPeople(people, "人员职责已保存");
 }
 
-async function deleteAssignmentPerson(employeeId) {
+async function deleteAssignmentPerson(employeeId: any) {
   if (state.assignmentPeople.length <= 1) {
     showToast("至少保留一个可分配人员");
     return;
   }
 
-  const person = state.assignmentPeople.find((item) => item.employeeId === employeeId);
+  const person = state.assignmentPeople.find((item: any) => item.employeeId === employeeId);
   const ok = window.confirm(`确认删除 ${person?.name || employeeId} 的分配规则？`);
   if (!ok) return;
 
-  await saveAssignmentPeople(state.assignmentPeople.filter((item) => item.employeeId !== employeeId), "人员已删除");
+  await saveAssignmentPeople(state.assignmentPeople.filter((item: any) => item.employeeId !== employeeId), "人员已删除");
 }
 
-function readAssignmentPersonFromCard(card) {
+function readAssignmentPersonFromCard(card: any) {
   return {
     name: card.querySelector('[name="personName"]')?.value.trim() || "",
     employeeId: card.querySelector('[name="personEmployeeId"]')?.value.trim() || "",
@@ -538,7 +541,7 @@ function readAssignmentPersonFromCard(card) {
   };
 }
 
-async function saveAssignmentPeople(people, successMessage) {
+async function saveAssignmentPeople(people: any, successMessage: any) {
   const data = await api("/api/assignment/people", {
     method: "PUT",
     body: JSON.stringify({ people })
@@ -568,7 +571,7 @@ function openPipeline() {
   location.hash = "pipeline";
 }
 
-async function createRun(executionMode) {
+async function createRun(executionMode: any) {
   const bug = selectedBug();
   if (!bug) {
     showToast("请先选择一个缺陷");
@@ -585,18 +588,18 @@ async function createRun(executionMode) {
       body: JSON.stringify({ bugId: bug.id, executionMode, startExecution: false, ideExecutor })
     });
 
-    const index = state.bugs.findIndex((item) => item.id === data.bug.id);
+    const index = state.bugs.findIndex((item: any) => item.id === data.bug.id);
     if (index >= 0) state.bugs[index] = data.bug;
     state.metrics = calculateMetrics(state.bugs);
     state.selectedBugId = data.bug.id;
-    state.runs = [data.run, ...state.runs.filter((run) => run.id !== data.run.id)].slice(0, 20);
+    state.runs = [data.run, ...state.runs.filter((run: any) => run.id !== data.run.id)].slice(0, 20);
     state.selectedRunId = data.run.id;
     state.selectedNodeId = data.run.steps[0]?.id || "pull";
     location.hash = "pipeline";
     render();
     configurePolling();
     showToast(executionMode === "auto" ? "已生成自动流水线，可预览后执行" : "已生成人工流水线，可预览后执行");
-  } catch (error) {
+  } catch (error: any) {
     showToast(error.message);
   } finally {
     els.runManual.disabled = false;
@@ -619,25 +622,25 @@ async function startSelectedRun() {
       body: JSON.stringify({})
     });
 
-    const runIndex = state.runs.findIndex((item) => item.id === data.run.id);
+    const runIndex = state.runs.findIndex((item: any) => item.id === data.run.id);
     if (runIndex >= 0) state.runs[runIndex] = data.run;
     if (data.bug) {
-      const bugIndex = state.bugs.findIndex((item) => item.id === data.bug.id);
+      const bugIndex = state.bugs.findIndex((item: any) => item.id === data.bug.id);
       if (bugIndex >= 0) state.bugs[bugIndex] = data.bug;
     }
     render();
     configurePolling();
     showToast(`已在页面后台启动 ${ideExecutorLabel(run)}`);
-  } catch (error) {
+  } catch (error: any) {
     showToast(error.message);
   } finally {
     els.startNode.disabled = false;
   }
 }
 
-async function submitIdeSupplement(run) {
+async function submitIdeSupplement(run: any) {
   const text = els.ideSupplementText.value.trim();
-  const files = Array.from(els.ideSupplementImages.files || []);
+  const files: File[] = Array.from(els.ideSupplementImages.files || []);
   if (!text && !files.length) return;
 
   if (files.length > 8) {
@@ -663,10 +666,10 @@ async function submitIdeSupplement(run) {
     body: form
   });
 
-  const runIndex = state.runs.findIndex((item) => item.id === data.run.id);
+  const runIndex = state.runs.findIndex((item: any) => item.id === data.run.id);
   if (runIndex >= 0) state.runs[runIndex] = data.run;
   if (data.bug) {
-    const bugIndex = state.bugs.findIndex((item) => item.id === data.bug.id);
+    const bugIndex = state.bugs.findIndex((item: any) => item.id === data.bug.id);
     if (bugIndex >= 0) state.bugs[bugIndex] = data.bug;
   }
 
@@ -691,16 +694,16 @@ async function startSelectedReview() {
       body: JSON.stringify({})
     });
 
-    const runIndex = state.runs.findIndex((item) => item.id === data.run.id);
+    const runIndex = state.runs.findIndex((item: any) => item.id === data.run.id);
     if (runIndex >= 0) state.runs[runIndex] = data.run;
     if (data.bug) {
-      const bugIndex = state.bugs.findIndex((item) => item.id === data.bug.id);
+      const bugIndex = state.bugs.findIndex((item: any) => item.id === data.bug.id);
       if (bugIndex >= 0) state.bugs[bugIndex] = data.bug;
     }
     render();
     configurePolling();
     showToast("已启动独立 Review 会话");
-  } catch (error) {
+  } catch (error: any) {
     showToast(error.message);
   } finally {
     els.startReview.disabled = false;
@@ -721,23 +724,23 @@ async function startSelectedVerification() {
       body: JSON.stringify({})
     });
 
-    const runIndex = state.runs.findIndex((item) => item.id === data.run.id);
+    const runIndex = state.runs.findIndex((item: any) => item.id === data.run.id);
     if (runIndex >= 0) state.runs[runIndex] = data.run;
     if (data.bug) {
-      const bugIndex = state.bugs.findIndex((item) => item.id === data.bug.id);
+      const bugIndex = state.bugs.findIndex((item: any) => item.id === data.bug.id);
       if (bugIndex >= 0) state.bugs[bugIndex] = data.bug;
     }
     render();
     configurePolling();
     showToast(isVerificationRunning(data.run) ? "已启动 npm run dev，请人工验证" : (data.run.validation?.notes || "验证启动未成功"));
-  } catch (error) {
+  } catch (error: any) {
     showToast(error.message);
   } finally {
     els.startVerify.disabled = false;
   }
 }
 
-async function completeSelectedNode(status) {
+async function completeSelectedNode(status: any) {
   const run = selectedRun();
   const node = selectedNode();
   if (!run || !node) {
@@ -751,15 +754,15 @@ async function completeSelectedNode(status) {
       body: JSON.stringify({ status })
     });
 
-    const runIndex = state.runs.findIndex((item) => item.id === data.run.id);
+    const runIndex = state.runs.findIndex((item: any) => item.id === data.run.id);
     if (runIndex >= 0) state.runs[runIndex] = data.run;
     if (data.bug) {
-      const bugIndex = state.bugs.findIndex((item) => item.id === data.bug.id);
+      const bugIndex = state.bugs.findIndex((item: any) => item.id === data.bug.id);
       if (bugIndex >= 0) state.bugs[bugIndex] = data.bug;
     }
     render();
     showToast(status === "done" ? "节点已标记完成" : "节点已标记需复核");
-  } catch (error) {
+  } catch (error: any) {
     showToast(error.message);
   }
 }
@@ -779,7 +782,7 @@ async function refreshAssignmentRecommendation() {
     replaceBug(data.bug);
     render();
     showToast("已重新生成分配建议");
-  } catch (error) {
+  } catch (error: any) {
     showToast(error.message);
   }
 }
@@ -803,7 +806,7 @@ async function applyAssignmentRecommendation() {
     replaceBug(data.bug);
     render();
     showToast(`已分配给 ${recommendation.assigneeName}`);
-  } catch (error) {
+  } catch (error: any) {
     if (error.data?.bug) {
       replaceBug(error.data.bug);
       render();
@@ -831,15 +834,15 @@ async function applyAllAssignments() {
     applyBootstrap(data);
     const result = data.result;
     showToast(`一键分配完成：成功 ${result.success} 条${result.failed ? `，失败 ${result.failed} 条` : ""}`);
-  } catch (error) {
+  } catch (error: any) {
     showToast(error.message);
   } finally {
     renderScheduler();
   }
 }
 
-function replaceBug(bug) {
-  const index = state.bugs.findIndex((item) => item.id === bug.id);
+function replaceBug(bug: any) {
+  const index = state.bugs.findIndex((item: any) => item.id === bug.id);
   if (index >= 0) state.bugs[index] = bug;
 }
 
@@ -869,8 +872,8 @@ async function copyIdeCommand() {
   }
 }
 
-async function loadBugAttachments(bugId) {
-  const bug = state.bugs.find((item) => item.id === bugId);
+async function loadBugAttachments(bugId: any) {
+  const bug = state.bugs.find((item: any) => item.id === bugId);
   if (!bug || bug.attachmentsLoaded || attachmentRequests.has(bug.id)) return;
 
   attachmentRequests.add(bug.id);
@@ -880,20 +883,20 @@ async function loadBugAttachments(bugId) {
 
   try {
     const data = await api(`/api/bugs/${encodeURIComponent(bug.id)}/attachments`);
-    const current = state.bugs.find((item) => item.id === data.bugId);
+    const current = state.bugs.find((item: any) => item.id === data.bugId);
     if (current) {
       current.attachments = data.attachments || [];
       current.attachmentsLoaded = true;
       current.attachmentsError = "";
     }
-  } catch (error) {
-    const current = state.bugs.find((item) => item.id === bug.id);
+  } catch (error: any) {
+    const current = state.bugs.find((item: any) => item.id === bug.id);
     if (current) {
       current.attachmentsError = error.message;
       current.attachmentsLoaded = false;
     }
   } finally {
-    const current = state.bugs.find((item) => item.id === bug.id);
+    const current = state.bugs.find((item: any) => item.id === bug.id);
     if (current) current.attachmentsLoading = false;
     attachmentRequests.delete(bug.id);
     renderBugDetail();
@@ -918,7 +921,7 @@ function render() {
 function renderAssigneeOptions() {
   if (!els.assigneeSelect) return;
   const seen = new Set();
-  const people = (state.assignmentPeople || []).filter((person) => {
+  const people = (state.assignmentPeople || []).filter((person: any) => {
     const employeeId = String(person.employeeId || "").trim();
     if (!employeeId || seen.has(employeeId)) return false;
     seen.add(employeeId);
@@ -926,7 +929,7 @@ function renderAssigneeOptions() {
   });
 
   const currentAssignee = String(state.config.assignee || "");
-  els.assigneeSelect.innerHTML = `<option value="">选择员工</option>${people.map((person) => {
+  els.assigneeSelect.innerHTML = `<option value="">选择员工</option>${people.map((person: any) => {
     const selected = person.employeeId === currentAssignee ? "selected" : "";
     const responsibility = person.responsibility ? ` · ${escapeHtml(person.responsibility)}` : "";
     return `<option value="${escapeHtml(person.employeeId)}" ${selected}>${escapeHtml(person.name)}（${escapeHtml(person.employeeId)}）${responsibility}</option>`;
@@ -935,18 +938,18 @@ function renderAssigneeOptions() {
 
 function renderPages() {
   document.body.dataset.view = state.view;
-  document.querySelectorAll("[data-page]").forEach((page) => {
+  document.querySelectorAll<HTMLElement>("[data-page]").forEach((page) => {
     page.hidden = page.dataset.page !== state.view;
   });
 
-  document.querySelectorAll("[data-nav]").forEach((link) => {
+  document.querySelectorAll<HTMLElement>("[data-nav]").forEach((link) => {
     link.classList.toggle("active", link.dataset.nav === state.view);
   });
 }
 
 function fillConfigForm() {
   els.configForm.elements.codexWorkspaceDir.readOnly = Boolean(state.config.workspaceManaged);
-  document.querySelector("#workspacePolicy").hidden = !state.config.workspaceManaged;
+  select("#workspacePolicy").hidden = !state.config.workspaceManaged;
   if (configFormDirty) return;
 
   const fields = ["assignee", "operatorId", "ideExecutor", "codexWorkspaceDir", "codexModel", "claudeModel", "codexReasoningEffort", "codexBaseBranch", "allowedAutoFixPriorities", "aiAssignmentModel", "aiRoutingModel", "aiRoutingBaseUrl", "aiRoutingTimeoutMs", "intervalMinutes", "codexReviewMaxRounds"];
@@ -969,9 +972,9 @@ function fillConfigForm() {
   syncIdeExecutorPicker();
 }
 
-function updateIdeModelFields(executor) {
+function updateIdeModelFields(executor: any) {
   const selected = executor === "claude" ? "claude" : "codex";
-  document.querySelectorAll("[data-ide-model]").forEach((field) => {
+  document.querySelectorAll<HTMLElement>("[data-ide-model]").forEach((field) => {
     field.hidden = field.dataset.ideModel !== selected;
   });
 }
@@ -982,7 +985,7 @@ function syncIdeExecutorPicker() {
   els.ideExecutorPicker.value = executor;
 }
 
-function ideExecutorLabel(runOrExecutor) {
+function ideExecutorLabel(runOrExecutor: any) {
   const executor = typeof runOrExecutor === "string"
     ? runOrExecutor
     : (runOrExecutor?.ideExecutor || runOrExecutor?.codexHandoff?.executor || state.config.ideExecutor || "codex");
@@ -1005,7 +1008,7 @@ function renderMetrics() {
 }
 
 function renderScheduler() {
-  const statusMap = {
+  const statusMap: any = {
     idle: "尚未同步",
     running: "同步中",
     success: "同步成功",
@@ -1015,7 +1018,7 @@ function renderScheduler() {
   els.syncState.textContent = `${statusMap[state.scheduler.lastRunStatus] || "未知"}${next}`;
   els.toggleScheduler.textContent = state.scheduler.enabled ? "关闭定时" : "开启定时";
   const candidates = assignmentCandidates();
-  const assigning = state.bugs.some((bug) => bug.assignmentRecommendation?.status === "assigning");
+  const assigning = state.bugs.some((bug: any) => bug.assignmentRecommendation?.status === "assigning");
   els.assignAll.disabled = assigning || candidates.length === 0;
   els.assignAll.textContent = assigning ? "分配中" : `一键分配${candidates.length ? `（${candidates.length}）` : ""}`;
 }
@@ -1030,7 +1033,7 @@ function renderAssignmentPeople() {
     return;
   }
 
-  els.assignmentPeopleList.innerHTML = people.map((person) => `
+  els.assignmentPeopleList.innerHTML = people.map((person: any) => `
     <article class="assignment-person" data-person-id="${escapeHtml(person.employeeId)}">
       <div class="assignment-person-fields">
         <label>
@@ -1078,7 +1081,7 @@ function renderBugList() {
     .join("");
 }
 
-function renderBugItem(bug) {
+function renderBugItem(bug: any) {
   const active = bug.id === state.selectedBugId ? "active" : "";
   return `
     <button class="bug-item ${active}" type="button" data-bug-id="${escapeHtml(bug.id)}">
@@ -1096,8 +1099,8 @@ function renderBugItem(bug) {
   `;
 }
 
-function statusGroups(bugs) {
-  const groups = [
+function statusGroups(bugs: any) {
+  const groups: Array<{ key: string; label: string; items: any[] }> = [
     { key: "pending", label: "未处理", items: [] },
     { key: "processing", label: "处理中", items: [] },
     { key: "resolved", label: "已解决", items: [] },
@@ -1137,7 +1140,7 @@ function renderBugDetail() {
     </div>
     <div class="detail-section">
       <h3>复现步骤</h3>
-      <ol>${(bug.reproduceSteps || []).map((step) => `<li>${escapeHtml(step)}</li>`).join("") || "<li>未提供复现步骤</li>"}</ol>
+      <ol>${(bug.reproduceSteps || []).map((step: any) => `<li>${escapeHtml(step)}</li>`).join("") || "<li>未提供复现步骤</li>"}</ol>
     </div>
     <div class="detail-section">
       <h3>验收</h3>
@@ -1159,7 +1162,7 @@ function renderBugDetail() {
   `;
 }
 
-function renderDescription(value) {
+function renderDescription(value: any) {
   const raw = String(value || "").trim();
   if (!raw) return `<p class="muted-text">未提供描述。</p>`;
   if (!/<[a-z][\s\S]*>/i.test(raw)) {
@@ -1171,12 +1174,12 @@ function renderDescription(value) {
   return `<div class="description-content">${content || escapeHtml(raw)}</div>`;
 }
 
-function renderDescriptionNode(node) {
+function renderDescriptionNode(node: any): string {
   if (node.nodeType === 3) return escapeHtml(node.textContent || "");
   if (node.nodeType !== 1) return "";
 
   const tag = node.tagName.toLowerCase();
-  const children = Array.from(node.childNodes).map(renderDescriptionNode).join("");
+  const children: string = Array.from(node.childNodes as NodeListOf<Node>).map(renderDescriptionNode).join("");
   if (tag === "img") {
     const src = safeDescriptionImageUrl(node.getAttribute("src"));
     if (!src) return "";
@@ -1202,13 +1205,13 @@ function renderDescriptionNode(node) {
   return allowedTags.has(tag) ? `<${tag}>${children}</${tag}>` : children;
 }
 
-function safeDescriptionImageUrl(value) {
+function safeDescriptionImageUrl(value: any) {
   const raw = String(value || "").trim();
   if (!/^(https?:)?\/\//i.test(raw)) return "";
   return safeDescriptionLinkUrl(raw);
 }
 
-function safeDescriptionLinkUrl(value) {
+function safeDescriptionLinkUrl(value: any) {
   try {
     const parsed = new URL(String(value || "").trim(), window.location.href);
     return ["http:", "https:"].includes(parsed.protocol) ? parsed.href : "";
@@ -1217,7 +1220,7 @@ function safeDescriptionLinkUrl(value) {
   }
 }
 
-function renderAssignmentRecommendation(bug) {
+function renderAssignmentRecommendation(bug: any) {
   const recommendation = bug.assignmentRecommendation;
   const assignable = isAssignableBugStatus(bug.status);
   if (!assignable) {
@@ -1273,12 +1276,12 @@ function renderAssignmentRecommendation(bug) {
   `;
 }
 
-function isAssignableBugStatus(status) {
+function isAssignableBugStatus(status: any) {
   return ["pending", "processing"].includes(statusGroupKey(status));
 }
 
 function assignmentCandidates() {
-  return state.bugs.filter((bug) => {
+  return state.bugs.filter((bug: any) => {
     const recommendation = bug.assignmentRecommendation;
     return isAssignableBugStatus(bug.status)
       && Boolean(recommendation?.assigneeId)
@@ -1287,7 +1290,7 @@ function assignmentCandidates() {
   });
 }
 
-function renderAttachments(bug) {
+function renderAttachments(bug: any) {
   if (bug.attachmentsLoading) {
     return `<p class="muted-text">正在加载附件...</p>`;
   }
@@ -1311,7 +1314,7 @@ function renderAttachments(bug) {
   `;
 }
 
-function renderAttachment(attachment, index) {
+function renderAttachment(attachment: any, index: any) {
   const size = formatBytes(attachment.size);
   const meta = [size, attachment.ctimeStr, attachment.creator].filter(Boolean).join(" · ");
   const name = escapeHtml(attachment.name || "未命名附件");
@@ -1335,14 +1338,14 @@ function renderAttachment(attachment, index) {
   `;
 }
 
-function isImageAttachment(attachment) {
+function isImageAttachment(attachment: any) {
   const name = String(attachment?.name || "");
   const contentType = String(attachment?.contentType || attachment?.mimeType || "");
   return contentType.startsWith("image/")
     || /\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(name);
 }
 
-function openAttachmentPreview(index) {
+function openAttachmentPreview(index: any) {
   const attachment = selectedBug()?.attachments?.[index];
   const src = safeDescriptionImageUrl(attachment?.url || attachment?.thumbnailUrl);
   if (!attachment || !src || !isImageAttachment(attachment)) {
@@ -1400,7 +1403,7 @@ function renderPipeline() {
     return;
   }
 
-  if (!run.steps.some((step) => step.id === state.selectedNodeId)) {
+  if (!run.steps.some((step: any) => step.id === state.selectedNodeId)) {
     state.selectedNodeId = run.steps[0]?.id || "pull";
   }
 
@@ -1421,7 +1424,7 @@ function renderPipelineBugList() {
     return;
   }
 
-  els.pipelineBugList.innerHTML = state.bugs.map((bug) => {
+  els.pipelineBugList.innerHTML = state.bugs.map((bug: any) => {
     const active = bug.id === state.selectedBugId ? "active" : "";
     const bugRuns = runsForBug(bug.id);
     const latestRun = bugRuns[0];
@@ -1451,7 +1454,7 @@ function renderRunList() {
     return;
   }
 
-  els.runList.innerHTML = runs.map((run) => {
+  els.runList.innerHTML = runs.map((run: any) => {
     const active = run.id === state.selectedRunId ? "active" : "";
     return `
       <button class="run-item ${active}" type="button" data-run-id="${escapeHtml(run.id)}">
@@ -1476,15 +1479,15 @@ function renderExecutionRecords() {
   const records = recordsForView();
   if (els.executionRecordCount) els.executionRecordCount.textContent = String(records.length);
   if (els.executionRecordRunCount) {
-    els.executionRecordRunCount.textContent = String(new Set(records.map((record) => record.runId).filter(Boolean)).size);
+    els.executionRecordRunCount.textContent = String(new Set(records.map((record: any) => record.runId).filter(Boolean)).size);
   }
   if (!records.length) {
     els.executionRecordList.innerHTML = `<div class="empty compact-empty">暂无执行记录。</div>`;
     return;
   }
 
-  els.executionRecordList.innerHTML = records.map((record) => {
-    const linkable = Boolean(record.runId && state.runs.some((run) => run.id === record.runId));
+  els.executionRecordList.innerHTML = records.map((record: any) => {
+    const linkable = Boolean(record.runId && state.runs.some((run: any) => run.id === record.runId));
     return `
       <button class="execution-record-item ${linkable ? "linkable" : ""}" type="button" data-record-id="${escapeHtml(record.id || "")}" data-record-run-id="${escapeHtml(record.runId || "")}" ${linkable ? "" : "disabled"}>
         <span class="github-event-dot" aria-hidden="true"></span>
@@ -1504,8 +1507,8 @@ function recordsForView() {
   return records.slice(0, 100);
 }
 
-function executionEventText(event) {
-  return {
+function executionEventText(event: any) {
+  return ({
     "run-created": "创建流水线",
     "run-started": "启动执行",
     "run-completed": "执行完成",
@@ -1521,10 +1524,10 @@ function executionEventText(event) {
     "assignment-batch-completed": "批量分配",
     "user-switched": "切换用户",
     "config-updated": "配置更新"
-  }[event] || event || "事件";
+  } as Record<string, string>)[event] || event || "事件";
 }
 
-function renderNodeItem(step) {
+function renderNodeItem(step: any) {
   const active = step.id === state.selectedNodeId ? "active" : "";
   return `
     <button class="step ${escapeHtml(step.status)} ${active}" type="button" data-node-id="${escapeHtml(step.id)}">
@@ -1540,7 +1543,7 @@ function renderNodeItem(step) {
   `;
 }
 
-function renderNodeDetail(run) {
+function renderNodeDetail(run: any) {
   const node = selectedNode();
   if (!node) {
     els.nodeDetail.innerHTML = `<div class="empty">请选择一个节点。</div>`;
@@ -1600,11 +1603,11 @@ function renderNodeDetail(run) {
   `;
 }
 
-function isIdeNodeId(nodeId) {
+function isIdeNodeId(nodeId: any) {
   return ["analysis", "fixPlan", "codeFix", "autoTest", "verificationReport", "execute"].includes(nodeId);
 }
 
-function renderNormalizedBugDetail(run) {
+function renderNormalizedBugDetail(run: any) {
   const normalized = run.normalizedBug;
   if (!normalized?.fields) {
     return `
@@ -1627,7 +1630,7 @@ function renderNormalizedBugDetail(run) {
   `;
 }
 
-function renderRoutingDetail(run) {
+function renderRoutingDetail(run: any) {
   const route = run.routing;
   if (!route) {
     return `
@@ -1651,9 +1654,9 @@ function renderRoutingDetail(run) {
   `;
 }
 
-function renderIdeDetail(run, nodeId) {
+function renderIdeDetail(run: any, nodeId: any) {
   const reports = run.ide?.reports || {};
-  const reportByNode = {
+  const reportByNode: any = {
     analysis: {
       title: "Bug Analysis Report",
       value: reports.analysis,
@@ -1700,7 +1703,7 @@ function renderIdeDetail(run, nodeId) {
   `;
 }
 
-function renderAllIdeReports(reports) {
+function renderAllIdeReports(reports: any) {
   return `
     <div class="detail-section">
       <h3>IDE 输出</h3>
@@ -1714,7 +1717,7 @@ function renderAllIdeReports(reports) {
   `;
 }
 
-function renderIdeSupplementPanel(run) {
+function renderIdeSupplementPanel(run: any) {
   const node = selectedNode();
   const codexRunning = isCodexRunning(run);
   const canShow = node
@@ -1739,7 +1742,7 @@ function renderIdeSupplementPanel(run) {
   els.ideSupplementSaved.innerHTML = renderSavedSupplement(supplement);
 }
 
-function renderSavedSupplement(supplement) {
+function renderSavedSupplement(supplement: any) {
   if (!supplement?.text && !supplement?.images?.length) {
     return `<p class="muted-text">尚未保存补充信息。填写后点击“启动 IDE 任务”会先写入任务包。</p>`;
   }
@@ -1752,7 +1755,7 @@ function renderSavedSupplement(supplement) {
     ${supplement.text ? `<p>${escapeHtml(supplement.text)}</p>` : ""}
     ${supplement.images?.length ? `
       <ul>
-        ${supplement.images.map((image) => `
+        ${supplement.images.map((image: any) => `
           <li>${escapeHtml(image.name || "图片")} · ${escapeHtml(image.localRelativePath || image.localPath || "")}</li>
         `).join("")}
       </ul>
@@ -1761,7 +1764,7 @@ function renderSavedSupplement(supplement) {
 }
 
 function updateSupplementFileState() {
-  const files = Array.from(els.ideSupplementImages.files || []);
+  const files: File[] = Array.from(els.ideSupplementImages.files || []);
   if (!files.length) {
     els.ideSupplementFileState.textContent = "最多 8 张，每张不超过 10MB。";
     return;
@@ -1771,7 +1774,7 @@ function updateSupplementFileState() {
   els.ideSupplementFileState.textContent = `${files.length} 张 · ${formatBytes(total)}`;
 }
 
-function renderHumanReviewDetail(run) {
+function renderHumanReviewDetail(run: any) {
   const review = run.review || {};
   return `
     <div class="detail-section">
@@ -1793,7 +1796,7 @@ function renderHumanReviewDetail(run) {
   `;
 }
 
-function renderReleaseDetail(run) {
+function renderReleaseDetail(run: any) {
   const releaseClose = run.releaseClose || {};
   return `
     <div class="detail-section">
@@ -1812,7 +1815,7 @@ function renderReleaseDetail(run) {
   `;
 }
 
-function renderReviewDetail(run) {
+function renderReviewDetail(run: any) {
   const review = run.review || {};
   const process = review.process;
   return `
@@ -1835,19 +1838,19 @@ function renderReviewDetail(run) {
   `;
 }
 
-function renderReviewRounds(rounds) {
+function renderReviewRounds(rounds: any) {
   if (!rounds.length) {
     return `<p class="muted-text">暂无 Review 记录。</p>`;
   }
 
   return `
     <div class="review-rounds">
-      ${rounds.map((round) => `
+      ${rounds.map((round: any) => `
         <div class="review-round">
           <strong>第 ${escapeHtml(round.round)} 轮 · ${escapeHtml(round.status === "passed" ? "通过" : "要求修改")}</strong>
           <p>${escapeHtml(round.summary || "")}</p>
           <ul>
-            ${(round.comments || []).map((comment) => `<li>${escapeHtml(comment)}</li>`).join("") || "<li>无</li>"}
+            ${(round.comments || []).map((comment: any) => `<li>${escapeHtml(comment)}</li>`).join("") || "<li>无</li>"}
           </ul>
         </div>
       `).join("")}
@@ -1855,7 +1858,7 @@ function renderReviewRounds(rounds) {
   `;
 }
 
-function renderBranchDetail(run) {
+function renderBranchDetail(run: any) {
   const executor = run.ideExecutor || run.codexHandoff?.executor || state.config.ideExecutor || "codex";
   const model = executor === "claude"
     ? (state.config.claudeModel || "claude-opus-4-8")
@@ -1880,7 +1883,7 @@ function renderBranchDetail(run) {
   `;
 }
 
-function renderMergeDetail(run) {
+function renderMergeDetail(run: any) {
   return `
     ${renderBranchDetail(run)}
     <div class="detail-section">
@@ -1892,7 +1895,7 @@ function renderMergeDetail(run) {
   `;
 }
 
-function renderProcessDetail(run) {
+function renderProcessDetail(run: any) {
   const process = run.process || run.ide?.process;
   if (!process) {
     return `
@@ -1913,7 +1916,7 @@ function renderProcessDetail(run) {
   `;
 }
 
-function renderCommandDetail(run) {
+function renderCommandDetail(run: any) {
   const handoff = run.codexHandoff;
   if (!handoff) return "";
   return `
@@ -1928,7 +1931,7 @@ function renderCommandDetail(run) {
   `;
 }
 
-function renderValidationDetail(run) {
+function renderValidationDetail(run: any) {
   return `
     <div class="detail-section">
       <h3>验证命令</h3>
@@ -1942,7 +1945,7 @@ function renderValidationDetail(run) {
   `;
 }
 
-function renderValidationProcessDetail(run) {
+function renderValidationProcessDetail(run: any) {
   const process = run.validation?.process;
   if (!process) {
     return `
@@ -1963,7 +1966,7 @@ function renderValidationProcessDetail(run) {
   `;
 }
 
-function renderHandoffMeta(run) {
+function renderHandoffMeta(run: any) {
   const handoff = run.codexHandoff;
   if (!handoff) {
     els.handoffMeta.hidden = true;
@@ -1985,8 +1988,8 @@ function renderHandoffMeta(run) {
 }
 
 function configurePolling() {
-  const hasRunning = state.runs.some((run) => ["running", "reviewing", "stopping", "validating"].includes(run.status) || isReviewRunning(run) || isVerificationRunning(run));
-  const hasPendingAssignments = state.bugs.some((bug) => ["pending", "assigning"].includes(bug.assignmentRecommendation?.status));
+  const hasRunning = state.runs.some((run: any) => ["running", "reviewing", "stopping", "validating"].includes(run.status) || isReviewRunning(run) || isVerificationRunning(run));
+  const hasPendingAssignments = state.bugs.some((bug: any) => ["pending", "assigning"].includes(bug.assignmentRecommendation?.status));
   if ((hasRunning || hasPendingAssignments) && !pollTimer) {
     pollTimer = setInterval(() => loadBootstrap({ silent: true }).catch(() => {}), 3000);
   }
@@ -1998,49 +2001,49 @@ function configurePolling() {
 }
 
 function selectedBug() {
-  return state.bugs.find((bug) => bug.id === state.selectedBugId) || null;
+  return state.bugs.find((bug: any) => bug.id === state.selectedBugId) || null;
 }
 
 function selectedRun() {
   const bug = selectedBug();
   if (!bug) return null;
   const preferredRunId = state.selectedRunId || bug.lastRunId;
-  const preferredRun = state.runs.find((run) => run.id === preferredRunId && run.bugId === bug.id);
+  const preferredRun = state.runs.find((run: any) => run.id === preferredRunId && run.bugId === bug.id);
   return preferredRun || latestRunForBug(bug.id);
 }
 
 function selectedNode() {
-  return selectedRun()?.steps.find((step) => step.id === state.selectedNodeId) || null;
+  return selectedRun()?.steps.find((step: any) => step.id === state.selectedNodeId) || null;
 }
 
-function selectBug(bugId) {
+function selectBug(bugId: any) {
   state.selectedBugId = bugId;
   state.selectedRunId = latestRunForBug(bugId)?.id || null;
   state.selectedNodeId = selectedRun()?.steps?.[0]?.id || "pull";
 }
 
-function runsForBug(bugId) {
+function runsForBug(bugId: any) {
   if (!bugId) return [];
-  return state.runs.filter((run) => run.bugId === bugId);
+  return state.runs.filter((run: any) => run.bugId === bugId);
 }
 
-function latestRunForBug(bugId) {
+function latestRunForBug(bugId: any) {
   return runsForBug(bugId)[0] || null;
 }
 
-function isCodexRunning(run) {
+function isCodexRunning(run: any) {
   return run?.process?.status === "running" || run?.ide?.process?.status === "running" || run?.status === "running";
 }
 
-function isReviewRunning(run) {
+function isReviewRunning(run: any) {
   return run?.status === "reviewing" || ["running", "stopping"].includes(run?.review?.process?.status);
 }
 
-function isVerificationRunning(run) {
+function isVerificationRunning(run: any) {
   return ["running", "stopping"].includes(run?.validation?.process?.status);
 }
 
-function formatNormalizedBug(normalized) {
+function formatNormalizedBug(normalized: any) {
   const fields = normalized.fields || {};
   return [
     `缺陷编码：${fields.code || ""}`,
@@ -2059,7 +2062,7 @@ function formatNormalizedBug(normalized) {
     `相关日志：${fields.logs || ""}`,
     `问题描述：${fields.description || ""}`,
     `复现步骤：`,
-    ...(fields.reproduceSteps || []).map((step, index) => `  ${index + 1}. ${step}`),
+    ...(fields.reproduceSteps || []).map((step: any, index: any) => `  ${index + 1}. ${step}`),
     `期望结果：${fields.expected || ""}`,
     `实际结果：${fields.actual || ""}`,
     `验收标准：${fields.acceptanceCriteria || ""}`,
@@ -2069,7 +2072,7 @@ function formatNormalizedBug(normalized) {
   ].join("\n");
 }
 
-function formatClientEnv(clientEnv = {}) {
+function formatClientEnv(clientEnv: any = {}) {
   return [
     `  device_type：${clientEnv.device_type || ""}`,
     `  device_model：${clientEnv.device_model || ""}`,
@@ -2082,8 +2085,8 @@ function formatClientEnv(clientEnv = {}) {
   ];
 }
 
-function calculateMetrics(bugs) {
-  const metrics = {
+function calculateMetrics(bugs: any) {
+  const metrics: any = {
     total: bugs.length,
     pending: 0,
     processing: 0,
@@ -2098,7 +2101,7 @@ function calculateMetrics(bugs) {
   return metrics;
 }
 
-function statusGroupKey(status) {
+function statusGroupKey(status: any) {
   const value = String(status || "").toLowerCase();
   if (/待处理|未处理|待受理|待确认|待分配|open|new|todo|pending|onaudit/.test(value)) return "pending";
   if (/处理中|处理|进行中|修复中|in progress|doing|processing|develop|fix/.test(value)) return "processing";
@@ -2106,9 +2109,9 @@ function statusGroupKey(status) {
   return "other";
 }
 
-async function api(path, options = {}) {
+async function api(path: any, options: any = {}) {
   const isFormData = options.body instanceof FormData;
-  const headers = {
+  const headers: any = {
     ...(isFormData ? {} : { "Content-Type": "application/json" }),
     Authorization: `Bearer ${sessionStorage.getItem("bugflow.sessionToken") || ""}`,
     ...(options.headers || {})
@@ -2117,17 +2120,17 @@ async function api(path, options = {}) {
     ...options,
     headers
   });
-  const data = await response.json();
+  const data: any = await response.json();
 
   if (!response.ok) {
     if (response.status === 401) {
       sessionStorage.removeItem("bugflow.sessionToken");
       if (pollTimer) clearInterval(pollTimer);
-      document.querySelector("#loginScreen").hidden = false;
-      document.querySelector("#workspaceShell").hidden = true;
-      document.querySelector("#loginError").textContent = data.message;
+      select("#loginScreen").hidden = false;
+      select("#workspaceShell").hidden = true;
+      select("#loginError").textContent = data.message;
     }
-    const error = new Error(data.message || "请求失败");
+    const error: Error & { status?: number; data?: unknown } = new Error(data.message || "请求失败");
     error.status = response.status;
     error.data = data;
     throw error;
@@ -2142,73 +2145,73 @@ function currentView() {
 }
 
 function bindHistoryEvents() {
-  document.querySelector('#historyFilters').addEventListener('submit', (event) => {
+  select('#historyFilters').addEventListener('submit', (event: any) => {
     event.preventDefault();
-    historyState.agent = document.querySelector('#historyAgent').value;
-    historyState.query = document.querySelector('#historyQuery').value.trim();
-    historyState.workspace = document.querySelector('#historyWorkspace').value;
+    historyState.agent = select('#historyAgent').value;
+    historyState.query = select('#historyQuery').value.trim();
+    historyState.workspace = select('#historyWorkspace').value;
     loadAgentHistory(0);
   });
-  for (const selector of ['#historyAgent', '#historyWorkspace']) document.querySelector(selector).addEventListener('change', () => document.querySelector('#historyFilters').requestSubmit());
-  document.querySelector('#historyPrev').addEventListener('click', () => loadAgentHistory(Math.max(0, historyState.offset - 30)));
-  document.querySelector('#historyNext').addEventListener('click', () => loadAgentHistory(historyState.offset + 30));
-  document.querySelector('#historyList').addEventListener('click', (event) => {
+  for (const selector of ['#historyAgent', '#historyWorkspace']) select(selector).addEventListener('change', () => select('#historyFilters').requestSubmit());
+  select('#historyPrev').addEventListener('click', () => loadAgentHistory(Math.max(0, historyState.offset - 30)));
+  select('#historyNext').addEventListener('click', () => loadAgentHistory(historyState.offset + 30));
+  select('#historyList').addEventListener('click', (event: any) => {
     const button = event.target.closest('[data-session-id]');
     if (button) loadAgentSession(button.dataset.sessionId);
   });
-  document.querySelector('#historyDetail').addEventListener('click', (event) => {
+  select('#historyDetail').addEventListener('click', (event: any) => {
     if (event.target.closest('[data-more-messages]') && historyState.detail) loadAgentSession(historyState.selected, historyState.detail.messages.length);
   });
 }
 
-const historyStatusLabel = (value) => ({ completed: '本轮结束', interrupted: '已中断', error: '发生错误', unknown: '运行状态未知' }[value] || '运行状态未知');
-const historyTime = (value) => Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('zh-CN') : '时间未知';
+const historyStatusLabel = (value: any) => ({ completed: '本轮结束', interrupted: '已中断', error: '发生错误', unknown: '运行状态未知' } as Record<string, string>)[value] || '运行状态未知';
+const historyTime = (value: any) => Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('zh-CN') : '时间未知';
 
 async function loadAgentHistory(offset = historyState.offset) {
   const request = ++historyState.listRequest;
   ++historyState.detailRequest;
   historyState.selected = null;
   historyState.detail = null;
-  document.querySelector('#historyDetail').innerHTML = '<div class="history-empty"><span>◎</span><h2>从一个会话开始</h2><p>选择历史会话，查看对话与工作过程</p></div>';
-  document.querySelector('#historyStatus').textContent = '正在读取历史会话，首次索引可能需要一些时间…';
-  document.querySelector('#historyList').replaceChildren();
-  document.querySelector('#historyPrev').disabled = true;
-  document.querySelector('#historyNext').disabled = true;
+  select('#historyDetail').innerHTML = '<div class="history-empty"><span>◎</span><h2>从一个会话开始</h2><p>选择历史会话，查看对话与工作过程</p></div>';
+  select('#historyStatus').textContent = '正在读取历史会话，首次索引可能需要一些时间…';
+  select('#historyList').replaceChildren();
+  select('#historyPrev').disabled = true;
+  select('#historyNext').disabled = true;
   try {
-    const query = new URLSearchParams({ offset, limit: 30, agent: historyState.agent, q: historyState.query, workspace: historyState.workspace });
+    const query = new URLSearchParams({ offset: String(offset), limit: '30', agent: historyState.agent, q: historyState.query, workspace: historyState.workspace });
     const data = await api(`/api/agent-sessions?${query}`);
     if (request !== historyState.listRequest) return;
     historyState.offset = data.offset; historyState.total = data.total;
-    const sourceLabels = { available: '可读取', missing: '未找到历史目录', unconfigured: '未配置', error: '无法读取目录' };
-    document.querySelector('#historySources').textContent = `${data.scope === 'all' ? '全部本地工作区' : '仅组织工作目录'} · ${data.providers.map((p) => `${p.label}：${sourceLabels[p.status]}${p.skipped ? `（${p.skipped} 项未能读取）` : ''}`).join(' · ')}`;
-    document.querySelector('#historyAgent').innerHTML = '<option value="">全部 Agent</option>' + data.providers.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.label)}</option>`).join('');
-    document.querySelector('#historyAgent').value = historyState.agent;
-    document.querySelector('#historyWorkspace').innerHTML = '<option value="">全部工作区</option>' + data.workspaces.map((w) => `<option value="${escapeHtml(w.path)}">${escapeHtml(w.path === '__unknown__' ? '未知工作区' : w.path)} (${w.count})</option>`).join('');
-    if (historyState.workspace && !data.workspaces.some((w) => w.path === historyState.workspace)) {
-      const option = document.createElement('option'); option.value = historyState.workspace; option.textContent = historyState.workspace + ' (0)'; document.querySelector('#historyWorkspace').append(option);
+    const sourceLabels: any = { available: '可读取', missing: '未找到历史目录', unconfigured: '未配置', error: '无法读取目录' };
+    select('#historySources').textContent = `${data.scope === 'all' ? '全部本地工作区' : '仅组织工作目录'} · ${data.providers.map((p: any) => `${p.label}：${sourceLabels[p.status]}${p.skipped ? `（${p.skipped} 项未能读取）` : ''}`).join(' · ')}`;
+    select('#historyAgent').innerHTML = '<option value="">全部 Agent</option>' + data.providers.map((p: any) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.label)}</option>`).join('');
+    select('#historyAgent').value = historyState.agent;
+    select('#historyWorkspace').innerHTML = '<option value="">全部工作区</option>' + data.workspaces.map((w: any) => `<option value="${escapeHtml(w.path)}">${escapeHtml(w.path === '__unknown__' ? '未知工作区' : w.path)} (${w.count})</option>`).join('');
+    if (historyState.workspace && !data.workspaces.some((w: any) => w.path === historyState.workspace)) {
+      const option = document.createElement('option'); option.value = historyState.workspace; option.textContent = historyState.workspace + ' (0)'; select('#historyWorkspace').append(option);
     }
-    document.querySelector('#historyWorkspace').value = historyState.workspace;
-    document.querySelector('#historyStatus').textContent = data.total ? `共 ${data.total} 个会话，按最近更新时间排序` : '没有匹配的会话，试试其他工作区或搜索词。';
-    document.querySelector('#historyList').innerHTML = data.sessions.map((s) => `<button class="history-card" type="button" data-session-id="${escapeHtml(s.id)}" aria-pressed="false">
+    select('#historyWorkspace').value = historyState.workspace;
+    select('#historyStatus').textContent = data.total ? `共 ${data.total} 个会话，按最近更新时间排序` : '没有匹配的会话，试试其他工作区或搜索词。';
+    select('#historyList').innerHTML = data.sessions.map((s: any) => `<button class="history-card" type="button" data-session-id="${escapeHtml(s.id)}" aria-pressed="false">
       <strong>${escapeHtml(s.title)}</strong>
       <span class="history-meta">${escapeHtml(s.agentLabel)} · ${historyTime(s.updatedAt)}</span>
       <span>${escapeHtml(historyStatusLabel(s.status))} · ${s.messageCount} 条记录${s.archived ? ' · 已归档' : ''}${s.partial ? ' · 部分记录' : ''}</span>
       <span class="history-meta">${escapeHtml(s.cwd?.split('/').filter(Boolean).at(-1) || '未知工作区')}${s.branch ? ' · ' + escapeHtml(s.branch) : ''}</span></button>`).join('');
-    document.querySelector('#historyPage').textContent = data.total ? `${data.offset + 1}–${Math.min(data.offset + data.limit, data.total)} / ${data.total}` : '0 / 0';
-    document.querySelector('#historyPrev').disabled = data.offset === 0;
-    document.querySelector('#historyNext').disabled = data.offset + data.limit >= data.total;
-  } catch (error) {
-    if (request === historyState.listRequest) document.querySelector('#historyStatus').textContent = `加载失败：${error.message}`;
+    select('#historyPage').textContent = data.total ? `${data.offset + 1}–${Math.min(data.offset + data.limit, data.total)} / ${data.total}` : '0 / 0';
+    select('#historyPrev').disabled = data.offset === 0;
+    select('#historyNext').disabled = data.offset + data.limit >= data.total;
+  } catch (error: any) {
+    if (request === historyState.listRequest) select('#historyStatus').textContent = `加载失败：${error.message}`;
   }
 }
 
-async function loadAgentSession(id, offset = 0) {
+async function loadAgentSession(id: any, offset = 0) {
   const request = ++historyState.detailRequest;
   historyState.selected = id;
-  const panel = document.querySelector('#historyDetail');
+  const panel = select('#historyDetail');
   if (!offset) { historyState.detail = null; panel.textContent = '正在读取会话…'; }
   else { const button = panel.querySelector('[data-more-messages]'); if (button) button.disabled = true; }
-  document.querySelectorAll('[data-session-id]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.sessionId === id)));
+  document.querySelectorAll('[data-session-id]').forEach((button: any) => button.setAttribute('aria-pressed', String(button.dataset.sessionId === id)));
   try {
     const data = await api(`/api/agent-sessions/${encodeURIComponent(id)}?offset=${offset}&limit=100`);
     if (request !== historyState.detailRequest) return;
@@ -2222,19 +2225,19 @@ async function loadAgentSession(id, offset = 0) {
       ${s.partial ? '<p class="history-warning">部分记录损坏、尚未写完或超出读取上限，当前展示部分内容。</p>' : ''}
       <div class="history-messages">${renderMessages(messages)}</div>
       <div class="history-chat-footer"><span>已显示 ${messages.length} / ${total} 条记录</span>${messages.length < total ? '<button class="button secondary" type="button" data-more-messages>加载更多记录</button>' : '<span>会话记录结束</span>'}</div></div>`;
-  } catch (error) {
+  } catch (error: any) {
     if (request !== historyState.detailRequest) return;
     if (!offset) panel.textContent = `加载失败：${error.message}`;
     else { showToast(error.message); const button = panel.querySelector('[data-more-messages]'); if (button) button.disabled = false; }
   }
 }
 
-function setText(selector, value) {
-  document.querySelector(selector).textContent = value;
+function setText(selector: any, value: any) {
+  select(selector).textContent = value;
 }
 
-function stateText(value) {
-  return {
+function stateText(value: any) {
+  return ({
     ready: "待自动化",
     "pipeline-ready": "待预览",
     "manual-ready": "待人工执行",
@@ -2250,11 +2253,11 @@ function stateText(value) {
     validated: "验证通过",
     closed: "已关闭",
     "needs-review": "需复核"
-  }[value] || value || "待自动化";
+  } as Record<string, string>)[value] || value || "待自动化";
 }
 
-function runStatusText(value) {
-  return {
+function runStatusText(value: any) {
+  return ({
     ready: "已生成待执行",
     "pipeline-ready": "已生成待执行",
     "manual-ready": "待人工执行",
@@ -2270,11 +2273,11 @@ function runStatusText(value) {
     validated: "验证通过",
     closed: "已关闭",
     "needs-review": "需要复核"
-  }[value] || "等待执行";
+  } as Record<string, string>)[value] || "等待执行";
 }
 
-function nodeStatusText(value) {
-  return {
+function nodeStatusText(value: any) {
+  return ({
     pending: "等待中",
     ready: "可执行",
     running: "执行中",
@@ -2284,26 +2287,26 @@ function nodeStatusText(value) {
     skipped: "已跳过",
     attention: "需复核",
     blocked: "阻塞"
-  }[value] || value || "未知";
+  } as Record<string, string>)[value] || value || "未知";
 }
 
-function tagClass(value) {
+function tagClass(value: any) {
   return String(value || "").toLowerCase().replace(/[^a-z0-9-]/g, "-");
 }
 
-function formatDate(value) {
+function formatDate(value: any) {
   return new Intl.DateTimeFormat("zh-CN", {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
 }
 
-function formatDateText(value) {
+function formatDateText(value: any) {
   if (!value) return "无时间";
   return value;
 }
 
-function formatBytes(value) {
+function formatBytes(value: any) {
   const bytes = Number(value);
   if (!Number.isFinite(bytes) || bytes <= 0) return "";
   if (bytes < 1024) return `${bytes} B`;
@@ -2311,14 +2314,15 @@ function formatBytes(value) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function showToast(message) {
+let toastTimer: ReturnType<typeof setTimeout> | undefined;
+function showToast(message: any) {
   els.toast.textContent = message;
   els.toast.classList.add("show");
-  clearTimeout(showToast.timer);
-  showToast.timer = setTimeout(() => els.toast.classList.remove("show"), 2600);
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => els.toast.classList.remove("show"), 2600);
 }
 
-function escapeHtml(value) {
+function escapeHtml(value: any) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -2327,7 +2331,7 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function cssEscape(value) {
+function cssEscape(value: any) {
   if (window.CSS?.escape) return window.CSS.escape(String(value));
   return String(value).replace(/["\\]/g, "\\$&");
 }

@@ -1,4 +1,3 @@
-// @ts-nocheck
 export const DEFAULT_OPERATION_LOG_ENDPOINT = "/apiregister/conversation/logs/batch";
 
 const CHAT_SOURCES = new Set(["yonclaw_client", "yonclaw_cloud", "web"]);
@@ -10,8 +9,8 @@ const MAX_CONVERSATION_ID_LENGTH = 64;
 const MAX_SKILLS = 50;
 const MAX_ARTIFACTS = 20;
 
-export function normalizeOperationLogItem(item = {}) {
-  const normalized = {
+export function normalizeOperationLogItem(item: any = {}) {
+  const normalized: any = {
     conversation_id: requiredText(item.conversation_id || item.conversationId, "conversation_id"),
     session_id: requiredText(item.session_id || item.sessionId, "session_id"),
     user_id: requiredText(item.user_id || item.userId, "user_id"),
@@ -55,7 +54,7 @@ export function normalizeOperationLogItem(item = {}) {
   return stripEmptyValues(normalized);
 }
 
-export function buildOperationLogBatch(items = []) {
+export function buildOperationLogBatch(items: any = []) {
   if (!Array.isArray(items)) {
     throw new Error("operation log items must be an array.");
   }
@@ -64,8 +63,8 @@ export function buildOperationLogBatch(items = []) {
     throw new Error("operation log items cannot be empty.");
   }
 
-  const acceptedItems = [];
-  const failures = [];
+  const acceptedItems: any[] = [];
+  const failures: any[] = [];
   const seen = new Set();
 
   for (const item of items) {
@@ -82,7 +81,7 @@ export function buildOperationLogBatch(items = []) {
 
       seen.add(normalized.conversation_id);
       acceptedItems.push(normalized);
-    } catch (error) {
+    } catch (error: any) {
       failures.push({
         conversation_id: optionalText(item?.conversation_id || item?.conversationId) || null,
         code: "INVALID_ITEM",
@@ -108,7 +107,7 @@ export async function uploadOperationLogs({
   token,
   items,
   fetchImpl = globalThis.fetch
-} = {}) {
+}: any = {}) {
   if (typeof fetchImpl !== "function") {
     throw new Error("fetch is not available for operation log upload.");
   }
@@ -129,7 +128,7 @@ export async function uploadOperationLogs({
     headers: buildOperationLogHeaders({ cookie, token }),
     body: JSON.stringify({ items: batch.items })
   });
-  const payload = await response.json().catch(() => ({}));
+  const payload: any = await response.json().catch(() => ({}));
 
   if (!response.ok) {
     throw new Error(`operation log upload failed with HTTP ${response.status}: ${payload.msg || payload.message || response.statusText}`);
@@ -150,7 +149,7 @@ export async function uploadOperationLogs({
   };
 }
 
-export function buildOperationLogUrl(baseUrl, endpoint = DEFAULT_OPERATION_LOG_ENDPOINT) {
+export function buildOperationLogUrl(baseUrl: any, endpoint = DEFAULT_OPERATION_LOG_ENDPOINT) {
   if (/^https?:\/\//i.test(endpoint)) return endpoint;
   const root = String(baseUrl || "").replace(/\/$/, "");
   const suffix = String(endpoint || DEFAULT_OPERATION_LOG_ENDPOINT).startsWith("/")
@@ -159,14 +158,14 @@ export function buildOperationLogUrl(baseUrl, endpoint = DEFAULT_OPERATION_LOG_E
   return `${root}${suffix}`;
 }
 
-function buildOperationLogHeaders({ cookie, token } = {}) {
-  const headers = { "Content-Type": "application/json" };
+function buildOperationLogHeaders({ cookie, token }: any = {}) {
+  const headers: any = { "Content-Type": "application/json" };
   if (cookie) headers.Cookie = cookie;
   if (token) headers.Authorization = `Bearer ${token}`;
   return headers;
 }
 
-function normalizeSkills(skills) {
+function normalizeSkills(skills: any) {
   if (!skills) return [];
   if (!Array.isArray(skills)) {
     throw new Error("skills must be an array.");
@@ -186,7 +185,7 @@ function normalizeSkills(skills) {
   }));
 }
 
-function normalizeArtifacts(artifacts) {
+function normalizeArtifacts(artifacts: any) {
   if (!artifacts) return [];
   if (!Array.isArray(artifacts)) {
     throw new Error("artifacts must be an array.");
@@ -200,17 +199,17 @@ function normalizeArtifacts(artifacts) {
   }));
 }
 
-function requiredText(value, fieldName) {
+function requiredText(value: any, fieldName: any) {
   const text = optionalText(value);
   if (!text) throw new Error(`${fieldName} is required.`);
   return text;
 }
 
-function optionalText(value) {
+function optionalText(value: any) {
   return value == null ? "" : String(value).trim();
 }
 
-function enumText(value, allowed, fieldName) {
+function enumText(value: any, allowed: any, fieldName: any) {
   const text = requiredText(value, fieldName);
   if (!allowed.has(text)) {
     throw new Error(`${fieldName} is invalid.`);
@@ -218,7 +217,7 @@ function enumText(value, allowed, fieldName) {
   return text;
 }
 
-function nonNegativeInteger(value, fieldName) {
+function nonNegativeInteger(value: any, fieldName: any) {
   const number = Number(value);
   if (!Number.isFinite(number) || number < 0) {
     throw new Error(`${fieldName} must be a non-negative number.`);
@@ -226,18 +225,18 @@ function nonNegativeInteger(value, fieldName) {
   return Math.trunc(number);
 }
 
-function optionalNonNegativeInteger(value, fieldName) {
+function optionalNonNegativeInteger(value: any, fieldName: any) {
   return value == null || value === "" ? undefined : nonNegativeInteger(value, fieldName);
 }
 
-function optionalInteger(value) {
+function optionalInteger(value: any) {
   if (value == null || value === "") return undefined;
   const number = Number(value);
   return Number.isFinite(number) ? Math.trunc(number) : undefined;
 }
 
-function stripEmptyValues(value) {
-  const result = {};
+function stripEmptyValues(value: any) {
+  const result: any = {};
   for (const [key, entry] of Object.entries(value)) {
     if (entry === "" || entry == null) continue;
     if (Array.isArray(entry) && entry.length === 0) continue;

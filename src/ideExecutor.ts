@@ -1,5 +1,4 @@
-// @ts-nocheck
-const IDE_EXECUTORS = {
+const IDE_EXECUTORS: any = {
   codex: { command: "codex", label: "Codex" },
   claude: { command: "claude", label: "Claude Code" }
 };
@@ -7,33 +6,33 @@ const IDE_EXECUTORS = {
 const DEFAULT_CLAUDE_MODEL = "claude-opus-4-8";
 const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
 
-export function normalizeIdeExecutor(value) {
+export function normalizeIdeExecutor(value: any) {
   return value === "claude" ? "claude" : "codex";
 }
 
-export function getIdeExecutorLabel(executor) {
+export function getIdeExecutorLabel(executor: any) {
   return IDE_EXECUTORS[normalizeIdeExecutor(executor)].label;
 }
 
-export function getIdeExecutable(executor) {
+export function getIdeExecutable(executor: any) {
   return IDE_EXECUTORS[normalizeIdeExecutor(executor)].command;
 }
 
-export function normalizeCodexModel(value) {
+export function normalizeCodexModel(value: any) {
   const raw = String(value || "").trim();
   if (!raw) return DEFAULT_CODEX_MODEL;
   if (!/^[a-zA-Z0-9._:-]+$/.test(raw)) return DEFAULT_CODEX_MODEL;
   return raw;
 }
 
-export function normalizeClaudeModel(value) {
+export function normalizeClaudeModel(value: any) {
   const raw = String(value || "").trim();
   if (!raw) return DEFAULT_CLAUDE_MODEL;
   if (!/^[a-zA-Z0-9._:-]+$/.test(raw)) return DEFAULT_CLAUDE_MODEL;
   return raw;
 }
 
-export function normalizeReasoningEffort(value) {
+export function normalizeReasoningEffort(value: any) {
   const labelMap = new Map([
     ["低", "low"],
     ["中", "medium"],
@@ -45,18 +44,18 @@ export function normalizeReasoningEffort(value) {
   return ["low", "medium", "high", "xhigh"].includes(normalized) ? normalized : "medium";
 }
 
-export function buildIdeExecArgs(executor, config = {}, workspaceDir, taskPath) {
+export function buildIdeExecArgs(executor: any, config: any = {}, workspaceDir: any, taskPath: any) {
   return normalizeIdeExecutor(executor) === "claude"
     ? buildClaudeExecArgs(config, taskPath)
     : buildCodexExecArgs(config, workspaceDir, taskPath);
 }
 
-export function buildIdeCommand(executor, config = {}, workspaceDir, taskPath) {
+export function buildIdeCommand(executor: any, config: any = {}, workspaceDir: any, taskPath: any) {
   const executable = getIdeExecutable(executor);
   return [executable, ...buildIdeExecArgs(executor, config, workspaceDir, taskPath).map(shellArg)].join(" ");
 }
 
-function buildCodexExecArgs(config, workspaceDir, taskPath) {
+function buildCodexExecArgs(config: any, workspaceDir: any, taskPath: any) {
   const args = ["exec"];
   const model = normalizeCodexModel(config.codexModel);
   const effort = normalizeReasoningEffort(config.codexReasoningEffort);
@@ -73,7 +72,7 @@ function buildCodexExecArgs(config, workspaceDir, taskPath) {
   return args;
 }
 
-function buildClaudeExecArgs(config, taskPath) {
+function buildClaudeExecArgs(config: any, taskPath: any) {
   const args = [
     "--bare",
     "-p",
@@ -88,11 +87,11 @@ function buildClaudeExecArgs(config, taskPath) {
   return args;
 }
 
-function shellQuote(value) {
+function shellQuote(value: any) {
   return `'${String(value).replaceAll("'", "'\"'\"'")}'`;
 }
 
-function shellArg(value) {
+function shellArg(value: any) {
   const raw = String(value);
   return /^[a-zA-Z0-9._:/=-]+$/.test(raw) ? raw : shellQuote(raw);
 }

@@ -126,7 +126,7 @@ test('configuration validation, source registration and storage preserve existin
   assert.throws(() => source(noFetch, { JIRA_PRIORITY_MAP: '{"High":"urgent"}' }).validate(), /PRIORITY_MAP/);
   assert.throws(() => createIssueSource({ config: {}, environment: { ISSUE_PROVIDER: 'unknown' } }), /不支持/);
   const primarySource = createIssueSource({ config: {}, environment: {} });
-  const legacySource = { ...primarySource, id: 'fixture', storageScope: '' };
+  const legacySource: any = { ...primarySource, id: 'fixture', storageScope: '' };
   assert.equal(primarySource.id, 'jira');
   assert.equal(sourceStorageKey(legacySource, 'legacy-user'), 'legacy-user');
   assert.notEqual(sourceStorageKey(source(noFetch), 'default'), 'default');

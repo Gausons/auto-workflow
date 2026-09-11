@@ -1,4 +1,3 @@
-// @ts-nocheck
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -10,20 +9,20 @@ import { createTaskCenter } from '../src/taskCenter.js';
 import { syncDeviceOnce } from '../scripts/device-sync.js';
 import { createApp } from '../server.js';
 
-const actor = { id: 'owner' };
-const source = { id: 'a'.repeat(64), agent: 'codex', agentLabel: 'Codex', nativeId: 'source', title: '登录修复', cwd: '/repo', updatedAt: new Date().toISOString() };
-const history = { catalog: async () => ({ providers: [{ id: 'codex' }, { id: 'claude' }], sessions: [source] }) };
-function fixture(t, filename = ':memory:') {
+const actor: any = { id: 'owner' };
+const source: any = { id: 'a'.repeat(64), agent: 'codex', agentLabel: 'Codex', nativeId: 'source', title: '登录修复', cwd: '/repo', updatedAt: new Date().toISOString() };
+const history: any = { catalog: async () => ({ providers: [{ id: 'codex' }, { id: 'claude' }], sessions: [source] }) };
+function fixture(t: any, filename = ':memory:') {
   const database = openDatabase(filename);
   database.createTenant({ id: 'default', token: 'x'.repeat(32) });
   database.createTenant({ id: 'other', token: 'y'.repeat(32) });
   t.after(() => database.close());
   const center = createTaskCenter({ database, tenantId: 'default', history });
-  const cmd = input => center.command(input, actor);
+  const cmd = (input: any) => center.command(input, actor);
   return { database, center, cmd };
 }
-const handoff = (task, overrides = {}) => ({ action: 'handoff', taskId: task.id, revision: task.revision, mode: 'continue', deviceId: 'remote', agent: 'claude', instruction: '补充回归测试', includeFiles: true, includeSources: true, ...overrides });
-const heartbeat = (sessions = []) => ({ action: 'heartbeat', deviceId: 'remote', name: 'Linux', agents: ['claude'], sessions });
+const handoff = (task: any, overrides: any = {}) => ({ action: 'handoff', taskId: task.id, revision: task.revision, mode: 'continue', deviceId: 'remote', agent: 'claude', instruction: '补充回归测试', includeFiles: true, includeSources: true, ...overrides });
+const heartbeat = (sessions: any = []) => ({ action: 'heartbeat', deviceId: 'remote', name: 'Linux', agents: ['claude'], sessions });
 
 test('task linking, context versions, optimistic concurrency and tenant isolation', async t => {
   const { database, center, cmd } = fixture(t);
@@ -47,8 +46,8 @@ test('offline queue, connector receipt, explicit started session and immutable p
   const dir = await mkdtemp(path.join(os.tmpdir(), 'task-device-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   await cmd(heartbeat());
-  database.mutateTaskCenter('default', data => { data.devices[0].lastSeen = '2020-01-01T00:00:00Z'; });
-  assert.equal((await center.snapshot()).devices.find(d => d.id === 'remote').online, false);
+  database.mutateTaskCenter('default', (data: any) => { data.devices[0].lastSeen = '2020-01-01T00:00:00Z'; });
+  assert.equal((await center.snapshot()).devices.find((d: any) => d.id === 'remote').online, false);
   await cmd({ action: 'create', title: '登录修复', sessionId: source.id, context: { files: 'auth.ts @ v1' } });
   let task = (await center.snapshot()).tasks[0];
   const { handoffId } = await cmd(handoff(task));
@@ -56,8 +55,8 @@ test('offline queue, connector receipt, explicit started session and immutable p
   await assert.rejects(cmd(handoff(task)), { statusCode: 409 });
   assert.equal((await center.snapshot()).handoffs[0].status, 'pending');
   await assert.rejects(cmd({ action: 'ack', handoffId, status: 'started' }), { statusCode: 409 });
-  const remoteHistory = { catalog: async () => ({ providers: [{ id: 'claude' }], sessions: [{ ...source, id: 'remote-session', agent: 'claude', title: '继续补充测试' }] }) };
-  const result = await syncDeviceOnce({ request: (method, body) => method === 'GET' ? center.snapshot() : cmd(body), history: remoteHistory, deviceId: 'remote', name: 'Linux', outputDir: dir });
+  const remoteHistory: any = { catalog: async () => ({ providers: [{ id: 'claude' }], sessions: [{ ...source, id: 'remote-session', agent: 'claude', title: '继续补充测试' }] }) };
+  const result = await syncDeviceOnce({ request: (method: any, body: any) => method === 'GET' ? center.snapshot() : cmd(body), history: remoteHistory, deviceId: 'remote', name: 'Linux', outputDir: dir });
   assert.deepEqual(result, { sessions: 1, received: 1 });
   const packet = JSON.parse(await readFile(path.join(dir, handoffId + '.json'), 'utf8'));
   assert.equal(packet.packet.context.files, 'auth.ts @ v1');
@@ -65,14 +64,14 @@ test('offline queue, connector receipt, explicit started session and immutable p
   assert.equal(snapshot.handoffs[0].status, 'received');
   assert.equal(snapshot.tasks[0].status, 'ready', 'receipt must not claim execution');
   await assert.rejects(cmd({ action: 'ack', handoffId, status: 'started', sessionId: source.id }), { statusCode: 400 });
-  const remote = snapshot.sessions.find(s => s.deviceId === 'remote');
+  const remote = snapshot.sessions.find((s: any) => s.deviceId === 'remote');
   await cmd({ action: 'ack', handoffId, status: 'started', sessionId: remote.id });
   await cmd({ action: 'ack', handoffId, status: 'started', sessionId: remote.id });
   snapshot = await center.snapshot();
   assert.equal(snapshot.tasks[0].status, 'running');
   assert.deepEqual(snapshot.tasks[0].sessionIds, [source.id, remote.id]);
   await assert.rejects(cmd({ action: 'ack', handoffId, status: 'cancelled' }), { statusCode: 409 });
-  assert.equal((await syncDeviceOnce({ request: (method, body) => method === 'GET' ? center.snapshot() : cmd(body), history: remoteHistory, deviceId: 'remote', name: 'Linux', outputDir: dir })).received, 0);
+  assert.equal((await syncDeviceOnce({ request: (method: any, body: any) => method === 'GET' ? center.snapshot() : cmd(body), history: remoteHistory, deviceId: 'remote', name: 'Linux', outputDir: dir })).received, 0);
 });
 
 test('branches, references, running source protection, and device identity', async t => {
@@ -86,16 +85,16 @@ test('branches, references, running source protection, and device identity', asy
   await assert.rejects(cmd(handoff(task)), { statusCode: 409 });
   const branch = await cmd(handoff(task, { mode: 'branch', includeFiles: false }));
   snapshot = await center.snapshot();
-  const child = snapshot.tasks.find(t => t.id === branch.taskId);
+  const child = snapshot.tasks.find((t: any) => t.id === branch.taskId);
   assert.equal(child.parentTaskId, task.id);
-  assert.equal(snapshot.tasks.find(t => t.id === task.id).status, 'running');
+  assert.equal(snapshot.tasks.find((t: any) => t.id === task.id).status, 'running');
   assert.equal(snapshot.handoffs[0].packet.context.files, '');
-  task = snapshot.tasks.find(t => t.id === task.id);
+  task = snapshot.tasks.find((t: any) => t.id === task.id);
   await assert.rejects(cmd(handoff(task, { mode: 'reference', targetSessionId: source.id })), { statusCode: 400 });
-  const ref = await cmd(handoff(task, { mode: 'reference', targetSessionId: snapshot.sessions.find(s => s.deviceId === 'remote').id }));
+  const ref = await cmd(handoff(task, { mode: 'reference', targetSessionId: snapshot.sessions.find((s: any) => s.deviceId === 'remote').id }));
   await cmd({ action: 'ack', handoffId: ref.handoffId, status: 'received' });
   await assert.rejects(cmd({ action: 'ack', handoffId: ref.handoffId, status: 'started' }), { statusCode: 409 });
-  assert.equal((await center.snapshot()).tasks.find(t => t.id === task.id).status, 'running');
+  assert.equal((await center.snapshot()).tasks.find((t: any) => t.id === task.id).status, 'running');
 });
 
 test('task data survives reopening the database', async t => {
@@ -114,8 +113,10 @@ test('HTTP auth, viewer write rejection, and task UI assets', async t => {
   const app = createApp({ rootDir, environment: { DEFAULT_TENANT_TOKEN: setup, IDE_HISTORY_CODEX_DIR: path.join(rootDir, 'none'), IDE_HISTORY_CLAUDE_DIR: path.join(rootDir, 'none') } });
   app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
   t.after(async () => { await app.close(); await rm(rootDir, { recursive: true, force: true }); });
-  const base = `http://127.0.0.1:${app.server.address().port}`;
-  const req = async (route, method = 'GET', body, token) => {
+  const address = app.server.address();
+  assert.ok(address && typeof address === 'object');
+  const base = `http://127.0.0.1:${address.port}`;
+  const req = async (route: any, method = 'GET', body?: any, token?: any) => {
     const r = await fetch(base + route, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
     return { status: r.status, data: await r.json() };
   };
@@ -155,6 +156,6 @@ test('connector does not acknowledge receipt when writing the packet fails', asy
   const dir = await mkdtemp(path.join(os.tmpdir(), 'task-write-failure-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'not-a-directory'); await writeFile(file, 'existing');
-  await assert.rejects(syncDeviceOnce({ request: (method, body) => method === 'GET' ? center.snapshot() : cmd(body), history: { catalog: async () => ({ providers: [{ id: 'claude' }], sessions: [] }) }, deviceId: 'remote', name: 'Linux', outputDir: file }));
+  await assert.rejects(syncDeviceOnce({ request: (method: any, body: any) => method === 'GET' ? center.snapshot() : cmd(body), history: { catalog: async () => ({ providers: [{ id: 'claude' }], sessions: [] }) }, deviceId: 'remote', name: 'Linux', outputDir: file }));
   assert.equal((await center.snapshot()).handoffs[0].status, 'pending');
 });

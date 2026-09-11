@@ -1,10 +1,9 @@
-// @ts-nocheck
 import { ROLES, httpError, permissionsFor, publicIdentity } from './rbac.js';
 
-export function createAuthHandler(database) {
+export function createAuthHandler(database: any) {
   const attempts = new Map();
   let passwordOperations = 0;
-  function rateLimit(key, limit = 10) {
+  function rateLimit(key: any, limit = 10) {
     const now = Date.now();
     for (const [entry, value] of attempts) if (value.until <= now) attempts.delete(entry);
     const value = attempts.get(key) || { count: 0, until: now + 15 * 60 * 1000 };
@@ -12,14 +11,14 @@ export function createAuthHandler(database) {
     value.count += 1;
     attempts.set(key, value);
   }
-  async function expensive(operation) {
+  async function expensive(operation: any) {
     if (passwordOperations >= 4) throw httpError(429, '正在处理其他登录请求，请稍后重试');
     passwordOperations += 1;
     try { return await operation(); } finally { passwordOperations -= 1; }
   }
-  const sessionResponse = (session) => ({ ...session, ...publicIdentity(database.authenticateSession(session.token)) });
+  const sessionResponse = (session: any) => ({ ...session, ...publicIdentity(database.authenticateSession(session.token)) });
 
-  return async function handleAuth(req, res, url, token, principal, sendJson) {
+  return async function handleAuth(req: any, res: any, url: any, token: any, principal: any, sendJson: any) {
     const endpoint = url.pathname;
     if (endpoint === '/api/auth/login' && req.method === 'POST') {
       rateLimit(`ip:${req.socket.remoteAddress}`, 100);
@@ -94,12 +93,12 @@ export function createAuthHandler(database) {
   };
 }
 
-function requirePermission(principal, permission) {
+function requirePermission(principal: any, permission: any) {
   if (!permissionsFor(principal.user.role).includes(permission)) throw httpError(403, '当前角色没有此操作权限');
 }
 
-export async function readAuthJson(req) {
-  const chunks = [];
+export async function readAuthJson(req: any) {
+  const chunks: any[] = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;

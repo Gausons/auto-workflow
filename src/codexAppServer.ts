@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { EventEmitter } from 'node:events';
@@ -6,7 +5,9 @@ import { EventEmitter } from 'node:events';
 // Uses the installed Codex protocol and its existing login/configuration. No shell,
 // no ephemeral threads, and no direct writes to Codex's database or rollout files.
 export class CodexAppServer extends EventEmitter {
-  constructor({ executable = 'codex', spawnProcess = spawn, environment = process.env } = {}) {
+  sequence: any; pending: any; closed: any; child: any;
+
+  constructor({ executable = 'codex', spawnProcess = spawn, environment = process.env }: any = {}) {
     super();
     this.sequence = 0; this.pending = new Map(); this.closed = false;
     this.child = spawnProcess(executable, ['app-server'], { env: environment, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -20,7 +21,7 @@ export class CodexAppServer extends EventEmitter {
       if (message.error) pending.reject(new Error(message.error.message || 'Codex 请求失败'));
       else pending.resolve(message.result);
     });
-    const ended = error => {
+    const ended = (error: any) => {
       if (this.closed) return; this.closed = true;
       for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(error); }
       this.pending.clear(); this.emit('disconnected', error);
@@ -29,13 +30,13 @@ export class CodexAppServer extends EventEmitter {
     this.child.on('exit', () => ended(new Error('Codex 执行连接已关闭')));
     this.child.stdin.on('error', () => ended(new Error('Codex 执行连接已中断')));
   }
-  send(message) { if (this.closed) throw new Error('Codex 连接未打开'); this.child.stdin.write(JSON.stringify(message) + '\n'); }
-  call(method, params = {}, timeoutMs = 30000) {
+  send(message: any) { if (this.closed) throw new Error('Codex 连接未打开'); this.child.stdin.write(JSON.stringify(message) + '\n'); }
+  call(method: any, params: any = {}, timeoutMs = 30000) {
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`Codex ${method} 响应超时，执行结果待确认`)); }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      try { this.send({ id, method, params }); } catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
+      try { this.send({ id, method, params }); } catch (error: any) { clearTimeout(timer); this.pending.delete(id); reject(error); }
     });
   }
   async initialize() {

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -123,8 +122,8 @@ test("normalizeAssignmentRecommendation falls back to configured fallback person
 });
 
 test("isAssignmentCandidate only accepts actionable unassigned recommendations", () => {
-  const isAssignableStatus = (status) => ["待处理", "处理中"].includes(status);
-  const readyBug = {
+  const isAssignableStatus = (status: any) => ["待处理", "处理中"].includes(status);
+  const readyBug: any = {
     status: "待处理",
     assignmentRecommendation: { status: "ready", assigneeId: "1001", assigned: false }
   };

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { spawn } from "node:child_process";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { publicIdentity } from "./rbac.js";
@@ -34,8 +33,8 @@ import {
 
 // Each instance owns its state, credentials, timers and child-process callbacks for its entire lifetime.
 // Never switch a process-global current tenant when handling requests.
-export function createTenantRuntime({ database, tenant, environment, rootDir, validateWorkspace = () => {} }) {
-const requestIdentity = new AsyncLocalStorage();
+export function createTenantRuntime({ database, tenant, environment, rootDir, validateWorkspace = () => {} }: any) {
+const requestIdentity = new AsyncLocalStorage<any>();
 const __dirname = rootDir;
 const maxAttachmentDownloadBytes = 50 * 1024 * 1024;
 const maxSupplementUploadBytes = 30 * 1024 * 1024;
@@ -47,7 +46,7 @@ const storedSettings = database.readSettings(tenant.id);
 const persistedConfig = storedSettings.config;
 const persistedAssignmentPeople = normalizeAssignmentPeople(storedSettings.assignmentPeople, { fallback: [] });
 
-const state = {
+const state: any = {
   config: {
     mode,
     assignee: persistedConfig.assignee ?? "",
@@ -104,9 +103,9 @@ const state = {
 const workflowStore = database.createStore(tenant.id);
 loadWorkflowUserState(sourceStorageKey(issueSource(), resolveUserStorageKey(state.config)));
 
-let schedulerTimer = null;
+let schedulerTimer: any = null;
 let assignmentJobSeq = 0;
-let assignmentBatchPromise = null;
+let assignmentBatchPromise: any = null;
 let assignmentJobsPending = 0;
 let mutationPending = false;
 let closing = false;
@@ -139,7 +138,7 @@ async function persistConfig() {
   database.writeSettings(tenant.id, { config: pickPersistedConfig(state.config) });
 }
 
-function loadWorkflowUserState(userKey) {
+function loadWorkflowUserState(userKey: any) {
   const stored = workflowStore.readUserState(userKey);
   state.storageUserKey = stored.userKey;
   state.bugs = stored.bugs;
@@ -147,9 +146,9 @@ function loadWorkflowUserState(userKey) {
   state.executionRecords = stored.executionRecords;
 }
 
-async function persistWorkflowState({ immediate = false } = {}) {
+async function persistWorkflowState({ immediate = false }: any = {}) {
   if (closing) return;
-  const snapshot = {
+  const snapshot: any = {
     ...buildUserSnapshot(state),
     updatedAt: new Date().toISOString()
   };
@@ -163,7 +162,7 @@ async function persistWorkflowState({ immediate = false } = {}) {
   workflowStore.scheduleSave(state.storageUserKey, snapshot);
 }
 
-function recordExecution(input = {}, { persist = true, immediate = false } = {}) {
+function recordExecution(input: any = {}, { persist = true, immediate = false }: any = {}) {
   const actor = requestIdentity.getStore()?.user;
   input = { ...input, meta: { ...input.meta, actor: actor ? { id: actor.id, username: actor.username } : { username: "system" } } };
   state.executionRecords = workflowStore.appendExecutionRecord(state.executionRecords, input);
@@ -175,7 +174,7 @@ function recordExecution(input = {}, { persist = true, immediate = false } = {})
   return createExecutionRecord(input);
 }
 
-function recordRunExecution(run, event, message, { nodeId = "", meta = {}, immediate = false } = {}) {
+function recordRunExecution(run: any, event: any, message: any, { nodeId = "", meta = {}, immediate = false }: any = {}) {
   return recordExecution({
     runId: run?.id || "",
     bugId: run?.bugId || "",
@@ -188,7 +187,7 @@ function recordRunExecution(run, event, message, { nodeId = "", meta = {}, immed
   }, { immediate });
 }
 
-async function switchWorkflowUserContext(nextConfig) {
+async function switchWorkflowUserContext(nextConfig: any) {
   const nextUserKey = sourceStorageKey(issueSource(), resolveUserStorageKey(nextConfig));
   if (nextUserKey === state.storageUserKey) return;
 
@@ -205,7 +204,7 @@ async function switchWorkflowUserContext(nextConfig) {
   }, { immediate: true });
 }
 
-function pickPersistedConfig(config) {
+function pickPersistedConfig(config: any) {
   return {
     ...issueSourceConfig({ environment, config }),
     assignee: config.assignee,
@@ -246,7 +245,7 @@ function pickPersistedConfig(config) {
   };
 }
 
-async function handleApi(req, res, url) {
+async function handleApi(req: any, res: any, url: any) {
   if (url.pathname === '/api/task-center/codex') {
     sendJson(res, 200, await codexExecution.targets()); return;
   }
@@ -351,7 +350,7 @@ async function handleApi(req, res, url) {
   const attachmentMatch = url.pathname.match(/^\/api\/bugs\/([^/]+)\/attachments$/);
   if (req.method === "GET" && attachmentMatch) {
     const bugId = decodeURIComponent(attachmentMatch[1]);
-    const bug = state.bugs.find((item) => item.id === bugId || item.aid === bugId);
+    const bug = state.bugs.find((item: any) => item.id === bugId || item.aid === bugId);
 
     if (!bug) {
       sendJson(res, 404, { error: "bug_not_found", message: "缺陷不存在" });
@@ -375,7 +374,7 @@ async function handleApi(req, res, url) {
   const assignmentRecommendMatch = url.pathname.match(/^\/api\/bugs\/([^/]+)\/assignment\/recommend$/);
   if (req.method === "POST" && assignmentRecommendMatch) {
     const bugId = decodeURIComponent(assignmentRecommendMatch[1]);
-    const bug = state.bugs.find((item) => item.id === bugId || item.aid === bugId);
+    const bug = state.bugs.find((item: any) => item.id === bugId || item.aid === bugId);
 
     if (!bug) {
       sendJson(res, 404, { error: "bug_not_found", message: "缺陷不存在" });
@@ -398,7 +397,7 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && assignmentApplyMatch) {
     const bugId = decodeURIComponent(assignmentApplyMatch[1]);
     const body = await readJson(req);
-    const bug = state.bugs.find((item) => item.id === bugId || item.aid === bugId);
+    const bug = state.bugs.find((item: any) => item.id === bugId || item.aid === bugId);
 
     if (!bug) {
       sendJson(res, 404, { error: "bug_not_found", message: "缺陷不存在" });
@@ -417,7 +416,7 @@ async function handleApi(req, res, url) {
       });
       await persistWorkflowState({ immediate: true });
       sendJson(res, 200, { bug, result });
-    } catch (error) {
+    } catch (error: any) {
       const message = sanitizeError(error);
       bug.assignmentRecommendation = {
         ...(bug.assignmentRecommendation || {}),
@@ -447,7 +446,7 @@ async function handleApi(req, res, url) {
 
   if (req.method === "POST" && url.pathname === "/api/workflows/run") {
     const body = await readJson(req);
-    const bug = state.bugs.find((item) => item.id === body.bugId);
+    const bug = state.bugs.find((item: any) => item.id === body.bugId);
 
     if (!bug) {
       sendJson(res, 404, { error: "bug_not_found", message: "缺陷不存在" });
@@ -466,7 +465,7 @@ async function handleApi(req, res, url) {
     try {
       await prepareGitBranch(run, resolveWorkspaceDir(state.config.codexWorkspaceDir));
       run.codexHandoff = await saveCodexTask(run);
-    } catch (error) {
+    } catch (error: any) {
       markRunFailed(run, sanitizeError(error));
       state.runs.unshift(run);
       bug.automationState = run.status;
@@ -477,7 +476,7 @@ async function handleApi(req, res, url) {
       return;
     }
 
-    const handoffStep = run.steps.find((step) => step.id === "handoff");
+    const handoffStep = run.steps.find((step: any) => step.id === "handoff");
     if (handoffStep) {
       handoffStep.message = `已写入 ${run.codexHandoff.relativeTaskPath}，可用 ${getIdeExecutorLabel(run.ideExecutor)} CLI 执行。`;
     }
@@ -500,7 +499,7 @@ async function handleApi(req, res, url) {
   const supplementMatch = url.pathname.match(/^\/api\/workflows\/([^/]+)\/supplement$/);
   if (req.method === "POST" && supplementMatch) {
     const runId = decodeURIComponent(supplementMatch[1]);
-    const run = state.runs.find((item) => item.id === runId);
+    const run = state.runs.find((item: any) => item.id === runId);
 
     if (!run) {
       sendJson(res, 404, { error: "run_not_found", message: "流水线不存在" });
@@ -514,11 +513,11 @@ async function handleApi(req, res, url) {
 
     try {
       await applyRunSupplement(run, req);
-      const bug = state.bugs.find((item) => item.id === run.bugId);
+      const bug = state.bugs.find((item: any) => item.id === run.bugId);
       recordRunExecution(run, "run-supplemented", "更新 IDE 执行前补充信息");
       await persistWorkflowState();
       sendJson(res, 200, { run, bug });
-    } catch (error) {
+    } catch (error: any) {
       sendJson(res, 400, { error: "supplement_failed", message: sanitizeError(error) });
     }
     return;
@@ -527,7 +526,7 @@ async function handleApi(req, res, url) {
   const startMatch = url.pathname.match(/^\/api\/workflows\/([^/]+)\/start$/);
   if (req.method === "POST" && startMatch) {
     const runId = decodeURIComponent(startMatch[1]);
-    const run = state.runs.find((item) => item.id === runId);
+    const run = state.runs.find((item: any) => item.id === runId);
 
     if (!run) {
       sendJson(res, 404, { error: "run_not_found", message: "流水线不存在" });
@@ -535,7 +534,7 @@ async function handleApi(req, res, url) {
     }
 
     await startIdeExecution(run);
-    const bug = state.bugs.find((item) => item.id === run.bugId);
+    const bug = state.bugs.find((item: any) => item.id === run.bugId);
     if (bug) bug.automationState = run.status;
     recordRunExecution(run, "run-started", "启动 IDE 任务");
     await persistWorkflowState();
@@ -547,7 +546,7 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && stopMatch) {
     const runId = decodeURIComponent(stopMatch[1]);
     const body = await readJson(req);
-    const run = state.runs.find((item) => item.id === runId);
+    const run = state.runs.find((item: any) => item.id === runId);
 
     if (!run) {
       sendJson(res, 404, { error: "run_not_found", message: "流水线不存在" });
@@ -562,7 +561,7 @@ async function handleApi(req, res, url) {
       stopIdeExecution(run);
     }
     await reportRunOperationLogIfReady(run);
-    const bug = state.bugs.find((item) => item.id === run.bugId);
+    const bug = state.bugs.find((item: any) => item.id === run.bugId);
     if (bug) bug.automationState = run.status;
     recordRunExecution(run, "run-stopped", `停止任务：${body.target || "ide"}`);
     await persistWorkflowState();
@@ -587,7 +586,7 @@ async function handleApi(req, res, url) {
     const runId = decodeURIComponent(nodeMatch[1]);
     const nodeId = decodeURIComponent(nodeMatch[2]);
     const body = await readJson(req);
-    const run = state.runs.find((item) => item.id === runId);
+    const run = state.runs.find((item: any) => item.id === runId);
 
     if (!run) {
       sendJson(res, 404, { error: "run_not_found", message: "流水线不存在" });
@@ -596,7 +595,7 @@ async function handleApi(req, res, url) {
 
     completeWorkflowNode(run, nodeId, body);
     await reportRunOperationLogIfReady(run);
-    const bug = state.bugs.find((item) => item.id === run.bugId);
+    const bug = state.bugs.find((item: any) => item.id === run.bugId);
     if (bug) bug.automationState = run.status;
     recordRunExecution(run, "node-completed", `完成节点 ${nodeId}`, { nodeId, meta: { result: body?.result || "" } });
     await persistWorkflowState();
@@ -607,7 +606,7 @@ async function handleApi(req, res, url) {
   const operationLogUploadMatch = url.pathname.match(/^\/api\/workflows\/([^/]+)\/operation-log\/upload$/);
   if (req.method === "POST" && operationLogUploadMatch) {
     const runId = decodeURIComponent(operationLogUploadMatch[1]);
-    const run = state.runs.find((item) => item.id === runId);
+    const run = state.runs.find((item: any) => item.id === runId);
 
     if (!run) {
       sendJson(res, 404, { error: "run_not_found", message: "流水线不存在" });
@@ -617,7 +616,7 @@ async function handleApi(req, res, url) {
     try {
       const result = await uploadRunOperationLog(run, { force: true });
       sendJson(res, 200, { run, result });
-    } catch (error) {
+    } catch (error: any) {
       sendJson(res, 400, { error: "operation_log_upload_failed", message: sanitizeError(error), run });
     }
     return;
@@ -658,15 +657,15 @@ function buildMetrics() {
     processing: statusMetrics.processing,
     resolved: statusMetrics.resolved,
     other: statusMetrics.other,
-    ready: state.bugs.filter((bug) => bug.automationState === "ready").length,
-    validated: state.bugs.filter((bug) => ["validated", "reviewed", "closed"].includes(bug.automationState)).length,
-    review: state.bugs.filter((bug) => ["awaiting-review", "needs-review"].includes(bug.automationState)).length,
+    ready: state.bugs.filter((bug: any) => bug.automationState === "ready").length,
+    validated: state.bugs.filter((bug: any) => ["validated", "reviewed", "closed"].includes(bug.automationState)).length,
+    review: state.bugs.filter((bug: any) => ["awaiting-review", "needs-review"].includes(bug.automationState)).length,
     byStatus: statusMetrics.byStatus
   };
 }
 
-function calculateStatusMetrics(bugs) {
-  const metrics = {
+function calculateStatusMetrics(bugs: any) {
+  const metrics: any = {
     pending: 0,
     processing: 0,
     resolved: 0,
@@ -684,7 +683,7 @@ function calculateStatusMetrics(bugs) {
   return metrics;
 }
 
-function statusGroupOf(status) {
+function statusGroupOf(status: any) {
   const value = String(status || "").toLowerCase();
   if (/待处理|未处理|待受理|待确认|待分配|open|new|todo|pending|onaudit/.test(value)) return "pending";
   if (/处理中|处理|进行中|修复中|in progress|doing|processing|develop|fix/.test(value)) return "processing";
@@ -692,11 +691,11 @@ function statusGroupOf(status) {
   return "other";
 }
 
-function isAssignableBugStatus(status) {
+function isAssignableBugStatus(status: any) {
   return ["pending", "processing"].includes(statusGroupOf(status));
 }
 
-async function classifyBugRouteForWorkflow(bug) {
+async function classifyBugRouteForWorkflow(bug: any) {
   const normalized = normalizeBugInfo(bug, state.config);
   if (state.config.enableAIRouting === false) {
     console.info(`[ai-routing] skipped: enableAIRouting=false bug=${bug.code || bug.id || "unknown"}`);
@@ -705,7 +704,7 @@ async function classifyBugRouteForWorkflow(bug) {
 
   try {
     return await classifyBugRouteWithModel(bug, normalized);
-  } catch (error) {
+  } catch (error: any) {
     const fallback = classifyBugRoute(bug, normalized, state.config);
     console.warn(`[ai-routing] fallback bug=${bug.code || bug.id || "unknown"} error=${sanitizeError(error)}`);
     return {
@@ -716,7 +715,7 @@ async function classifyBugRouteForWorkflow(bug) {
   }
 }
 
-async function classifyBugRouteWithModel(bug, normalized) {
+async function classifyBugRouteWithModel(bug: any, normalized: any) {
   const accessKey = environment.OPENAI_API_KEY;
   if (!accessKey) {
     throw new Error("未配置 OPENAI_API_KEY，无法调用模型分类。");
@@ -727,7 +726,7 @@ async function classifyBugRouteWithModel(bug, normalized) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), state.config.aiRoutingTimeoutMs).unref();
   const startedAt = Date.now();
-  const requestMeta = {
+  const requestMeta: any = {
     bugCode: bug.code || bug.id || "unknown",
     model,
     baseUrl,
@@ -816,7 +815,7 @@ async function classifyBugRouteWithModel(bug, normalized) {
                 description: bug.description,
                 expected: bug.expected,
                 actual: bug.actual,
-                attachments: (bug.attachments || []).map((attachment) => ({
+                attachments: (bug.attachments || []).map((attachment: any) => ({
                   name: attachment.name,
                   url: attachment.url
                 }))
@@ -862,7 +861,7 @@ async function classifyBugRouteWithModel(bug, normalized) {
       })
     });
 
-    const payload = await response.json().catch(() => ({}));
+    const payload: any = await response.json().catch(() => ({}));
     const elapsedMs = Date.now() - startedAt;
     console.info(`[ai-routing] response bug=${bug.code || bug.id || "unknown"} status=${response.status} elapsedMs=${elapsedMs}`);
     if (!response.ok) {
@@ -881,7 +880,7 @@ async function classifyBugRouteWithModel(bug, normalized) {
       reason: route.reason
     })}`);
     return route;
-  } catch (error) {
+  } catch (error: any) {
     if (error?.name === "AbortError") {
       throw new Error(`模型分类超时：${state.config.aiRoutingTimeoutMs}ms`);
     }
@@ -891,12 +890,12 @@ async function classifyBugRouteWithModel(bug, normalized) {
   }
 }
 
-function extractResponseText(payload) {
+function extractResponseText(payload: any) {
   if (typeof payload?.output_text === "string" && payload.output_text.trim()) {
     return payload.output_text.trim();
   }
 
-  const chunks = [];
+  const chunks: any[] = [];
   for (const item of payload?.output || []) {
     for (const content of item?.content || []) {
       if (typeof content?.text === "string") chunks.push(content.text);
@@ -908,7 +907,7 @@ function extractResponseText(payload) {
   return text;
 }
 
-function normalizeModelRoute(route, { model }) {
+function normalizeModelRoute(route: any, { model }: any) {
   const priority = ["P0", "P1", "P2", "P3"].includes(String(route?.priority || "").toUpperCase())
     ? String(route.priority).toUpperCase()
     : "P2";
@@ -929,14 +928,14 @@ function normalizeModelRoute(route, { model }) {
   };
 }
 
-function buildRouteRecommendation(priority, allowed) {
+function buildRouteRecommendation(priority: any, allowed: any) {
   if (["P0", "P1"].includes(priority)) return "人工主导，AI 辅助分析，不建议直接自动修复。";
   if (allowed && priority === "P2") return "进入 IDE 自主修复，人工 Review 后合并。";
   if (allowed && priority === "P3") return "优先尝试 IDE 自主修复，走轻量人工 Review。";
   return "不在自动修复优先级内，建议人工评估。";
 }
 
-function startAssignmentRecommendationsForBugs(bugs) {
+function startAssignmentRecommendationsForBugs(bugs: any) {
   const jobId = ++assignmentJobSeq;
   if (!state.config.enableAIAssignment) {
     for (const bug of bugs) {
@@ -976,7 +975,7 @@ function startAssignmentRecommendationsForBugs(bugs) {
   return jobId;
 }
 
-async function runAssignmentRecommendationJob(jobId) {
+async function runAssignmentRecommendationJob(jobId: any) {
   for (const bug of state.bugs) {
     if (jobId !== assignmentJobSeq) return;
     if (bug.assignmentRecommendation?.status !== "pending") continue;
@@ -984,8 +983,8 @@ async function runAssignmentRecommendationJob(jobId) {
   }
 
   if (jobId !== assignmentJobSeq) return;
-  const assignmentReady = state.bugs.filter((bug) => bug.assignmentRecommendation?.status === "ready").length;
-  const assignmentFailed = state.bugs.filter((bug) => bug.assignmentRecommendation?.status === "error").length;
+  const assignmentReady = state.bugs.filter((bug: any) => bug.assignmentRecommendation?.status === "ready").length;
+  const assignmentFailed = state.bugs.filter((bug: any) => bug.assignmentRecommendation?.status === "error").length;
   if (state.config.enableAutoAssignment && assignmentReady > 0) {
     const batch = await applyReadyAssignments({ source: "auto" });
     state.scheduler.lastRunMessage = `AI 分配建议已完成；自动分配成功 ${batch.success} 条${batch.failed ? `，失败 ${batch.failed} 条` : ""}`;
@@ -995,7 +994,7 @@ async function runAssignmentRecommendationJob(jobId) {
   await persistWorkflowState({ immediate: true });
 }
 
-async function recommendBugAssignee(bug) {
+async function recommendBugAssignee(bug: any) {
   if (!state.assignmentPeople.length) {
     return { status: "skipped", source: "unconfigured", reason: "请先为当前团队配置分配人员。", createdAt: new Date().toISOString() };
   }
@@ -1056,7 +1055,7 @@ async function recommendBugAssignee(bug) {
       reason: recommendation.reason
     })}`);
     return recommendation;
-  } catch (error) {
+  } catch (error: any) {
     const message = error?.name === "AbortError" ? `模型分配超时：${state.config.aiRoutingTimeoutMs}ms` : sanitizeError(error);
     console.warn(`[ai-assignment] error bug=${bug.code || bug.id || "unknown"} ${message}`);
     return {
@@ -1071,7 +1070,7 @@ async function recommendBugAssignee(bug) {
   }
 }
 
-async function postAssignmentModelRequest({ baseUrl, model, bug, signal }) {
+async function postAssignmentModelRequest({ baseUrl, model, bug, signal }: any) {
   const response = await fetch(`${baseUrl}/responses`, {
     method: "POST",
     signal,
@@ -1101,11 +1100,11 @@ async function postAssignmentModelRequest({ baseUrl, model, bug, signal }) {
       }
     })
   });
-  const payload = await response.json().catch(() => ({}));
+  const payload: any = await response.json().catch(() => ({}));
   return { response, payload };
 }
 
-async function applyBugAssignment(bug, body = {}) {
+async function applyBugAssignment(bug: any, body: any = {}) {
   const assignmentKey = String(bug.id || bug.aid || bug.code || "");
   if (activeAssignmentBugIds.has(assignmentKey)) {
     throw new Error("当前缺陷正在分配，请稍后刷新查看结果。");
@@ -1119,7 +1118,7 @@ async function applyBugAssignment(bug, body = {}) {
   }
 }
 
-async function applyBugAssignmentUnlocked(bug, body = {}) {
+async function applyBugAssignmentUnlocked(bug: any, body: any = {}) {
   issueSource().validate();
   if (!isAssignableBugStatus(bug.status)) {
     throw new Error(`仅待处理和处理中的缺陷允许分配，当前状态为：${bug.status || "未知"}。`);
@@ -1156,7 +1155,7 @@ async function applyBugAssignmentUnlocked(bug, body = {}) {
   };
 }
 
-async function applyReadyAssignments({ source = "manual-batch" } = {}) {
+async function applyReadyAssignments({ source = "manual-batch" }: any = {}) {
   if (assignmentBatchPromise) return assignmentBatchPromise;
 
   assignmentBatchPromise = runReadyAssignmentBatch({ source });
@@ -1167,9 +1166,9 @@ async function applyReadyAssignments({ source = "manual-batch" } = {}) {
   }
 }
 
-async function runReadyAssignmentBatch({ source }) {
-  const candidates = state.bugs.filter((bug) => isAssignmentCandidate(bug, isAssignableBugStatus));
-  const results = [];
+async function runReadyAssignmentBatch({ source }: any) {
+  const candidates = state.bugs.filter((bug: any) => isAssignmentCandidate(bug, isAssignableBugStatus));
+  const results: any[] = [];
 
   for (const [index, bug] of candidates.entries()) {
     const recommendation = bug.assignmentRecommendation;
@@ -1196,7 +1195,7 @@ async function runReadyAssignmentBatch({ source }) {
         status: "assigned",
         meta: { source, assigneeId: result.assigneeId }
       }, { persist: false });
-    } catch (error) {
+    } catch (error: any) {
       const message = sanitizeError(error);
       bug.assignmentRecommendation = {
         ...(bug.assignmentRecommendation || recommendation),
@@ -1230,7 +1229,7 @@ async function runReadyAssignmentBatch({ source }) {
 
   const success = results.filter((item) => item.ok).length;
   const failed = results.length - success;
-  const summary = {
+  const summary: any = {
     ok: failed === 0,
     source,
     total: candidates.length,
@@ -1249,7 +1248,7 @@ async function runReadyAssignmentBatch({ source }) {
   return summary;
 }
 
-async function startIdeExecution(run) {
+async function startIdeExecution(run: any) {
   if (closing) return;
   if (run.status === "running" || run.process?.status === "running") {
     appendRunLog(run, "[ide] 当前流水线已在执行中，忽略重复启动。");
@@ -1272,7 +1271,7 @@ async function startIdeExecution(run) {
       run.codexHandoff = await saveCodexTask(run, workspaceDir);
       appendRunLog(run, `[ide] ${action}任务文件 ${run.codexHandoff.relativeTaskPath}`);
     }
-  } catch (error) {
+  } catch (error: any) {
     markRunFailed(run, sanitizeError(error));
     return;
   }
@@ -1317,13 +1316,13 @@ async function startIdeExecution(run) {
     handleIdeExecutionClose(run, handoff, code, signal).catch((error) => {
       markRunFailed(run, sanitizeError(error));
       reportRunOperationLogIfReady(run).catch((uploadError) => markOperationLogUploadFailed(run, sanitizeError(uploadError)));
-      const bug = state.bugs.find((item) => item.id === run.bugId);
+      const bug = state.bugs.find((item: any) => item.id === run.bugId);
       if (bug) bug.automationState = run.status;
     });
   });
 }
 
-async function handleIdeExecutionClose(run, handoff, code, signal) {
+async function handleIdeExecutionClose(run: any, handoff: any, code: any, signal: any) {
     activeProcesses.delete(run.id);
     run.finishedAt = new Date().toISOString();
     run.process = { ...run.process, status: "finished", exitCode: code, signal, finishedAt: run.finishedAt };
@@ -1331,7 +1330,7 @@ async function handleIdeExecutionClose(run, handoff, code, signal) {
     if (run.stopRequested) {
       markRunStopped(run, "任务已停止。");
       await reportRunOperationLogIfReady(run);
-      const bug = state.bugs.find((item) => item.id === run.bugId);
+      const bug = state.bugs.find((item: any) => item.id === run.bugId);
       if (bug) bug.automationState = run.status;
       return;
     }
@@ -1340,7 +1339,7 @@ async function handleIdeExecutionClose(run, handoff, code, signal) {
       try {
         await mergeBugBranchToDailyBranch(run, handoff.workspaceDir);
         markRunExecutionCompleted(run, `IDE Agent 执行完成，已合并到 ${run.dailyBranch || run.git?.dailyBranchName || "个人当天验证分支"}，等待人工 Review。`);
-      } catch (error) {
+      } catch (error: any) {
         if (run.stopRequested) {
           markRunStopped(run, "任务已停止。");
         } else {
@@ -1352,7 +1351,7 @@ async function handleIdeExecutionClose(run, handoff, code, signal) {
     }
 
     await reportRunOperationLogIfReady(run);
-    const bug = state.bugs.find((item) => item.id === run.bugId);
+    const bug = state.bugs.find((item: any) => item.id === run.bugId);
     if (bug) bug.automationState = run.status;
     recordRunExecution(run, run.status === "awaiting-review" || run.status === "reviewed" ? "run-completed" : run.status === "stopped" ? "run-stopped" : "run-failed", `IDE 执行结束，状态：${run.status}`, {
       immediate: true,
@@ -1361,7 +1360,7 @@ async function handleIdeExecutionClose(run, handoff, code, signal) {
     await persistWorkflowState({ immediate: true });
 }
 
-async function startReviewLoop(run) {
+async function startReviewLoop(run: any) {
   if (closing) return;
   if (activeReviewLoops.has(run.id)) {
     appendRunLog(run, "[review] Review 循环已在运行中，忽略重复启动。");
@@ -1444,7 +1443,7 @@ async function startReviewLoop(run) {
 
       updateStep(run, "execute", "done", `第 ${round} 轮 Review 意见已交给修复会话处理。`);
     }
-  } catch (error) {
+  } catch (error: any) {
     if (run.review?.stopRequested) {
       markReviewStopped(run, "Review 已停止。");
     } else {
@@ -1452,12 +1451,12 @@ async function startReviewLoop(run) {
     }
   } finally {
     activeReviewLoops.delete(run.id);
-    const bug = state.bugs.find((item) => item.id === run.bugId);
+    const bug = state.bugs.find((item: any) => item.id === run.bugId);
     if (bug) bug.automationState = run.status;
   }
 }
 
-function ensureReviewState(run) {
+function ensureReviewState(run: any) {
   return {
     maxRounds: clampNumber(run.review?.maxRounds ?? state.config.codexReviewMaxRounds, 1, 10, 3),
     currentRound: Number(run.review?.currentRound || 0),
@@ -1468,7 +1467,7 @@ function ensureReviewState(run) {
   };
 }
 
-function resetHumanReviewState(run) {
+function resetHumanReviewState(run: any) {
   run.review = {
     required: state.config.requireHumanReview !== false,
     passed: false,
@@ -1489,7 +1488,7 @@ function resetHumanReviewState(run) {
   updateStep(run, "releaseClose", "pending", "等待人工 Review 通过后发布并回填关闭工单。");
 }
 
-function markIdeExecutionRunning(run) {
+function markIdeExecutionRunning(run: any) {
   updateStep(run, "analysis", "running", "IDE Agent 正在复现、定位并生成 Bug Analysis Report。");
   updateStep(run, "fixPlan", "pending", "等待根因分析完成后生成修复方案。");
   updateStep(run, "codeFix", "pending", "等待修复方案后编码实现。");
@@ -1506,11 +1505,11 @@ function markIdeExecutionRunning(run) {
   };
 }
 
-async function runIdeTaskProcess(run, handoff, { phase, label, round }) {
+async function runIdeTaskProcess(run: any, handoff: any, { phase, label, round }: any) {
   if (closing) return;
   const executor = resolveIdeExecutor(run);
   return new Promise((resolve, reject) => {
-    const output = [];
+    const output: any = [];
     const child = spawn(getIdeExecutable(executor), buildIdeExecArgs(executor, state.config, handoff.workspaceDir, handoff.taskPath), {
       cwd: handoff.workspaceDir,
       env: environment,
@@ -1579,7 +1578,7 @@ async function runIdeTaskProcess(run, handoff, { phase, label, round }) {
   });
 }
 
-function stopReview(run) {
+function stopReview(run: any) {
   run.review = ensureReviewState(run);
   run.review.stopRequested = true;
   const child = activeReviewProcesses.get(run.id);
@@ -1606,7 +1605,7 @@ function stopReview(run) {
     } else {
       child.kill("SIGTERM");
     }
-  } catch (error) {
+  } catch (error: any) {
     appendRunLog(run, `[review] SIGTERM failed: ${sanitizeError(error)}`);
     try {
       child.kill("SIGTERM");
@@ -1624,13 +1623,13 @@ function stopReview(run) {
         child.kill("SIGKILL");
       }
       appendRunLog(run, `[review] force killed PID ${child.pid}`);
-    } catch (error) {
+    } catch (error: any) {
       appendRunLog(run, `[review] SIGKILL failed: ${sanitizeError(error)}`);
     }
   }, 5000).unref();
 }
 
-async function startVerification(run) {
+async function startVerification(run: any) {
   if (closing) return;
   if (run.status === "running" || run.process?.status === "running") {
     appendRunLog(run, "[verify] Codex 仍在执行，暂不能启动验证项目。");
@@ -1653,7 +1652,7 @@ async function startVerification(run) {
   try {
     await ensureWorkspaceDir(workspaceDir);
     await prepareGitBranch(run, workspaceDir);
-  } catch (error) {
+  } catch (error: any) {
     markValidationFailed(run, sanitizeError(error));
     return;
   }
@@ -1727,12 +1726,12 @@ async function startVerification(run) {
       markValidationFailed(run, `npm run dev 已退出，进程退出码为 ${code}。`);
     }
 
-    const bug = state.bugs.find((item) => item.id === run.bugId);
+    const bug = state.bugs.find((item: any) => item.id === run.bugId);
     if (bug) bug.automationState = run.status;
   });
 }
 
-function stopIdeExecution(run) {
+function stopIdeExecution(run: any) {
   const child = activeProcesses.get(run.id);
   if (!child) {
     appendRunLog(run, "[stop] 当前没有可停止的活动进程。");
@@ -1754,7 +1753,7 @@ function stopIdeExecution(run) {
     } else {
       child.kill("SIGTERM");
     }
-  } catch (error) {
+  } catch (error: any) {
     appendRunLog(run, `[stop] SIGTERM failed: ${sanitizeError(error)}`);
     try {
       child.kill("SIGTERM");
@@ -1772,13 +1771,13 @@ function stopIdeExecution(run) {
         child.kill("SIGKILL");
       }
       appendRunLog(run, `[stop] force killed PID ${child.pid}`);
-    } catch (error) {
+    } catch (error: any) {
       appendRunLog(run, `[stop] SIGKILL failed: ${sanitizeError(error)}`);
     }
   }, 5000).unref();
 }
 
-function stopVerification(run) {
+function stopVerification(run: any) {
   const child = activeVerificationProcesses.get(run.id);
   if (!child) {
     appendRunLog(run, "[verify] 当前没有可停止的验证进程。");
@@ -1807,7 +1806,7 @@ function stopVerification(run) {
     } else {
       child.kill("SIGTERM");
     }
-  } catch (error) {
+  } catch (error: any) {
     appendRunLog(run, `[verify] SIGTERM failed: ${sanitizeError(error)}`);
     try {
       child.kill("SIGTERM");
@@ -1825,13 +1824,13 @@ function stopVerification(run) {
         child.kill("SIGKILL");
       }
       appendRunLog(run, `[verify] force killed PID ${child.pid}`);
-    } catch (error) {
+    } catch (error: any) {
       appendRunLog(run, `[verify] SIGKILL failed: ${sanitizeError(error)}`);
     }
   }, 5000).unref();
 }
 
-async function prepareGitBranch(run, workspaceDir) {
+async function prepareGitBranch(run: any, workspaceDir: any) {
   await ensureWorkspaceDir(workspaceDir);
   const isGit = (await runCommand("git", ["rev-parse", "--is-inside-work-tree"], { cwd: workspaceDir })).stdout.trim();
   if (isGit !== "true") {
@@ -1839,7 +1838,7 @@ async function prepareGitBranch(run, workspaceDir) {
   }
 
   const branchName = run.gitBranch || buildBugBranchName(run.bugCode);
-  const bug = state.bugs.find((item) => item.id === run.bugId);
+  const bug = state.bugs.find((item: any) => item.id === run.bugId);
   const dailyBranchName = buildDailyBranchName(run, bug);
   const dailyOwner = resolveDailyBranchOwner(bug);
   const baseBranch = normalizeGitRef(state.config.codexBaseBranch, "main");
@@ -1880,8 +1879,8 @@ async function prepareGitBranch(run, workspaceDir) {
   await ensureDailyBranchExists(run, workspaceDir, dailyBranchName);
 }
 
-async function mergeBugBranchToDailyBranch(run, workspaceDir) {
-  const bug = state.bugs.find((item) => item.id === run.bugId);
+async function mergeBugBranchToDailyBranch(run: any, workspaceDir: any) {
+  const bug = state.bugs.find((item: any) => item.id === run.bugId);
   const bugBranchName = run.gitBranch || run.git?.branchName || buildBugBranchName(run.bugCode);
   const dailyBranchName = buildDailyBranchName(run, bug);
   run.dailyBranch = dailyBranchName;
@@ -1905,7 +1904,7 @@ async function mergeBugBranchToDailyBranch(run, workspaceDir) {
     updateStep(run, "mergeDaily", "done", `已合并到个人当天验证分支 ${dailyBranchName}。`);
     appendRunLog(run, `[git] merged ${bugBranchName} into ${dailyBranchName}`);
     return;
-  } catch (error) {
+  } catch (error: any) {
     run.git.mergeStatus = "conflict";
     run.git.mergeConflict = sanitizeError(error);
     updateStep(run, "mergeDaily", "running", "合并出现冲突，正在交给 Codex 自动解决。");
@@ -1927,7 +1926,7 @@ async function mergeBugBranchToDailyBranch(run, workspaceDir) {
   appendRunLog(run, `[git] conflict resolved and merged into ${dailyBranchName}`);
 }
 
-async function ensureOnBranch(run, workspaceDir, branchName) {
+async function ensureOnBranch(run: any, workspaceDir: any, branchName: any) {
   const currentBranch = (await runCommand("git", ["branch", "--show-current"], { cwd: workspaceDir })).stdout.trim();
   if (currentBranch === branchName) return;
 
@@ -1940,7 +1939,7 @@ async function ensureOnBranch(run, workspaceDir, branchName) {
   appendRunLog(run, `[git] switched to ${branchName}`);
 }
 
-async function prepareDailyBranch(run, workspaceDir, dailyBranchName) {
+async function prepareDailyBranch(run: any, workspaceDir: any, dailyBranchName: any) {
   const currentBranch = (await runCommand("git", ["branch", "--show-current"], { cwd: workspaceDir })).stdout.trim();
   if (currentBranch === dailyBranchName) return;
 
@@ -1962,7 +1961,7 @@ async function prepareDailyBranch(run, workspaceDir, dailyBranchName) {
   appendRunLog(run, `[git] created daily branch ${dailyBranchName} from ${baseRef}`);
 }
 
-async function ensureDailyBranchExists(run, workspaceDir, dailyBranchName) {
+async function ensureDailyBranchExists(run: any, workspaceDir: any, dailyBranchName: any) {
   const exists = await commandSucceeds("git", ["rev-parse", "--verify", `refs/heads/${dailyBranchName}`], { cwd: workspaceDir });
   if (exists) {
     appendRunLog(run, `[git] daily branch already exists ${dailyBranchName}`);
@@ -1980,7 +1979,7 @@ async function ensureDailyBranchExists(run, workspaceDir, dailyBranchName) {
   appendRunLog(run, `[git] created daily branch ${dailyBranchName} from ${baseRef}`);
 }
 
-async function stageAndCommitChanges(run, workspaceDir, message) {
+async function stageAndCommitChanges(run: any, workspaceDir: any, message: any) {
   const status = await getBlockingGitStatus(workspaceDir);
   if (!status) {
     appendRunLog(run, "[git] no code changes to commit on bug branch");
@@ -2000,7 +1999,7 @@ async function stageAndCommitChanges(run, workspaceDir, message) {
   return true;
 }
 
-async function finalizeDailyMergeAfterConflict(run, workspaceDir, dailyBranchName) {
+async function finalizeDailyMergeAfterConflict(run: any, workspaceDir: any, dailyBranchName: any) {
   await ensureNoUnmergedPaths(workspaceDir);
 
   const mergeInProgress = await commandSucceeds("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"], { cwd: workspaceDir });
@@ -2018,41 +2017,41 @@ async function finalizeDailyMergeAfterConflict(run, workspaceDir, dailyBranchNam
   }
 }
 
-async function ensureNoUnmergedPaths(workspaceDir) {
+async function ensureNoUnmergedPaths(workspaceDir: any) {
   const unmerged = (await runCommand("git", ["diff", "--name-only", "--diff-filter=U"], { cwd: workspaceDir })).stdout.trim();
   if (unmerged) {
     throw new Error(`仍存在未解决的合并冲突：${unmerged}`);
   }
 }
 
-async function getBlockingGitStatus(workspaceDir) {
+async function getBlockingGitStatus(workspaceDir: any) {
   const status = (await runCommand("git", ["status", "--porcelain"], { cwd: workspaceDir })).stdout.trim();
   if (!status) return "";
 
   const blockingLines = status
     .split(/\r?\n/)
-    .map((line) => line.trimEnd())
+    .map((line: any) => line.trimEnd())
     .filter(Boolean)
-    .filter((line) => !isGeneratedCodexPath(gitStatusPath(line)));
+    .filter((line: any) => !isGeneratedCodexPath(gitStatusPath(line)));
 
   return blockingLines.join("; ");
 }
 
-async function resetGeneratedCodexPaths(workspaceDir) {
+async function resetGeneratedCodexPaths(workspaceDir: any) {
   await commandSucceeds("git", ["reset", "--", ".codex/tasks", ".codex/attachments", ".codex/supplements"], { cwd: workspaceDir });
 }
 
-function isGeneratedCodexPath(filePath) {
+function isGeneratedCodexPath(filePath: any) {
   return [".codex/tasks/", ".codex/attachments/", ".codex/supplements/"].some((prefix) => String(filePath || "").startsWith(prefix));
 }
 
-function gitStatusPath(line) {
+function gitStatusPath(line: any) {
   const value = String(line || "").slice(3).trim();
   const renamedTo = value.split(" -> ").pop() || value;
   return renamedTo.replace(/^"|"$/g, "");
 }
 
-async function resolveLatestBaseRef(run, workspaceDir, baseBranch) {
+async function resolveLatestBaseRef(run: any, workspaceDir: any, baseBranch: any) {
   const hasOrigin = await commandSucceeds("git", ["remote", "get-url", "origin"], { cwd: workspaceDir });
   if (hasOrigin) {
     appendRunLog(run, `[git] fetching origin ${baseBranch}`);
@@ -2074,7 +2073,7 @@ async function resolveLatestBaseRef(run, workspaceDir, baseBranch) {
   return baseBranch;
 }
 
-function completeWorkflowNode(run, nodeId, body = {}) {
+function completeWorkflowNode(run: any, nodeId: any, body: any = {}) {
   const step = findStep(run, nodeId);
   if (!step) {
     throw new Error(`流水线节点不存在：${nodeId}`);
@@ -2112,7 +2111,7 @@ function completeWorkflowNode(run, nodeId, body = {}) {
   appendRunLog(run, `[manual] ${step.label}: ${step.message}`);
 }
 
-async function reportRunOperationLogIfReady(run) {
+async function reportRunOperationLogIfReady(run: any) {
   if (closing) return;
   if (!isOperationLogReportableStatus(run.status)) return null;
   return uploadRunOperationLog(run).catch((error) => {
@@ -2121,7 +2120,7 @@ async function reportRunOperationLogIfReady(run) {
   });
 }
 
-async function uploadRunOperationLog(run, { force = false } = {}) {
+async function uploadRunOperationLog(run: any, { force = false }: any = {}) {
   if (!run?.operationLog?.item) {
     throw new Error("当前流水线没有运营日志。");
   }
@@ -2169,7 +2168,7 @@ async function uploadRunOperationLog(run, { force = false } = {}) {
   return result;
 }
 
-function refreshRunOperationLogOutput(run) {
+function refreshRunOperationLogOutput(run: any) {
   const status = operationLogStatusOfRun(run);
   updateWorkflowOperationLogOutput(run, {
     status,
@@ -2178,7 +2177,7 @@ function refreshRunOperationLogOutput(run) {
   });
 }
 
-function buildOperationLogAnswer(run, status) {
+function buildOperationLogAnswer(run: any, status: any) {
   return [
     `工作流状态：${run.status}`,
     `运营日志状态：${status}`,
@@ -2191,17 +2190,17 @@ function buildOperationLogAnswer(run, status) {
   ].filter(Boolean).join("\n");
 }
 
-function operationLogStatusOfRun(run) {
+function operationLogStatusOfRun(run: any) {
   if (run.status === "stopped") return "user_abort";
   if (["needs-review", "failed"].includes(run.status)) return "failure";
   return "success";
 }
 
-function isOperationLogReportableStatus(status) {
+function isOperationLogReportableStatus(status: any) {
   return ["awaiting-review", "reviewed", "closed", "needs-review", "stopped"].includes(status);
 }
 
-function markOperationLogUploadFailed(run, message) {
+function markOperationLogUploadFailed(run: any, message: any) {
   if (!run?.operationLog) return;
   const upload = run.operationLog.upload || {};
   run.operationLog.upload = {
@@ -2215,7 +2214,7 @@ function markOperationLogUploadFailed(run, message) {
   appendRunLog(run, `[operation-log] upload failed: ${message}`);
 }
 
-function markRunExecutionCompleted(run, message) {
+function markRunExecutionCompleted(run: any, message: any) {
   hydrateWorkflowIdeReports(run);
   run.status = run.review?.required === false ? "reviewed" : "awaiting-review";
   run.ide = {
@@ -2253,7 +2252,7 @@ function markRunExecutionCompleted(run, message) {
   recordRunExecution(run, "run-awaiting-review", message);
 }
 
-function markReviewPassed(run, message) {
+function markReviewPassed(run: any, message: any) {
   run.status = "reviewed";
   run.review = {
     ...(run.review || {}),
@@ -2267,7 +2266,7 @@ function markReviewPassed(run, message) {
   appendRunLog(run, `[review] PASS ${message}`);
 }
 
-function markReviewFailed(run, message) {
+function markReviewFailed(run: any, message: any) {
   run.status = "needs-review";
   run.review = {
     ...(run.review || {}),
@@ -2282,7 +2281,7 @@ function markReviewFailed(run, message) {
   appendRunLog(run, `[review] NEEDS_REVIEW ${message}`);
 }
 
-function markReviewStopped(run, message) {
+function markReviewStopped(run: any, message: any) {
   run.status = "stopped";
   run.review = {
     ...(run.review || {}),
@@ -2294,7 +2293,7 @@ function markReviewStopped(run, message) {
   appendRunLog(run, `[review] STOPPED ${message}`);
 }
 
-function markRunClosed(run, message) {
+function markRunClosed(run: any, message: any) {
   run.status = "closed";
   run.finishedAt = new Date().toISOString();
   run.releaseClose = {
@@ -2307,7 +2306,7 @@ function markRunClosed(run, message) {
   appendRunLog(run, `[release] CLOSED ${message}`);
 }
 
-function markReleaseBlocked(run, message) {
+function markReleaseBlocked(run: any, message: any) {
   run.status = "needs-review";
   run.releaseClose = {
     ...(run.releaseClose || {}),
@@ -2318,7 +2317,7 @@ function markReleaseBlocked(run, message) {
   appendRunLog(run, `[release] NEEDS_REVIEW ${message}`);
 }
 
-function markRunValidated(run, message) {
+function markRunValidated(run: any, message: any) {
   run.status = "validated";
   run.validation = {
     ...run.validation,
@@ -2331,7 +2330,7 @@ function markRunValidated(run, message) {
   appendRunLog(run, `[verify] PASS ${message}`);
 }
 
-function markValidationFailed(run, message) {
+function markValidationFailed(run: any, message: any) {
   run.status = "needs-review";
   run.validation = {
     ...run.validation,
@@ -2344,7 +2343,7 @@ function markValidationFailed(run, message) {
   appendRunLog(run, `[verify] NEEDS_REVIEW ${message}`);
 }
 
-function markRunFailed(run, message) {
+function markRunFailed(run: any, message: any) {
   run.status = "needs-review";
   run.ide = {
     ...(run.ide || {}),
@@ -2374,7 +2373,7 @@ function markRunFailed(run, message) {
   appendRunLog(run, `[ide] NEEDS_REVIEW ${message}`);
 }
 
-function markRunStopped(run, message) {
+function markRunStopped(run: any, message: any) {
   run.status = "stopped";
   run.finishedAt = run.finishedAt || new Date().toISOString();
   run.process = { ...run.process, status: "stopped", finishedAt: run.finishedAt };
@@ -2402,18 +2401,18 @@ function markRunStopped(run, message) {
   appendRunLog(run, `[stop] ${message}`);
 }
 
-function findStep(run, stepId) {
-  return run.steps.find((step) => step.id === stepId);
+function findStep(run: any, stepId: any) {
+  return run.steps.find((step: any) => step.id === stepId);
 }
 
-function updateStep(run, stepId, status, message) {
+function updateStep(run: any, stepId: any, status: any, message: any) {
   const step = findStep(run, stepId);
   if (!step) return;
   step.status = status;
   step.message = message;
 }
 
-function appendRunLog(run, value) {
+function appendRunLog(run: any, value: any) {
   const lines = String(value || "")
     .split(/\r?\n/)
     .map((line) => line.trimEnd())
@@ -2432,7 +2431,7 @@ function appendRunLog(run, value) {
   });
 }
 
-function parseReviewOutput(output) {
+function parseReviewOutput(output: any) {
   const text = String(output || "");
   const block = text.match(/REVIEW_RESULT([\s\S]*?)END_REVIEW_RESULT/i)?.[1] || text;
   const status = block.match(/status\s*[:：]\s*(pass|changes_requested)/i)?.[1]?.toLowerCase();
@@ -2463,19 +2462,19 @@ function parseReviewOutput(output) {
   };
 }
 
-function trimReviewOutput(value) {
+function trimReviewOutput(value: any) {
   const text = String(value || "").trim();
   if (text.length <= 4000) return text;
   return `${text.slice(0, 3800)}\n...（已截断）`;
 }
 
-function formatObjectForTask(value) {
+function formatObjectForTask(value: any) {
   return JSON.stringify(value, null, 2);
 }
 
-function runCommand(command, args, options = {}) {
+function runCommand(command: any, args: any, options: any = {}): Promise<any> {
   if (closing) return Promise.reject(new Error("服务正在关闭"));
-  return new Promise((resolve, reject) => {
+  return new Promise<any>((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: environment,
@@ -2502,7 +2501,7 @@ function runCommand(command, args, options = {}) {
   });
 }
 
-async function commandSucceeds(command, args, options = {}) {
+async function commandSucceeds(command: any, args: any, options: any = {}) {
   try {
     await runCommand(command, args, options);
     return true;
@@ -2511,16 +2510,16 @@ async function commandSucceeds(command, args, options = {}) {
   }
 }
 
-function buildBugBranchName(code) {
+function buildBugBranchName(code: any) {
   return `codex/${tenant.id}/bug/${safeGitBranchPart(code || "bug")}`;
 }
 
-function buildDailyBranchName(run, bug) {
+function buildDailyBranchName(run: any, bug: any) {
   const owner = resolveDailyBranchOwner(bug);
   return `codex/${tenant.id}/daily/${safeGitBranchPart(owner.key)}/${formatBranchDate(new Date())}`;
 }
 
-function resolveDailyBranchOwner(bug) {
+function resolveDailyBranchOwner(bug: any) {
   const recommendedAssigneeId = normalizePersonIdentifier(bug?.assignmentRecommendation?.assigneeId);
   const recommendedAssigneeName = normalizePersonIdentifier(bug?.assignmentRecommendation?.assigneeName);
   const bugAssigneeId = normalizePersonIdentifier(bug?.assigneeId);
@@ -2536,7 +2535,7 @@ function resolveDailyBranchOwner(bug) {
   };
 }
 
-function normalizePersonIdentifier(value) {
+function normalizePersonIdentifier(value: any) {
   if (value == null) return "";
   if (typeof value === "object") {
     return String(value.aid || value.employeeId || value.userCode || value.userName || value.name || "").trim();
@@ -2544,18 +2543,18 @@ function normalizePersonIdentifier(value) {
   return String(value).trim();
 }
 
-function resolveIdeExecutor(run) {
+function resolveIdeExecutor(run: any) {
   return normalizeIdeExecutor(run?.ideExecutor ?? state.config.ideExecutor);
 }
 
-function formatBranchDate(date) {
+function formatBranchDate(date: any) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}${month}${day}`;
 }
 
-function safeGitBranchPart(value) {
+function safeGitBranchPart(value: any) {
   return String(value || "bug")
     .trim()
     .toLowerCase()
@@ -2565,7 +2564,7 @@ function safeGitBranchPart(value) {
     .slice(0, 80) || "bug";
 }
 
-async function ensureBugAttachmentsLoaded(bug) {
+async function ensureBugAttachmentsLoaded(bug: any) {
   if (bug.attachmentsLoaded) return;
 
   try {
@@ -2574,14 +2573,14 @@ async function ensureBugAttachmentsLoaded(bug) {
     bug.attachments = attachments;
     bug.attachmentsLoaded = true;
     bug.attachmentsError = "";
-  } catch (error) {
+  } catch (error: any) {
     bug.attachments = bug.attachments || [];
     bug.attachmentsLoaded = false;
     bug.attachmentsError = sanitizeError(error);
   }
 }
 
-async function localizeBugAttachments(bug, workspaceDir) {
+async function localizeBugAttachments(bug: any, workspaceDir: any) {
   await ensureWorkspaceDir(workspaceDir);
   if (!bug.attachments?.length) return;
 
@@ -2605,14 +2604,14 @@ async function localizeBugAttachments(bug, workspaceDir) {
         attachment.localExtractedRelativeDir = path.relative(workspaceDir, extractDir);
         attachment.localExtractedFiles = extractedFiles;
       }
-    } catch (error) {
+    } catch (error: any) {
       attachment.localizeError = sanitizeError(error);
       appendRunLogForBug(bug, `[attachment] ${attachment.name || attachment.url} localize failed: ${attachment.localizeError}`);
     }
   }
 }
 
-async function downloadAttachment(url, filePath) {
+async function downloadAttachment(url: any, filePath: any) {
   const source = issueSource();
   if (source.downloadAttachment) {
     await writeFile(filePath, await source.downloadAttachment(url, maxAttachmentDownloadBytes));
@@ -2620,21 +2619,21 @@ async function downloadAttachment(url, filePath) {
   }
   try {
     await retryDownload(() => downloadAttachmentWithFetch(url, filePath));
-  } catch (fetchError) {
+  } catch (fetchError: any) {
     try {
       await retryDownload(() => downloadAttachmentWithCurl(url, filePath));
-    } catch (curlError) {
+    } catch (curlError: any) {
       throw new Error(`fetch 下载失败：${downloadErrorMessage(fetchError)}；curl 下载失败：${downloadErrorMessage(curlError)}`);
     }
   }
 }
 
-async function retryDownload(operation, maxAttempts = 3) {
-  let lastError = null;
+async function retryDownload(operation: any, maxAttempts = 3) {
+  let lastError: any = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       return await operation();
-    } catch (error) {
+    } catch (error: any) {
       lastError = error;
       if (attempt < maxAttempts) {
         await sleep(attempt * 1000);
@@ -2644,7 +2643,7 @@ async function retryDownload(operation, maxAttempts = 3) {
   throw lastError;
 }
 
-async function downloadAttachmentWithFetch(url, filePath) {
+async function downloadAttachmentWithFetch(url: any, filePath: any) {
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`下载失败 HTTP ${response.status}`);
@@ -2663,7 +2662,7 @@ async function downloadAttachmentWithFetch(url, filePath) {
   await writeFile(filePath, bytes);
 }
 
-async function downloadAttachmentWithCurl(url, filePath) {
+async function downloadAttachmentWithCurl(url: any, filePath: any) {
   await runCommand("curl", ["-L", "--fail", "--silent", "--show-error", "--max-time", "60", "--output", filePath, url]);
   const info = await stat(filePath);
   if (info.size > maxAttachmentDownloadBytes) {
@@ -2671,12 +2670,12 @@ async function downloadAttachmentWithCurl(url, filePath) {
   }
 }
 
-function downloadErrorMessage(error) {
+function downloadErrorMessage(error: any) {
   const cause = error?.cause?.code || error?.cause?.message;
   return cause ? `${error.message || error} (${cause})` : String(error?.message || error);
 }
 
-async function extractArchive(filePath, extractDir) {
+async function extractArchive(filePath: any, extractDir: any) {
   await mkdir(extractDir, { recursive: true });
   const lower = filePath.toLowerCase();
 
@@ -2702,9 +2701,9 @@ async function extractArchive(filePath, extractDir) {
   return [];
 }
 
-async function assertSafeArchiveEntries(command, args) {
+async function assertSafeArchiveEntries(command: any, args: any) {
   const result = await runCommand(command, args);
-  const entries = result.stdout.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean);
+  const entries = result.stdout.split(/\r?\n/).map((entry: any) => entry.trim()).filter(Boolean);
   for (const entry of entries) {
     if (entry.startsWith("/") || entry.includes("..") || path.normalize(entry).startsWith("..")) {
       throw new Error(`压缩包包含不安全路径：${entry}`);
@@ -2712,9 +2711,9 @@ async function assertSafeArchiveEntries(command, args) {
   }
 }
 
-async function listExtractedFiles(rootDir, currentDir = rootDir, prefix = "") {
+async function listExtractedFiles(rootDir: any, currentDir = rootDir, prefix = "") {
   const entries = await readdir(currentDir, { withFileTypes: true });
-  const files = [];
+  const files: any[] = [];
 
   for (const entry of entries) {
     const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
@@ -2729,7 +2728,7 @@ async function listExtractedFiles(rootDir, currentDir = rootDir, prefix = "") {
   return files.slice(0, 100);
 }
 
-function buildAttachmentFileName(attachment, index) {
+function buildAttachmentFileName(attachment: any, index: any) {
   const parsedName = attachment.name || safeNameFromUrl(attachment.url) || `attachment-${index + 1}`;
   const extension = path.extname(parsedName) || extensionFromUrl(attachment.url);
   const baseName = safeFilePart(path.basename(parsedName, path.extname(parsedName)));
@@ -2737,7 +2736,7 @@ function buildAttachmentFileName(attachment, index) {
   return `${String(index + 1).padStart(2, "0")}-${safeBaseName}${extension}`;
 }
 
-function safeNameFromUrl(url) {
+function safeNameFromUrl(url: any) {
   try {
     return decodeURIComponent(new URL(url).pathname.split("/").filter(Boolean).pop() || "");
   } catch {
@@ -2745,26 +2744,26 @@ function safeNameFromUrl(url) {
   }
 }
 
-function extensionFromUrl(url) {
+function extensionFromUrl(url: any) {
   const name = safeNameFromUrl(url);
   return path.extname(name) || "";
 }
 
-function isArchiveAttachment(attachment, filePath) {
+function isArchiveAttachment(attachment: any, filePath: any) {
   const name = `${attachment.name || ""} ${attachment.url || ""} ${filePath}`.toLowerCase();
   return /\.(zip|tar|tar\.gz|tgz|gz)(\?|#|\s|$)/.test(name);
 }
 
-function appendRunLogForBug(bug, message) {
-  const run = state.runs.find((item) => item.bugId === bug.id || item.bugCode === bug.code);
+function appendRunLogForBug(bug: any, message: any) {
+  const run = state.runs.find((item: any) => item.bugId === bug.id || item.bugCode === bug.code);
   if (run) appendRunLog(run, message);
 }
 
-async function saveCodexTask(run, workspaceDir) {
+async function saveCodexTask(run: any, workspaceDir?: any) {
   return saveWorkflowTaskFile(run, "fix", run.taskPacket, workspaceDir);
 }
 
-async function applyRunSupplement(run, req) {
+async function applyRunSupplement(run: any, req: any) {
   const form = await readSupplementForm(req);
   const text = String(form.fields.text || "").trim();
   const imageFiles = form.files.filter((file) => file.fieldName === "images" && file.data?.length);
@@ -2783,7 +2782,7 @@ async function applyRunSupplement(run, req) {
   const supplementDir = path.join(workspaceDir, ".codex", "supplements", tenant.id, safeFilePart(run.bugCode || run.bugId), safeFilePart(run.id));
   await mkdir(supplementDir, { recursive: true });
 
-  const savedImages = [];
+  const savedImages: any[] = [];
   for (const [index, file] of imageFiles.entries()) {
     if (!String(file.contentType || "").toLowerCase().startsWith("image/")) {
       throw new Error(`补充附件只支持图片：${file.filename || file.fieldName}`);
@@ -2805,7 +2804,7 @@ async function applyRunSupplement(run, req) {
     });
   }
 
-  const supplement = {
+  const supplement: any = {
     text,
     images: savedImages,
     savedAt: new Date().toISOString()
@@ -2822,8 +2821,8 @@ async function applyRunSupplement(run, req) {
   return run;
 }
 
-function mergeRunSupplement(current, next) {
-  const notes = [];
+function mergeRunSupplement(current: any, next: any) {
+  const notes: any[] = [];
   if (current?.text) notes.push(current.text);
   if (next.text) notes.push(next.text);
 
@@ -2834,12 +2833,12 @@ function mergeRunSupplement(current, next) {
   };
 }
 
-function buildTaskPacketWithSupplement(baseTaskPacket, supplement) {
+function buildTaskPacketWithSupplement(baseTaskPacket: any, supplement: any) {
   const section = formatIdeSupplementForTask(supplement);
   return [baseTaskPacket, section].filter(Boolean).join("\n\n");
 }
 
-function formatIdeSupplementForTask(supplement) {
+function formatIdeSupplementForTask(supplement: any) {
   if (!supplement?.text && !supplement?.images?.length) return "";
 
   const lines = [
@@ -2872,7 +2871,7 @@ function formatIdeSupplementForTask(supplement) {
   return lines.join("\n");
 }
 
-function buildSupplementImageFileName(file, index) {
+function buildSupplementImageFileName(file: any, index: any) {
   const originalName = file.filename || `image-${index + 1}`;
   const originalExt = path.extname(originalName);
   const ext = originalExt || extensionFromContentType(file.contentType) || ".png";
@@ -2880,7 +2879,7 @@ function buildSupplementImageFileName(file, index) {
   return `${String(index + 1).padStart(2, "0")}-${base}${ext}`;
 }
 
-function extensionFromContentType(contentType) {
+function extensionFromContentType(contentType: any) {
   const type = String(contentType || "").toLowerCase();
   if (type === "image/jpeg") return ".jpg";
   if (type === "image/png") return ".png";
@@ -2890,7 +2889,7 @@ function extensionFromContentType(contentType) {
   return "";
 }
 
-async function saveMergeConflictTask(run, { bugBranchName, dailyBranchName, conflict }) {
+async function saveMergeConflictTask(run: any, { bugBranchName, dailyBranchName, conflict }: any) {
   const content = [
     `# 合并冲突处理任务`,
     ``,
@@ -2918,10 +2917,10 @@ async function saveMergeConflictTask(run, { bugBranchName, dailyBranchName, conf
   return saveWorkflowTaskFile(run, "merge-conflict", content);
 }
 
-async function runIdeMergeConflictProcess(run, handoff) {
+async function runIdeMergeConflictProcess(run: any, handoff: any) {
   if (closing) return;
   const executor = resolveIdeExecutor(run);
-  return new Promise((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     const child = spawn(getIdeExecutable(executor), buildIdeExecArgs(executor, state.config, handoff.workspaceDir, handoff.taskPath), {
       cwd: handoff.workspaceDir,
       env: environment,
@@ -2979,7 +2978,7 @@ async function runIdeMergeConflictProcess(run, handoff) {
   });
 }
 
-async function saveReviewTask(run, round) {
+async function saveReviewTask(run: any, round: any) {
   const content = [
     `# Codex Review 任务`,
     ``,
@@ -3016,8 +3015,8 @@ async function saveReviewTask(run, round) {
   return saveWorkflowTaskFile(run, `review-${round}`, content);
 }
 
-async function saveReviewFixTask(run, round, reviewResult) {
-  const comments = reviewResult.comments.length ? reviewResult.comments.map((comment) => `- ${comment}`).join("\n") : reviewResult.summary;
+async function saveReviewFixTask(run: any, round: any, reviewResult: any) {
+  const comments = reviewResult.comments.length ? reviewResult.comments.map((comment: any) => `- ${comment}`).join("\n") : reviewResult.summary;
   const content = [
     `# Codex Review 修改任务`,
     ``,
@@ -3044,7 +3043,7 @@ async function saveReviewFixTask(run, round, reviewResult) {
   return saveWorkflowTaskFile(run, `review-fix-${round}`, content);
 }
 
-async function saveWorkflowTaskFile(run, label, content, workspaceDirOverride) {
+async function saveWorkflowTaskFile(run: any, label: any, content: any, workspaceDirOverride?: any) {
   const workspaceDir = resolveWorkspaceDir(workspaceDirOverride || state.config.codexWorkspaceDir);
   await ensureWorkspaceDir(workspaceDir);
   const executor = resolveIdeExecutor(run);
@@ -3067,11 +3066,11 @@ async function saveWorkflowTaskFile(run, label, content, workspaceDirOverride) {
   };
 }
 
-function isIdeTaskHandoffAvailable(handoff) {
+function isIdeTaskHandoffAvailable(handoff: any) {
   return Boolean(handoff?.workspaceDir && handoff.taskPath && existsSync(handoff.taskPath));
 }
 
-async function ensureWorkspaceDir(workspaceDir) {
+async function ensureWorkspaceDir(workspaceDir: any) {
   if (!state.config.codexWorkspaceDir) throw new Error("请管理员在租户凭据文件中配置独立的 CODEX_WORKSPACE_DIR");
   if (path.resolve(workspaceDir) !== path.resolve(state.config.codexWorkspaceDir)) throw new Error("流水线工作目录与当前租户配置不一致，请重新生成流水线");
   validateWorkspace(workspaceDir);
@@ -3085,7 +3084,7 @@ async function ensureWorkspaceDir(workspaceDir) {
   throw new Error(`IDE 执行路径不存在或不是目录：${workspaceDir}`);
 }
 
-function updateConfig(body) {
+function updateConfig(body: any) {
   const next = body || {};
 
   state.config = {
@@ -3130,27 +3129,27 @@ function updateConfig(body) {
   };
 }
 
-function hasOwn(object, key) {
+function hasOwn(object: any, key: any) {
   return Object.prototype.hasOwnProperty.call(object, key);
 }
 
-function stringConfig(object, key, fallback) {
+function stringConfig(object: any, key: any, fallback: any) {
   return hasOwn(object, key) ? String(object[key] ?? "").trim() : fallback;
 }
 
-function booleanConfig(object, key, fallback) {
+function booleanConfig(object: any, key: any, fallback: any) {
   return typeof object[key] === "boolean" ? object[key] : fallback;
 }
 
-function numberConfig(object, key, min, max, fallback) {
+function numberConfig(object: any, key: any, min: any, max: any, fallback: any) {
   return hasOwn(object, key) ? clampNumber(object[key], min, max, fallback) : fallback;
 }
 
-function priorityConfig(object, key, fallback) {
+function priorityConfig(object: any, key: any, fallback: any) {
   return hasOwn(object, key) ? normalizePriorityList(object[key]) : fallback;
 }
 
-async function syncBugs({ incremental = false } = {}) {
+async function syncBugs({ incremental = false }: any = {}) {
   state.scheduler.lastRunStatus = "running";
   state.scheduler.lastRunMessage = "正在同步缺陷";
 
@@ -3175,7 +3174,7 @@ async function syncBugs({ incremental = false } = {}) {
     await persistWorkflowState({ immediate: true });
 
     return { ok: true, ...getBootstrap() };
-  } catch (error) {
+  } catch (error: any) {
     state.scheduler.lastRunStatus = "error";
     state.scheduler.lastRunMessage = sanitizeError(error);
     state.scheduler.nextRunAt = nextRunIso();
@@ -3187,7 +3186,7 @@ function issueSource() {
   return createIssueSource({ config: state.config, environment });
 }
 
-function configureScheduler(enabled) {
+function configureScheduler(enabled: any) {
   if (schedulerTimer) {
     clearInterval(schedulerTimer);
     schedulerTimer = null;
@@ -3209,18 +3208,18 @@ function configureScheduler(enabled) {
   }, state.config.intervalMinutes * 60 * 1000);
 }
 
-function mergeBugs(current, updates) {
-  const byId = new Map(current.map((bug) => [bug.id, bug]));
+function mergeBugs(current: any, updates: any) {
+  const byId = new Map<any, any>(current.map((bug: any) => [bug.id, bug]));
   for (const bug of updates) {
     byId.set(bug.id, { ...byId.get(bug.id), ...bug });
   }
   return sortBugsByUpdatedAt([...byId.values()]);
 }
 
-function readJson(req) {
-  return new Promise((resolve, reject) => {
+function readJson(req: any): Promise<any> {
+  return new Promise<any>((resolve, reject) => {
     let data = "";
-    req.on("data", (chunk) => {
+    req.on("data", (chunk: any) => {
       data += chunk;
       if (data.length > 1_000_000) {
         reject(Object.assign(new Error("请求体过大"), { statusCode: 413 }));
@@ -3236,7 +3235,7 @@ function readJson(req) {
         const parsed = JSON.parse(data);
         if (!parsed || typeof parsed !== "object") throw new Error("请求体必须是 JSON 对象");
         resolve(parsed);
-      } catch (error) {
+      } catch (error: any) {
         reject(Object.assign(error, { statusCode: 400 }));
       }
     });
@@ -3244,7 +3243,7 @@ function readJson(req) {
   });
 }
 
-async function readSupplementForm(req) {
+async function readSupplementForm(req: any) {
   const contentType = String(req.headers["content-type"] || "");
   if (contentType.startsWith("multipart/form-data")) {
     return readMultipartForm(req, contentType, maxSupplementUploadBytes);
@@ -3259,15 +3258,15 @@ async function readSupplementForm(req) {
   };
 }
 
-async function readMultipartForm(req, contentType, limitBytes) {
+async function readMultipartForm(req: any, contentType: any, limitBytes: any) {
   const boundary = parseMultipartBoundary(contentType);
   if (!boundary) throw new Error("缺少 multipart boundary。");
 
   const body = await readRequestBuffer(req, limitBytes);
   const boundaryText = `--${boundary}`;
   const rawParts = body.toString("binary").split(boundaryText);
-  const fields = {};
-  const files = [];
+  const fields: any = {};
+  const files: any[] = [];
 
   for (let part of rawParts) {
     if (!part || part === "--" || part === "--\r\n") continue;
@@ -3302,11 +3301,11 @@ async function readMultipartForm(req, contentType, limitBytes) {
   return { fields, files };
 }
 
-function readRequestBuffer(req, limitBytes) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
+function readRequestBuffer(req: any, limitBytes: any): Promise<Buffer> {
+  return new Promise<Buffer>((resolve, reject) => {
+    const chunks: any = [];
     let total = 0;
-    req.on("data", (chunk) => {
+    req.on("data", (chunk: any) => {
       total += chunk.length;
       if (total > limitBytes) {
         reject(Object.assign(new Error("请求体过大"), { statusCode: 413 }));
@@ -3320,13 +3319,13 @@ function readRequestBuffer(req, limitBytes) {
   });
 }
 
-function parseMultipartBoundary(contentType) {
+function parseMultipartBoundary(contentType: any) {
   const match = String(contentType || "").match(/boundary=(?:"([^"]+)"|([^;]+))/i);
   return match ? (match[1] || match[2] || "").trim() : "";
 }
 
-function parseMultipartHeaders(headerText) {
-  const headers = {};
+function parseMultipartHeaders(headerText: any) {
+  const headers: any = {};
   for (const line of String(headerText || "").split(/\r?\n/)) {
     const index = line.indexOf(":");
     if (index <= 0) continue;
@@ -3335,8 +3334,8 @@ function parseMultipartHeaders(headerText) {
   return headers;
 }
 
-function parseContentDisposition(value) {
-  const result = {};
+function parseContentDisposition(value: any) {
+  const result: any = {};
   for (const part of String(value || "").split(";")) {
     const [rawKey, ...rawRest] = part.split("=");
     const key = rawKey.trim().toLowerCase();
@@ -3350,12 +3349,12 @@ function parseContentDisposition(value) {
   return result;
 }
 
-function sendJson(res, status, data) {
+function sendJson(res: any, status: any, data: any) {
   if (!closing && status >= 200 && status < 300) workflowStore.scheduleSave(state.storageUserKey, buildUserSnapshot(state));
   sendText(res, status, JSON.stringify(data), "application/json; charset=utf-8");
 }
 
-function sendText(res, status, content, type) {
+function sendText(res: any, status: any, content: any, type: any) {
   res.writeHead(status, {
     "Content-Type": type,
     "Cache-Control": "no-store"
@@ -3363,9 +3362,9 @@ function sendText(res, status, content, type) {
   res.end(content);
 }
 
-function mimeType(filePath) {
+function mimeType(filePath: any) {
   const ext = path.extname(filePath);
-  const types = {
+  const types: any = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
@@ -3374,13 +3373,13 @@ function mimeType(filePath) {
   return types[ext] || "application/octet-stream";
 }
 
-function clampNumber(value, min, max, fallback) {
+function clampNumber(value: any, min: any, max: any, fallback: any) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.min(max, Math.max(min, number));
 }
 
-function parseBooleanConfig(persistedValue, envValue, fallback) {
+function parseBooleanConfig(persistedValue: any, envValue: any, fallback: any) {
   if (typeof persistedValue === "boolean") return persistedValue;
   if (typeof envValue === "string") {
     return /^(true|1|yes|on)$/i.test(envValue.trim());
@@ -3388,7 +3387,7 @@ function parseBooleanConfig(persistedValue, envValue, fallback) {
   return fallback;
 }
 
-function normalizePriorityList(value) {
+function normalizePriorityList(value: any) {
   const items = Array.isArray(value) ? value : String(value || "P2,P3").split(/[,，\s]+/);
   const priorities = items
     .map((item) => String(item).trim().toUpperCase())
@@ -3396,13 +3395,13 @@ function normalizePriorityList(value) {
   return priorities.length ? [...new Set(priorities)] : ["P2", "P3"];
 }
 
-function resolveWorkspaceDir(value) {
+function resolveWorkspaceDir(value: any) {
   const raw = String(value || "").trim();
   if (!raw) return __dirname;
   return path.resolve(__dirname, raw);
 }
 
-function normalizeUrl(value, fallback) {
+function normalizeUrl(value: any, fallback: any) {
   const raw = String(value || "").trim();
   if (!raw) return fallback;
   try {
@@ -3413,7 +3412,7 @@ function normalizeUrl(value, fallback) {
   }
 }
 
-function normalizeGitRef(value, fallback = "main") {
+function normalizeGitRef(value: any, fallback = "main") {
   const raw = String(value || "").trim();
   const safeFallback = String(fallback || "main").trim() || "main";
   if (!raw) return safeFallback;
@@ -3423,7 +3422,7 @@ function normalizeGitRef(value, fallback = "main") {
   return raw;
 }
 
-function sortBugsByUpdatedAt(bugs) {
+function sortBugsByUpdatedAt(bugs: any) {
   return [...bugs].sort((left, right) => Date.parse(right.updatedAt.replace(" ", "T")) - Date.parse(left.updatedAt.replace(" ", "T")));
 }
 
@@ -3431,11 +3430,11 @@ function nextRunIso() {
   return new Date(Date.now() + state.config.intervalMinutes * 60 * 1000).toISOString();
 }
 
-function sleep(ms) {
+function sleep(ms: any) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
 }
 
-function sanitizeError(error) {
+function sanitizeError(error: any) {
   let message = String(error.message || error);
   for (const key of Object.keys(environment).filter((key) => /KEY|SECRET|TOKEN|COOKIE/.test(key))) {
     if (environment[key]) message = message.split(environment[key]).join("[redacted]");
@@ -3443,7 +3442,7 @@ function sanitizeError(error) {
   return message;
 }
 
-function safeFilePart(value) {
+function safeFilePart(value: any) {
   return String(value || "bug")
     .trim()
     .replace(/[^a-zA-Z0-9._-]+/g, "-")
@@ -3457,13 +3456,13 @@ function hasBackgroundWork() {
 }
 
 const agentHistory = createAgentHistory({ environment, tenantId: tenant.id, rootDir, workspace: () => state.config.codexWorkspaceDir });
-const sessionDelivery = createSessionDelivery({ history: agentHistory, environment });
+const sessionDelivery: any = createSessionDelivery({ history: agentHistory, environment });
 const taskCenter = createTaskCenter({ database, tenantId: tenant.id, history: agentHistory });
 const codexExecution = createCodexExecution({ database, tenantId: tenant.id, workspace: () => state.config.codexWorkspaceDir, environment });
 
 return {
   workspace: () => state.config.codexWorkspaceDir,
-  async handleApi(req, res, url, principal) {
+  async handleApi(req: any, res: any, url: any, principal: any) {
     const historyRead = req.method === "GET" && (url.pathname === "/api/agent-sessions" || url.pathname.startsWith("/api/agent-sessions/") || url.pathname === "/api/sessions" || url.pathname.startsWith("/api/sessions/"));
     const mutation = !historyRead && (req.method !== "GET" || url.pathname !== "/api/bootstrap");
     if (mutation && mutationPending) {
@@ -3473,7 +3472,7 @@ return {
     }
     if (mutation) mutationPending = true;
     try { await requestIdentity.run(principal, () => handleApi(req, res, url)); }
-    catch (error) { error.message = sanitizeError(error); throw error; }
+    catch (error: any) { error.message = sanitizeError(error); throw error; }
     finally { if (mutation) mutationPending = false; }
   },
   async close() {

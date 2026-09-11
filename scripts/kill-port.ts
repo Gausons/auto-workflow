@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { execFileSync } from "node:child_process";
 
 const args = process.argv.slice(2);
@@ -30,12 +29,12 @@ for (const pid of pids) {
   try {
     process.kill(Number(pid), "SIGTERM");
     console.log(`Sent SIGTERM to ${pid}.`);
-  } catch (error) {
+  } catch (error: any) {
     console.error(`Failed to kill ${pid}: ${error.message}`);
   }
 }
 
-function findPids(targetPort) {
+function findPids(targetPort: any) {
   try {
     const output = execFileSync("lsof", ["-ti", `tcp:${targetPort}`], {
       encoding: "utf8",

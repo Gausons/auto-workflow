@@ -1,4 +1,3 @@
-// @ts-nocheck
 import path from 'node:path';
 import { mkdir, readFile, readdir, writeFile, rename } from 'node:fs/promises';
 import { CodexRunner } from './codexExecution.js';
@@ -6,17 +5,20 @@ import { CodexRunner } from './codexExecution.js';
 // Journals the last known native thread before reconnecting. Uncertain launches
 // are reported for review rather than retried and possibly duplicated.
 export class RemoteCodexWorker {
-  constructor({ request, deviceId, directory, workspace, runnerFactory }) {
+  pending: any; saved: any; queue: any; loaded: any; storageError: any; runner: any; update: any;
+  request: any; deviceId!: string; directory!: string; workspace!: string;
+
+  constructor({ request, deviceId, directory, workspace, runnerFactory }: any) {
     Object.assign(this, { request, deviceId, directory, workspace });
     this.pending = new Map(); this.saved = new Map(); this.queue = Promise.resolve(); this.loaded = false;
-    const update = job => {
+    const update = (job: any) => {
       this.saved.set(job.id, structuredClone(job)); this.pending.set(job.id, structuredClone(job));
-      this.queue = this.queue.then(() => this.persist(job)).catch(error => { this.storageError = error; });
+      this.queue = this.queue.then(() => this.persist(job)).catch((error: any) => { this.storageError = error; });
     };
     this.runner = runnerFactory ? runnerFactory(update) : new CodexRunner({ executable: process.env.CODEX_EXECUTABLE || 'codex', onUpdate: update });
     this.update = update;
   }
-  async persist(job) {
+  async persist(job: any) {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const file = path.join(this.directory, job.id + '.json');
     await writeFile(file + '.pending', JSON.stringify(job), { mode: 0o600 });
@@ -44,11 +46,11 @@ export class RemoteCodexWorker {
     }
     await this.flush();
     const snapshot = await this.request('GET');
-    for (const job of (snapshot.executions || []).filter(j => j.deviceId === this.deviceId)) {
+    for (const job of (snapshot.executions || []).filter((j: any) => j.deviceId === this.deviceId)) {
       if (!/^[a-f0-9-]{36}$/.test(job.id)) throw new Error('执行标识无效');
       if (job.status === 'queued' && !this.saved.has(job.id)) {
         const projects = await this.projects();
-        if (!projects.some(p => p.id === job.projectId && p.cwd === job.cwd)) throw new Error('待执行项目不在本机允许的工作目录内');
+        if (!projects.some((p: any) => p.id === job.projectId && p.cwd === job.cwd)) throw new Error('待执行项目不在本机允许的工作目录内');
         const { job: claimed } = await this.request('POST', { action: 'claim', executionId: job.id }, '/api/task-center/execution-action');
         // Persist the claim before invoking thread/start. A crash here remains unknown.
         this.saved.set(job.id, claimed); await this.persist(claimed);
@@ -63,7 +65,7 @@ export class RemoteCodexWorker {
           else if (job.control.action === 'respond') await this.runner.respond(job.id, job.control);
           else if (job.control.action === 'reconcile') await this.runner.reconcile(current);
           this.update({ ...this.saved.get(job.id), controlAck: job.control.id, controlError: null });
-        } catch (error) { this.update({ ...this.saved.get(job.id), controlAck: job.control.id, controlError: error.message }); }
+        } catch (error: any) { this.update({ ...this.saved.get(job.id), controlAck: job.control.id, controlError: error.message }); }
       }
     }
     await this.flush();

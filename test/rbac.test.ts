@@ -1,4 +1,3 @@
-// @ts-nocheck
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { once } from 'node:events';
@@ -17,12 +16,14 @@ test('organization members, role enforcement, cross-organization access and imme
   const app = createApp({ rootDir, environment: { DEFAULT_TENANT_TOKEN: setupToken } });
   try {
     app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
-    const base = `http://127.0.0.1:${app.server.address().port}`;
-    const request = async (token, endpoint, method = 'GET', body) => {
+    const address = app.server.address();
+    assert.ok(address && typeof address === 'object');
+    const base = `http://127.0.0.1:${address.port}`;
+    const request = async (token: any, endpoint: any, method = 'GET', body?: any) => {
       const response = await fetch(base + endpoint, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
       return { status: response.status, data: await response.json() };
     };
-    const login = async (username, userPassword = password, tenantId = 'default') => {
+    const login = async (username: any, userPassword = password, tenantId = 'default') => {
       const result = await request(null, '/api/auth/login', 'POST', { tenantId, username, password: userPassword });
       assert.equal(result.status, 200, JSON.stringify(result.data)); return result.data;
     };
@@ -35,7 +36,7 @@ test('organization members, role enforcement, cross-organization access and imme
     assert.ok(owner.permissions.includes('members.manage'));
     assert.equal((await request(setupToken, '/api/auth/setup')).status, 409);
     assert.equal((await request(setupToken, '/api/config', 'PUT', { assignee: 'bypass' })).status, 401);
-    const users = {};
+    const users: any = {};
     for (const role of ['admin', 'operator', 'viewer']) {
       const created = await request(owner.token, '/api/organization/members', 'POST', { username: role, password, role });
       assert.equal(created.status, 201);
@@ -101,8 +102,8 @@ test('organization members, role enforcement, cross-organization access and imme
     assert.equal((await request(other.token, '/api/organization/members')).data.members.length, 1);
     assert.equal((await request(other.token, '/api/bootstrap')).data.config.assignee === 'admin-assignee', false);
     const audit = (await request(owner.token, '/api/organization/audit')).data.events;
-    assert.ok(audit.some((event) => event.action === 'member.password_reset'));
-    assert.ok(audit.some((event) => event.action === 'api.request' && event.actorName === 'admin'));
+    assert.ok(audit.some((event: any) => event.action === 'member.password_reset'));
+    assert.ok(audit.some((event: any) => event.action === 'api.request' && event.actorName === 'admin'));
     assert.ok(!JSON.stringify(audit).includes(password));
 
     const secondOwner = await request(owner.token, '/api/organization/members', 'POST', { username: 'successor', password, role: 'owner' });
@@ -129,7 +130,7 @@ test('version 1 migration preserves tenant data; salted passwords, session expir
     assert.equal(db.readSettings('test').config.assignee, 'legacy-line');
     assert.equal(db.createStore('test').readUserState('person').bugs[0].title, 'preserved');
     assert.equal(db.hasUsers('test'), false);
-    assert.equal(db.authenticate(setupToken).id, 'test');
+    assert.equal(db.authenticate(setupToken)!.id, 'test');
     const owner = await db.createUser('test', { username: 'owner', password }, { bootstrap: true });
     const admin = await db.createUser('test', { username: 'admin', password, role: 'admin' }, { actor: owner });
     const pending = db.createUser('test', { username: 'racing-user', password, role: 'viewer' }, { actor: admin });
@@ -139,11 +140,11 @@ test('version 1 migration preserves tenant data; salted passwords, session expir
     const session = await db.login('test', 'owner', password);
     raw = new DatabaseSync(filename);
     const hashes = raw.prepare('SELECT password_hash FROM organization_users').all();
-    assert.ok(hashes.every((row) => row.password_hash.startsWith('scrypt$') && !row.password_hash.includes(password)));
-    assert.notEqual(hashes[0].password_hash, hashes[1].password_hash);
+    assert.ok(hashes.every((row) => String(row.password_hash).startsWith('scrypt$') && !String(row.password_hash).includes(password)));
+    assert.notEqual(hashes[0]!.password_hash, hashes[1]!.password_hash);
     raw.prepare('UPDATE user_sessions SET expires_at = ?').run(Date.now() - 1);
     assert.equal(db.authenticateSession(session.token), null);
-    assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 3);
+    assert.equal(raw.prepare('PRAGMA user_version').get()?.user_version, 3);
     raw.close();
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
 });

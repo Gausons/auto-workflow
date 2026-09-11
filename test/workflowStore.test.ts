@@ -1,4 +1,3 @@
-// @ts-nocheck
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
@@ -50,7 +49,7 @@ test("workflow store persists and reloads user scoped state", async () => {
   const userKey = "test-1359";
 
   try {
-    const snapshot = {
+    const snapshot: any = {
       bugs: [{ id: "bug-1", code: "BIP-BUG-1", title: "demo" }],
       runs: [{ id: "run-1", bugId: "bug-1", bugCode: "BIP-BUG-1", status: "ready", logs: [] }],
       executionRecords: [createExecutionRecord({ event: "run-created", bugCode: "BIP-BUG-1", message: "created" })]

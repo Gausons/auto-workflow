@@ -17,11 +17,11 @@ async function fixture(t: TestContext, scope = 'all') {
   t.after(() => rm(root, { recursive: true, force: true }));
   const workspace = path.join(root, 'workspace'), records = path.join(root, 'records');
   await mkdir(workspace); await mkdir(records);
-  const environment = { IDE_HISTORY_CODEX_DIR: records, IDE_HISTORY_CLAUDE_DIR: records, IDE_HISTORY_SCOPE: scope, OPENAI_API_KEY: 'synthetic-private-credential' };
+  const environment: any = { IDE_HISTORY_CODEX_DIR: records, IDE_HISTORY_CLAUDE_DIR: records, IDE_HISTORY_SCOPE: scope, OPENAI_API_KEY: 'synthetic-private-credential' };
   const history = createAgentHistory({ tenantId: 'test', environment, workspace: () => workspace });
   const service = createSessionDelivery({ history, environment });
   const file = path.join(records, 'session.jsonl');
-  const meta = { type: 'session_meta', timestamp, payload: { id: 'task-a', cwd: workspace } };
+  const meta: any = { type: 'session_meta', timestamp, payload: { id: 'task-a', cwd: workspace } };
   await writeFile(file, serialize([meta]));
   const id = (await service.list(new URLSearchParams({ agent: 'codex' }))).sessions[0]!.id;
   return { root, records, workspace, file, meta, environment, history, service, id };

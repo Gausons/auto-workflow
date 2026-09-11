@@ -1,9 +1,8 @@
-// @ts-nocheck
 import assert from "node:assert/strict";
 import test from "node:test";
 import { classifyBugRoute, createCodexTaskPacket, extractIdeReports, hydrateWorkflowIdeReports, normalizeBugInfo, runFixWorkflow, updateWorkflowOperationLogOutput } from "../src/workflowEngine.js";
 
-const bug = {
+const bug: any = {
   id: "bug-1",
   aid: "bug-1",
   code: "KFGL-TM-BUG-1",
@@ -98,7 +97,7 @@ test("classifyBugRoute allows P2 defects into IDE autonomous fix", () => {
 });
 
 test("classifyBugRoute treats session and conversation defects as P1", () => {
-  const sessionBug = {
+  const sessionBug: any = {
     ...bug,
     title: "新建会话后对话内容未同步"
   };
@@ -116,12 +115,12 @@ test("runFixWorkflow returns a manual execution pipeline", () => {
   assert.equal(run.validation.command, "IDE Agent 自动执行仓库验证命令");
   assert.equal(run.review.required, true);
   assert.ok(run.steps.length >= 11);
-  assert.equal(run.steps.find((step) => step.id === "infoCompletion").status, "attention");
-  assert.equal(run.steps.find((step) => step.id === "routing").status, "done");
-  assert.equal(run.steps.find((step) => step.id === "analysis").status, "ready");
-  assert.equal(run.steps.find((step) => step.id === "mergeDaily").status, "pending");
-  assert.equal(run.steps.find((step) => step.id === "humanReview").status, "pending");
-  assert.equal(run.steps.find((step) => step.id === "releaseClose").status, "pending");
+  assert.equal(run.steps.find((step: any) => step.id === "infoCompletion").status, "attention");
+  assert.equal(run.steps.find((step: any) => step.id === "routing").status, "done");
+  assert.equal(run.steps.find((step: any) => step.id === "analysis").status, "ready");
+  assert.equal(run.steps.find((step: any) => step.id === "mergeDaily").status, "pending");
+  assert.equal(run.steps.find((step: any) => step.id === "humanReview").status, "pending");
+  assert.equal(run.steps.find((step: any) => step.id === "releaseClose").status, "pending");
   assert.equal(run.operationLog.item.conversation_id, run.id);
   assert.equal(run.operationLog.item.chat_source, "yonclaw_cloud");
   assert.match(run.operationLog.item.question, /保存配置失败/);
@@ -129,7 +128,7 @@ test("runFixWorkflow returns a manual execution pipeline", () => {
 });
 
 test("runFixWorkflow uses injected model routing result", () => {
-  const route = {
+  const route: any = {
     enabled: true,
     source: "model",
     model: "gpt-5.5",
@@ -144,22 +143,22 @@ test("runFixWorkflow uses injected model routing result", () => {
   assert.equal(run.routing.source, "model");
   assert.equal(run.routing.priority, "P1");
   assert.match(run.taskPacket, /分类来源：model（gpt-5\.5）/);
-  assert.equal(run.steps.find((step) => step.id === "routing").status, "attention");
-  assert.equal(run.steps.find((step) => step.id === "analysis").status, "blocked");
+  assert.equal(run.steps.find((step: any) => step.id === "routing").status, "attention");
+  assert.equal(run.steps.find((step: any) => step.id === "analysis").status, "blocked");
 });
 
 test("runFixWorkflow returns an auto execution pipeline", () => {
   const run = runFixWorkflow(bug, { lineId: "line-1" }, { executionMode: "auto" });
   assert.equal(run.executionMode, "auto");
   assert.equal(run.status, "running");
-  assert.equal(run.steps.find((step) => step.id === "analysis").status, "running");
+  assert.equal(run.steps.find((step: any) => step.id === "analysis").status, "running");
 });
 
 test("runFixWorkflow can generate an auto pipeline without starting execution", () => {
   const run = runFixWorkflow(bug, { lineId: "line-1" }, { executionMode: "auto", startExecution: false });
   assert.equal(run.executionMode, "auto");
   assert.equal(run.status, "ready");
-  assert.equal(run.steps.find((step) => step.id === "analysis").status, "ready");
+  assert.equal(run.steps.find((step: any) => step.id === "analysis").status, "ready");
 });
 
 test("runFixWorkflow records selected IDE executor", () => {

@@ -1,12 +1,11 @@
-// @ts-nocheck
 // Personnel are configured per organization; no built-in employee data.
-export const DEFAULT_ASSIGNMENT_PEOPLE = [];
+export const DEFAULT_ASSIGNMENT_PEOPLE: any[] = [];
 
 export const ASSIGNMENT_PEOPLE = DEFAULT_ASSIGNMENT_PEOPLE;
 
-export function normalizeAssignmentPeople(value, { fallback = DEFAULT_ASSIGNMENT_PEOPLE } = {}) {
+export function normalizeAssignmentPeople(value: any, { fallback = DEFAULT_ASSIGNMENT_PEOPLE }: any = {}) {
   const rawPeople = Array.isArray(value) ? value : value?.people;
-  const people = [];
+  const people: any[] = [];
   const seen = new Set();
 
   for (const raw of Array.isArray(rawPeople) ? rawPeople : []) {
@@ -18,12 +17,12 @@ export function normalizeAssignmentPeople(value, { fallback = DEFAULT_ASSIGNMENT
     people.push({ name, employeeId, responsibility });
   }
 
-  return people.length ? people : fallback.map((person) => ({ ...person }));
+  return people.length ? people : fallback.map((person: any) => ({ ...person }));
 }
 
 export function fallbackAssignmentPerson(people = DEFAULT_ASSIGNMENT_PEOPLE) {
   const normalizedPeople = normalizeAssignmentPeople(people);
-  return normalizedPeople.find((person) => /兜底|默认|其他/.test(person.responsibility))
+  return normalizedPeople.find((person: any) => /兜底|默认|其他/.test(person.responsibility))
     || normalizedPeople[0];
 }
 
@@ -44,7 +43,7 @@ export function buildAssignmentSystemPrompt(people = DEFAULT_ASSIGNMENT_PEOPLE) 
   ].join("\n");
 }
 
-export function buildAssignmentUserPayload(bug, people = DEFAULT_ASSIGNMENT_PEOPLE) {
+export function buildAssignmentUserPayload(bug: any, people = DEFAULT_ASSIGNMENT_PEOPLE) {
   return {
     bug: {
       code: bug.code,
@@ -58,7 +57,7 @@ export function buildAssignmentUserPayload(bug, people = DEFAULT_ASSIGNMENT_PEOP
       description: bug.description,
       expected: bug.expected,
       actual: bug.actual,
-      attachments: (bug.attachments || []).map((attachment) => ({
+      attachments: (bug.attachments || []).map((attachment: any) => ({
         name: attachment.name,
         url: attachment.url,
         thumbnailUrl: attachment.thumbnailUrl,
@@ -77,7 +76,7 @@ export function buildAssignmentUserPayload(bug, people = DEFAULT_ASSIGNMENT_PEOP
   };
 }
 
-export function applyAssignmentBusinessRules(bug, recommendation, people = DEFAULT_ASSIGNMENT_PEOPLE) {
+export function applyAssignmentBusinessRules(bug: any, recommendation: any, people = DEFAULT_ASSIGNMENT_PEOPLE) {
   const normalizedPeople = normalizeAssignmentPeople(people);
   const previewOwner = findPreviewOwner(normalizedPeople);
   if (!previewOwner || !isPreviewBug(bug)) return recommendation;
@@ -92,13 +91,13 @@ export function applyAssignmentBusinessRules(bug, recommendation, people = DEFAU
   };
 }
 
-function findPreviewOwner(people) {
-  const candidates = people.filter((person) => !/不包括[^，。,；;]*预览/.test(person.responsibility));
-  return candidates.find((person) => /预览能力|会话文件预览/.test(person.responsibility))
-    || candidates.find((person) => /文件预览|附件预览/.test(person.responsibility));
+function findPreviewOwner(people: any) {
+  const candidates = people.filter((person: any) => !/不包括[^，。,；;]*预览/.test(person.responsibility));
+  return candidates.find((person: any) => /预览能力|会话文件预览/.test(person.responsibility))
+    || candidates.find((person: any) => /文件预览|附件预览/.test(person.responsibility));
 }
 
-function isPreviewBug(bug) {
+function isPreviewBug(bug: any) {
   const text = [
     bug?.title,
     bug?.description,
@@ -106,17 +105,17 @@ function isPreviewBug(bug) {
     bug?.actual,
     bug?.category,
     bug?.product,
-    ...(bug?.attachments || []).map((attachment) => `${attachment.name || ""} ${attachment.url || ""}`)
+    ...(bug?.attachments || []).map((attachment: any) => `${attachment.name || ""} ${attachment.url || ""}`)
   ].filter(Boolean).join(" ");
 
   return /预览|文件查看|附件查看|打开文件|查看文件|preview|file\s*preview/i.test(text);
 }
 
-export function normalizeAssignmentRecommendation(value, { model = "", source = "model", people = DEFAULT_ASSIGNMENT_PEOPLE } = {}) {
+export function normalizeAssignmentRecommendation(value: any, { model = "", source = "model", people = DEFAULT_ASSIGNMENT_PEOPLE }: any = {}) {
   const normalizedPeople = normalizeAssignmentPeople(people);
   const assigneeId = String(value?.assigneeId || "").trim();
-  const person = normalizedPeople.find((item) => item.employeeId === assigneeId)
-    || normalizedPeople.find((item) => item.name === value?.assigneeName)
+  const person = normalizedPeople.find((item: any) => item.employeeId === assigneeId)
+    || normalizedPeople.find((item: any) => item.name === value?.assigneeName)
     || fallbackAssignmentPerson(normalizedPeople);
   if (!person) throw new Error("请先配置分配人员。");
   const confidence = ["high", "medium", "low"].includes(value?.confidence) ? value.confidence : "low";
@@ -137,7 +136,7 @@ export function normalizeAssignmentRecommendation(value, { model = "", source = 
   };
 }
 
-export function isAssignmentCandidate(bug, isAssignableStatus = () => true) {
+export function isAssignmentCandidate(bug: any, isAssignableStatus: (status: any) => boolean = () => true) {
   const recommendation = bug?.assignmentRecommendation;
   return isAssignableStatus(bug?.status)
     && Boolean(recommendation?.assigneeId)
@@ -153,11 +152,11 @@ export function buildAssignmentJsonSchema(people = DEFAULT_ASSIGNMENT_PEOPLE) {
     properties: {
       assigneeId: {
         type: "string",
-        enum: normalizedPeople.map((person) => person.employeeId)
+        enum: normalizedPeople.map((person: any) => person.employeeId)
       },
       assigneeName: {
         type: "string",
-        enum: normalizedPeople.map((person) => person.name)
+        enum: normalizedPeople.map((person: any) => person.name)
       },
       confidence: {
         type: "string",

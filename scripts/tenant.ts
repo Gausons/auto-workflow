@@ -1,4 +1,3 @@
-// @ts-nocheck
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from '../src/database.js';
@@ -26,8 +25,8 @@ try {
     console.table(database.listUsers(id));
   } else if (command === 'reset-password' && id && nameParts[0]) {
     const members = database.listUsers(id);
-    const target = members.find((member) => member.username === nameParts[0].trim().toLowerCase());
-    const owner = members.find((member) => member.role === 'owner' && member.enabled);
+    const target = members.find((member: any) => member.username === nameParts[0].trim().toLowerCase());
+    const owner = members.find((member: any) => member.role === 'owner' && member.enabled);
     if (!target || !owner) throw new Error('成员不存在或组织尚未初始化');
     const password = generateToken();
     await database.resetPassword(id, target.id, password, owner);
@@ -36,7 +35,7 @@ try {
   } else {
     throw new Error('用法：npm run tenant -- list | add <id> [名称] | rotate <id> | migrate [id] | users <id> | reset-password <id> <用户名>');
   }
-} catch (error) {
+} catch (error: any) {
   console.error(error.message);
   process.exitCode = 1;
 } finally { database.close(); }

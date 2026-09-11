@@ -151,7 +151,7 @@ export function createSessionDelivery({ history, environment = {} }: { history: 
         const updated = await capture(source, handle, identity, size);
         snapshot = { ...updated, offset: snapshot.offset, line: snapshot.line };
       }
-      const startSnapshot = { ...snapshot, offset: 0, line: 0 };
+      const startSnapshot: any = { ...snapshot, offset: 0, line: 0 };
       let offset = snapshot.offset, lineNumber = snapshot.line, bytes = 0;
       const events: Record<string, unknown>[] = [];
       for await (const line of lines(handle, snapshot.size, offset, lineNumber)) {

@@ -1,10 +1,9 @@
-// @ts-nocheck
 import path from 'node:path';
 import os from 'node:os';
 
-const text = (value) => typeof value === 'string' ? value : JSON.stringify(value ?? '');
+const text = (value: any) => typeof value === 'string' ? value : JSON.stringify(value ?? '');
 // Remove only known context envelopes; keep actual user text outside them.
-export function cleanUserContext(value) {
+export function cleanUserContext(value: any) {
   let result = value;
   for (const tag of ['recommended_plugins', 'environment_context', 'permissions instructions', 'skills_instructions', 'app-context']) {
     result = result.replace(new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, 'g'), '');
@@ -14,9 +13,9 @@ export function cleanUserContext(value) {
   }
   return result.trim();
 }
-const blocksText = (content) => typeof content === 'string' ? content : (Array.isArray(content) ? content : [])
+const blocksText = (content: any) => typeof content === 'string' ? content : (Array.isArray(content) ? content : [])
   .map((block) => ['text', 'input_text', 'output_text'].includes(block?.type) ? block.text : '').filter(Boolean).join('\n');
-export function imageAttachments(content) {
+export function imageAttachments(content: any) {
   return (Array.isArray(content) ? content : []).filter((b) => ['image', 'input_image'].includes(b?.type)).map((b) => {
     const source = b.source;
     const url = typeof b.image_url === 'string' ? b.image_url : b.image_url?.url;
@@ -26,21 +25,21 @@ export function imageAttachments(content) {
     return { unavailable: true, alt: '图片未保存为可预览数据，或超过 12 MiB' };
   });
 }
-const entry = (role, content, timestamp, extra = {}) => {
+const entry = (role: any, content: any, timestamp: any, extra: any = {}) => {
   const value = role === 'user' ? cleanUserContext(text(content)) : text(content);
   return { role, text: value.length > 24000 ? value.slice(0, 24000) + '\n[内容超过 24,000 字符，已截断]' : value, timestamp, ...extra };
 };
-const messageEntry = (role, content, timestamp) => entry(role, blocksText(content), timestamp, { images: imageAttachments(content) });
+const messageEntry = (role: any, content: any, timestamp: any) => entry(role, blocksText(content), timestamp, { images: imageAttachments(content) });
 
 // Each adapter returns metadata patches and normalized entries; storage, tenancy,
 // pagination and HTTP/UI stay independent of the agent's on-disk schema.
-export const codexHistoryAdapter = {
+export const codexHistoryAdapter: any = {
   id: 'codex', label: 'Codex',
-  roots(env, tenantId) {
+  roots(env: any, tenantId: any) {
     const home = env.CODEX_HOME || path.join(env.HOME || os.homedir(), '.codex');
     return env.IDE_HISTORY_CODEX_DIR ? [env.IDE_HISTORY_CODEX_DIR] : tenantId === 'default' ? [path.join(home, 'sessions'), path.join(home, 'archived_sessions')] : [];
   },
-  decode(row) {
+  decode(row: any) {
     const p = row.payload || {}, timestamp = row.timestamp;
     if (row.type === 'session_meta') return { id: p.id, cwd: p.cwd, createdAt: p.timestamp || timestamp, branch: p.git?.branch };
     if (row.type === 'turn_context') return { cwd: p.cwd, model: p.model };
@@ -59,14 +58,14 @@ export const codexHistoryAdapter = {
   }
 };
 
-export const claudeHistoryAdapter = {
+export const claudeHistoryAdapter: any = {
   id: 'claude', label: 'Claude Code',
-  roots(env, tenantId) {
+  roots(env: any, tenantId: any) {
     return env.IDE_HISTORY_CLAUDE_DIR ? [env.IDE_HISTORY_CLAUDE_DIR] : tenantId === 'default' ? [path.join(env.CLAUDE_CONFIG_DIR || path.join(env.HOME || os.homedir(), '.claude'), 'projects')] : [];
   },
-  decode(row) {
+  decode(row: any) {
     // Sub-agent files are indexed independently by their own file identity.
-    const result = { id: row.sessionId, cwd: row.cwd, branch: row.gitBranch, model: row.message?.model };
+    const result: any = { id: row.sessionId, cwd: row.cwd, branch: row.gitBranch, model: row.message?.model };
     if (row.type === 'custom-title') result.title = row.customTitle;
     if (row.type === 'summary') result.title = row.summary;
     if (!['user', 'assistant'].includes(row.type)) return result;

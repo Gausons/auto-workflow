@@ -1,51 +1,51 @@
-// @ts-nocheck
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
-import { promisify } from 'node:util';
 import { ROLES, httpError } from './rbac.js';
 
-const derive = promisify(scrypt);
-const digest = (value) => createHash('sha256').update(value).digest('hex');
-const scryptOptions = { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+const derive = (password: string, salt: string): Promise<Buffer> => new Promise((resolve, reject) => {
+  scrypt(password, salt, 64, scryptOptions, (error, key) => error ? reject(error) : resolve(key));
+});
+const digest = (value: any) => createHash('sha256').update(value).digest('hex');
+const scryptOptions: any = { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 const PUBLIC_COLUMNS = 'id, tenant_id AS tenantId, username, display_name AS displayName, role, enabled, created_at AS createdAt, updated_at AS updatedAt';
 export const SESSION_DURATION_MS = 24 * 60 * 60 * 1000;
 
-export async function hashPassword(password) {
+export async function hashPassword(password: any) {
   if (typeof password !== 'string' || password.length < 12 || password.length > 128) throw httpError(400, '密码长度必须为 12–128 个字符');
   const salt = randomBytes(16).toString('hex');
-  const key = await derive(password, salt, 64, scryptOptions);
+  const key = await derive(password, salt);
   return `scrypt$${salt}$${key.toString('hex')}`;
 }
 
-async function verifyPassword(password, encoded) {
+async function verifyPassword(password: any, encoded: any) {
   // Also perform password derivation for unknown usernames to avoid a fast enumeration path.
   const [, salt, expected] = (encoded || `scrypt$${'0'.repeat(32)}$${'0'.repeat(128)}`).split('$');
-  const key = await derive(typeof password === 'string' ? password : '', salt, 64, scryptOptions);
+  const key = await derive(typeof password === 'string' ? password : '', salt);
   return timingSafeEqual(key, Buffer.from(expected, 'hex')) && Boolean(encoded);
 }
 
-export function createIdentityStore(db, transaction) {
-  const getUser = (tenantId, id) => db.prepare(`SELECT ${PUBLIC_COLUMNS} FROM organization_users WHERE tenant_id = ? AND id = ?`).get(tenantId, id);
-  const listUsers = (tenantId) => db.prepare(`SELECT ${PUBLIC_COLUMNS} FROM organization_users WHERE tenant_id = ? ORDER BY created_at, id`).all(tenantId);
-  const hasUsers = (tenantId) => Boolean(db.prepare('SELECT 1 FROM organization_users WHERE tenant_id = ? LIMIT 1').get(tenantId));
+export function createIdentityStore(db: any, transaction: any) {
+  const getUser = (tenantId: any, id: any) => db.prepare(`SELECT ${PUBLIC_COLUMNS} FROM organization_users WHERE tenant_id = ? AND id = ?`).get(tenantId, id);
+  const listUsers = (tenantId: any) => db.prepare(`SELECT ${PUBLIC_COLUMNS} FROM organization_users WHERE tenant_id = ? ORDER BY created_at, id`).all(tenantId);
+  const hasUsers = (tenantId: any) => Boolean(db.prepare('SELECT 1 FROM organization_users WHERE tenant_id = ? LIMIT 1').get(tenantId));
 
-  function audit(tenantId, actor, action, target = '', detail = {}) {
+  function audit(tenantId: any, actor: any, action: any, target = '', detail: any = {}) {
     db.prepare('INSERT INTO audit_events(tenant_id, actor_id, actor_name, action, target, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(tenantId, actor?.id || null, actor?.username || 'system', action, target, JSON.stringify(detail), new Date().toISOString());
   }
-  function liveActor(tenantId, actor) {
+  function liveActor(tenantId: any, actor: any) {
     const current = actor && getUser(tenantId, actor.id);
     if (!current?.enabled || !['owner', 'admin'].includes(current.role)) throw httpError(403, '没有成员管理权限');
     return current;
   }
-  function validateRole(role) {
+  function validateRole(role: any) {
     if (!Object.hasOwn(ROLES, role)) throw httpError(400, '无效的成员角色');
   }
-  function guardTarget(actor, target, nextRole) {
+  function guardTarget(actor: any, target: any, nextRole: any) {
     if (actor.role === 'admin' && (['owner', 'admin'].includes(target?.role) || ['owner', 'admin'].includes(nextRole))) {
       throw httpError(403, '管理员只能管理操作员和只读成员；所有者可管理管理员');
     }
   }
-  async function createUser(tenantId, input, { actor, bootstrap = false, authorizeBootstrap = () => {} } = {}) {
+  async function createUser(tenantId: any, input: any, { actor, bootstrap = false, authorizeBootstrap = () => {} }: any = {}) {
     const username = typeof input.username === 'string' ? input.username.trim().toLowerCase() : '';
     if (!/^[a-z0-9][a-z0-9._@-]{2,79}$/.test(username)) throw httpError(400, '用户名需为 3–80 位字母、数字、点、下划线、短横线或 @');
     const displayName = typeof input.displayName === 'string' ? input.displayName.trim() : username;
@@ -68,7 +68,7 @@ export function createIdentityStore(db, transaction) {
       return getUser(tenantId, id);
     });
   }
-  function updateUser(tenantId, id, input, actor) {
+  function updateUser(tenantId: any, id: any, input: any, actor: any) {
     return transaction(() => {
       const current = liveActor(tenantId, actor), target = getUser(tenantId, id);
       if (!target) throw httpError(404, '成员不存在');
@@ -90,9 +90,9 @@ export function createIdentityStore(db, transaction) {
       return getUser(tenantId, id);
     });
   }
-  const revokeUserSessions = (tenantId, id) => db.prepare('DELETE FROM user_sessions WHERE tenant_id = ? AND user_id = ?').run(tenantId, id);
+  const revokeUserSessions = (tenantId: any, id: any) => db.prepare('DELETE FROM user_sessions WHERE tenant_id = ? AND user_id = ?').run(tenantId, id);
 
-  async function resetPassword(tenantId, id, password, actor) {
+  async function resetPassword(tenantId: any, id: any, password: any, actor: any) {
     const current = liveActor(tenantId, actor), target = getUser(tenantId, id);
     if (!target) throw httpError(404, '成员不存在');
     guardTarget(current, target, target.role);
@@ -105,13 +105,13 @@ export function createIdentityStore(db, transaction) {
       audit(tenantId, currentActor, 'member.password_reset', id);
     });
   }
-  function issueSession(tenantId, userId) {
+  function issueSession(tenantId: any, userId: any) {
     const token = randomBytes(32).toString('base64url'), expiresAt = Date.now() + SESSION_DURATION_MS;
     db.prepare('DELETE FROM user_sessions WHERE expires_at <= ?').run(Date.now());
     db.prepare('INSERT INTO user_sessions VALUES (?, ?, ?, ?, ?)').run(digest(token), tenantId, userId, expiresAt, new Date().toISOString());
     return { token, expiresAt };
   }
-  async function login(tenantId, username, password) {
+  async function login(tenantId: any, username: any, password: any) {
     if (typeof tenantId !== 'string' || typeof username !== 'string' || typeof password !== 'string' || password.length > 128 || username.length > 80 || tenantId.length > 63) throw httpError(401, '组织、用户名或密码不正确');
     const row = db.prepare('SELECT * FROM organization_users WHERE tenant_id = ? AND username = ?').get(tenantId, username.trim().toLowerCase());
     const valid = await verifyPassword(password, row?.password_hash);
@@ -122,7 +122,7 @@ export function createIdentityStore(db, transaction) {
     audit(tenantId, getUser(tenantId, row.id), 'auth.login');
     return session;
   }
-  function authenticateSession(token) {
+  function authenticateSession(token: any) {
     if (typeof token !== 'string' || token.length > 512) return null;
     const row = db.prepare('SELECT tenant_id, user_id, expires_at FROM user_sessions WHERE token_hash = ? AND expires_at > ?').get(digest(token), Date.now());
     if (!row) return null;
@@ -131,7 +131,7 @@ export function createIdentityStore(db, transaction) {
     const tenant = db.prepare('SELECT id, name FROM tenants WHERE id = ?').get(row.tenant_id);
     return { tenant, user, expiresAt: row.expires_at };
   }
-  async function changePassword(principal, input) {
+  async function changePassword(principal: any, input: any) {
     const row = db.prepare('SELECT password_hash FROM organization_users WHERE tenant_id = ? AND id = ?').get(principal.tenant.id, principal.user.id);
     if (typeof input.currentPassword !== 'string' || input.currentPassword.length > 128 || !await verifyPassword(input.currentPassword, row.password_hash)) throw httpError(400, '当前密码不正确');
     const nextHash = await hashPassword(input.password);
@@ -145,7 +145,7 @@ export function createIdentityStore(db, transaction) {
   }
   return {
     hasUsers, createUser, getUser, listUsers, updateUser, resetPassword, login, authenticateSession, changePassword, audit,
-    logout: (token) => db.prepare('DELETE FROM user_sessions WHERE token_hash = ?').run(digest(token)),
-    listAudit: (tenantId) => db.prepare('SELECT id, actor_name AS actorName, action, target, detail, created_at AS createdAt FROM audit_events WHERE tenant_id = ? ORDER BY id DESC LIMIT 200').all(tenantId).map((row) => ({ ...row, detail: JSON.parse(row.detail) }))
+    logout: (token: any) => db.prepare('DELETE FROM user_sessions WHERE token_hash = ?').run(digest(token)),
+    listAudit: (tenantId: any) => db.prepare('SELECT id, actor_name AS actorName, action, target, detail, created_at AS createdAt FROM audit_events WHERE tenant_id = ? ORDER BY id DESC LIMIT 200').all(tenantId).map((row: any) => ({ ...row, detail: JSON.parse(row.detail) }))
   };
 }

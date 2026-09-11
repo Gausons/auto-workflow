@@ -1,4 +1,3 @@
-// @ts-nocheck
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -10,7 +9,7 @@ import {
   normalizeIdeExecutor
 } from "../src/ideExecutor.js";
 
-const config = {
+const config: any = {
   codexModel: "gpt-5.5",
   codexReasoningEffort: "high",
   claudeModel: "claude-sonnet-4-6"
@@ -28,7 +27,7 @@ test("buildIdeExecArgs builds codex exec command", () => {
   assert.deepEqual(args.slice(0, 2), ["exec", "-m"]);
   assert.equal(args[2], "gpt-5.5");
   assert.match(args.join(" "), /--cd/);
-  assert.match(args.at(-1), /task\.md/);
+  assert.match(args.at(-1)!, /task\.md/);
 });
 
 test("normalizeClaudeModel defaults to claude-opus-4-8", () => {

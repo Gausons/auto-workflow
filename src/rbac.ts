@@ -1,4 +1,3 @@
-// @ts-nocheck
 export const ROLES = Object.freeze({
   owner: { label: '组织所有者', permissions: ['read', 'config.manage', 'people.manage', 'work.execute', 'work.approve', 'members.manage', 'audit.read'] },
   admin: { label: '管理员', permissions: ['read', 'config.manage', 'people.manage', 'work.execute', 'work.approve', 'members.manage', 'audit.read'] },
@@ -6,11 +5,11 @@ export const ROLES = Object.freeze({
   viewer: { label: '只读成员', permissions: ['read'] }
 });
 
-export function permissionsFor(role) {
-  return Object.hasOwn(ROLES, role) ? [...ROLES[role].permissions] : [];
+export function permissionsFor(role: any) {
+  return Object.hasOwn(ROLES, role) ? [...ROLES[role as keyof typeof ROLES].permissions] : [];
 }
 
-export function permissionForRoute(method, pathname) {
+export function permissionForRoute(method: any, pathname: any) {
   if (pathname === '/api/task-center/codex' && method === 'GET') return 'work.execute';
   if (['/api/task-center/execute', '/api/task-center/execution-action'].includes(pathname) && method === 'POST') return 'work.execute';
   if (pathname === '/api/task-center' && ['GET', 'POST'].includes(method)) return method === 'GET' ? 'read' : 'work.execute';
@@ -29,8 +28,8 @@ export function permissionForRoute(method, pathname) {
   return null; // New routes must be explicitly assigned a permission.
 }
 
-export function publicIdentity(principal) {
+export function publicIdentity(principal: any) {
   return { user: principal.user, tenant: principal.tenant, permissions: permissionsFor(principal.user.role), expiresAt: principal.expiresAt };
 }
 
-export function httpError(statusCode, message) { return Object.assign(new Error(message), { statusCode }); }
+export function httpError(statusCode: any, message: any) { return Object.assign(new Error(message), { statusCode }); }

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
@@ -10,30 +9,30 @@ import { createTaskCenter } from '../src/taskCenter.js';
 import { openDatabase } from '../src/database.js';
 
 class FakeClient extends EventEmitter {
-  calls = []; closed = false;
+  calls: any[] = []; closed = false;
   async initialize() { return this; }
-  async call(method, params) {
+  async call(method: any, params: any) {
     this.calls.push({ method, params });
     if (method === 'thread/start') return { thread: { id: '12345678-1234-1234-1234-123456789abc' } };
     if (method === 'turn/start') return { turn: { id: 'turn-1' } };
     if (method === 'thread/read') return { thread: { turns: [{ id: 'turn-1', status: 'completed', items: [{ type: 'agentMessage', text: 'done' }] }] } };
     return {};
   }
-  send(message) { this.calls.push(message); }
+  send(message: any) { this.calls.push(message); }
   close() { this.closed = true; this.emit('disconnected', new Error('closed')); }
 }
 const job = () => ({ id: 'job-1', taskId: 'task-1', title: '任务', prompt: '实现功能', cwd: '/repo', projectId: 'project-1', status: 'queued' });
 
 test('creates durable project thread, starts a real turn and opens desktop without overriding permissions/model', async () => {
-  const client = new FakeClient(), updates = [], opened = [];
-  const runner = new CodexRunner({ clientFactory: () => client, onUpdate: j => updates.push(j), desktopOpener: async id => opened.push(id) });
+  const client = new FakeClient(), updates: any = [], opened: any = [];
+  const runner = new CodexRunner({ clientFactory: () => client, onUpdate: (j: any) => updates.push(j), desktopOpener: async (id: any) => opened.push(id) });
   await runner.start(job()); await runner.start(job());
-  const starts = client.calls.filter(c => c.method === 'thread/start');
+  const starts = client.calls.filter((c: any) => c.method === 'thread/start');
   assert.equal(starts.length, 1);
-  assert.equal(starts[0].params.ephemeral, false);
-  assert.equal(starts[0].params.projectId, 'project-1');
-  assert.equal(starts[0].params.approvalPolicy, undefined);
-  assert.equal(starts[0].params.model, undefined);
+  assert.equal(starts[0]!.params.ephemeral, false);
+  assert.equal(starts[0]!.params.projectId, 'project-1');
+  assert.equal(starts[0]!.params.approvalPolicy, undefined);
+  assert.equal(starts[0]!.params.model, undefined);
   assert.deepEqual(opened, ['12345678-1234-1234-1234-123456789abc']);
   assert.equal(updates.at(-1).status, 'running');
   client.emit('notification', { method: 'item/completed', params: { threadId: opened[0], item: { type: 'agentMessage', text: '验证通过' } } });
@@ -43,9 +42,9 @@ test('creates durable project thread, starts a real turn and opens desktop witho
 });
 
 test('approval and input require an explicit answer; stop uses native turn interrupt', async () => {
-  const client = new FakeClient(), updates = [];
-  const runner = new CodexRunner({ clientFactory: () => client, onUpdate: j => updates.push(j), desktopOpener: async () => {} });
-  await runner.start(job()); const threadId = updates.at(-1).threadId;
+  const client = new FakeClient(), updates: any = [];
+  const runner = new CodexRunner({ clientFactory: () => client, onUpdate: (j: any) => updates.push(j), desktopOpener: async () => {} });
+  await runner.start(job()); const threadId: any = updates.at(-1).threadId;
   client.emit('request', { id: 42, method: 'item/commandExecution/requestApproval', params: { threadId, command: 'npm test' } });
   assert.equal(updates.at(-1).status, 'waiting'); assert.ok(!client.calls.some(c => c.id === 42));
   await assert.rejects(runner.respond('job-1', { decision: 'acceptForSession' }), { statusCode: 400 });
@@ -59,9 +58,9 @@ test('approval and input require an explicit answer; stop uses native turn inter
 });
 
 test('uncertain create and disconnected runs never automatically rerun', async () => {
-  const client = new FakeClient(), updates = [];
+  const client = new FakeClient(), updates: any = [];
   client.call = async method => { if (method === 'thread/start') throw new Error('timeout'); return {}; };
-  const runner = new CodexRunner({ clientFactory: () => client, onUpdate: j => updates.push(j), desktopOpener: async () => {} });
+  const runner = new CodexRunner({ clientFactory: () => client, onUpdate: (j: any) => updates.push(j), desktopOpener: async () => {} });
   await runner.start(job()); assert.equal(updates.at(-1).status, 'unknown');
   assert.equal(updates.at(-1).threadId, undefined); runner.close();
 });
@@ -70,14 +69,14 @@ test('durable execution reservations isolate tenants, reject duplicates, and rec
   const root = await mkdtemp(path.join(os.tmpdir(), 'codex-execution-')); t.after(() => rm(root, { recursive: true, force: true }));
   const db = openDatabase(':memory:'); t.after(() => db.close());
   db.createTenant({ id: 'default', token: 'x'.repeat(32) }); db.createTenant({ id: 'other', token: 'y'.repeat(32) });
-  const history = { catalog: async () => ({ sessions: [], providers: [] }) };
+  const history: any = { catalog: async () => ({ sessions: [], providers: [] }) };
   const center = createTaskCenter({ database: db, tenantId: 'default', history });
   await center.command({ action: 'create', title: '测试执行' }, { id: 'owner' });
   const task = (await center.snapshot()).tasks[0];
-  let update, started = 0;
-  const factory = fn => { update = fn; return { projects: async () => [{ id: 'project-1', name: 'Repo', cwd: root }], start: async j => { started++; fn({ ...j, threadId: '12345678-1234-1234-1234-123456789abc', status: 'running', message: 'running' }); }, close() {} }; };
+  let update: any, started = 0;
+  const factory = (fn: any) => { update = fn; return { projects: async () => [{ id: 'project-1', name: 'Repo', cwd: root }], start: async (j: any) => { started++; fn({ ...j, threadId: '12345678-1234-1234-1234-123456789abc', status: 'running', message: 'running' }); }, close() {} }; };
   const service = createCodexExecution({ database: db, tenantId: 'default', workspace: () => root, runnerFactory: factory });
-  const input = { taskId: task.id, revision: task.revision, projectId: 'project-1', cwd: root };
+  const input: any = { taskId: task.id, revision: task.revision, projectId: 'project-1', cwd: root };
   await assert.rejects(service.execute({ ...input, cwd: '/outside' }), { statusCode: 400 });
   const result = await service.execute(input); assert.equal(started, 1);
   await assert.rejects(service.execute(input), { statusCode: 409 });
@@ -102,7 +101,7 @@ test('remote device claims once, reports real thread state, and rejects other de
   const root = await mkdtemp(path.join(os.tmpdir(), 'remote-codex-')); t.after(() => rm(root, { recursive: true, force: true }));
   const db = openDatabase(':memory:'); t.after(() => db.close()); db.createTenant({ id: 'default', token: 'x'.repeat(32) });
   const center = createTaskCenter({ database: db, tenantId: 'default', history: { catalog: async () => ({ sessions: [], providers: [] }) } });
-  const owner = { id: 'device-owner' };
+  const owner: any = { id: 'device-owner' };
   await center.command({ action: 'heartbeat', deviceId: 'remote', name: 'Remote Mac', agents: ['codex'], sessions: [], codexProjects: [{ id: 'p', name: 'Repo', cwd: root }] }, owner);
   await center.command({ action: 'create', title: '远端执行' }, owner);
   const service = createCodexExecution({ database: db, tenantId: 'default', workspace: () => root, runnerFactory: () => ({ projects: async () => [], close() {} }) });
@@ -111,8 +110,8 @@ test('remote device claims once, reports real thread state, and rejects other de
   const { executionId } = await service.execute({ taskId: task.id, revision: task.revision, deviceId: 'remote', projectId: 'p', cwd: root });
   assert.equal(db.readTaskCenter('default').executions[0].status, 'queued');
   await assert.rejects(service.action({ action: 'claim', executionId }, { id: 'other' }), { statusCode: 403 });
-  const client = new FakeClient(); let runner;
-  const worker = new RemoteCodexWorker({ deviceId: 'remote', workspace: root, directory: path.join(root, 'journal'), request: (method, body) => method === 'GET' ? center.snapshot() : service.action(body, owner), runnerFactory: update => {
+  const client = new FakeClient(); let runner: any;
+  const worker = new RemoteCodexWorker({ deviceId: 'remote', workspace: root, directory: path.join(root, 'journal'), request: (method: any, body: any) => method === 'GET' ? center.snapshot() : service.action(body, owner), runnerFactory: (update: any) => {
     runner = new CodexRunner({ clientFactory: () => client, onUpdate: update, desktopOpener: async () => {} });
     runner.projects = async () => [{ id: 'p', name: 'Repo', cwd: root }]; return runner;
   } });

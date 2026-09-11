@@ -1,4 +1,3 @@
-// @ts-nocheck
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -7,7 +6,7 @@ import test from 'node:test';
 import { openDatabase } from '../src/database.js';
 
 const tokenA = 'a'.repeat(43), tokenB = 'b'.repeat(43);
-const snapshot = (title) => ({ bugs: [{ id: 'same-bug', title }], runs: [{ id: 'same-run', status: 'ready' }], executionRecords: [] });
+const snapshot = (title: any) => ({ bugs: [{ id: 'same-bug', title }], runs: [{ id: 'same-run', status: 'ready' }], executionRecords: [] });
 
 test('SQLite isolates identical user and entity IDs by tenant, rolls back failed snapshots and survives reopen', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'bugflow-db-'));
@@ -22,11 +21,11 @@ test('SQLite isolates identical user and entity IDs by tenant, rolls back failed
     assert.equal(a.readUserState('same-person').bugs[0].title, 'A');
     assert.equal(b.readUserState('same-person').bugs[0].title, 'B');
     assert.equal(a.readUserState('other-person').bugs[0].title, 'other');
-    assert.equal(db.authenticate(tokenA).id, 'a');
+    assert.equal(db.authenticate(tokenA)!.id, 'a');
     assert.equal(db.authenticate('unknown'), null);
     db.rotateToken('a', 'c'.repeat(43));
     assert.equal(db.authenticate(tokenA), null);
-    assert.equal(db.authenticate('c'.repeat(43)).id, 'a');
+    assert.equal(db.authenticate('c'.repeat(43))!.id, 'a');
     await assert.rejects(a.writeUserState('same-person', { ...snapshot('bad'), bugs: [{ id: 'duplicate' }, { id: 'duplicate' }] }));
     assert.equal(a.readUserState('same-person').bugs[0].title, 'A');
     db.close();

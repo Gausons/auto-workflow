@@ -1,9 +1,8 @@
-// @ts-nocheck
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildOperationLogBatch, normalizeOperationLogItem, uploadOperationLogs } from "../src/operationLogClient.js";
 
-const item = {
+const item: any = {
   conversation_id: "conv-1",
   session_id: "sess-1",
   user_id: "user-1",
@@ -55,13 +54,13 @@ test("buildOperationLogBatch rejects invalid items and de-duplicates conversatio
 });
 
 test("uploadOperationLogs posts normalized batch and merges server failures", async () => {
-  const requested = {};
+  const requested: any = {};
   const result = await uploadOperationLogs({
     baseUrl: "https://vpa.example/apiregister",
     endpoint: "/conversation/logs/batch",
     cookie: "tenantid=t1",
     items: [item, { ...item, answer_text: "重复项" }],
-    fetchImpl: async (url, options) => {
+    fetchImpl: async (url: any, options: any) => {
       requested.url = url;
       requested.options = options;
       return new Response(JSON.stringify({
@@ -78,7 +77,7 @@ test("uploadOperationLogs posts normalized batch and merges server failures", as
 
   assert.equal(requested.url, "https://vpa.example/apiregister/conversation/logs/batch");
   assert.equal(requested.options.headers.Cookie, "tenantid=t1");
-  assert.deepEqual(JSON.parse(requested.options.body).items.map((entry) => entry.conversation_id), ["conv-1"]);
+  assert.deepEqual(JSON.parse(requested.options.body).items.map((entry: any) => entry.conversation_id), ["conv-1"]);
   assert.equal(result.accepted, 1);
   assert.equal(result.rejected, 1);
   assert.equal(result.failures[0].code, "DUPLICATE_CONVERSATION_ID");

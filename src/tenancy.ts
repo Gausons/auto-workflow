@@ -1,25 +1,24 @@
-// @ts-nocheck
 import { sourceEnvironmentPrefixes } from "./issueSources/index.ts";
 import { existsSync, readFileSync, realpathSync, mkdirSync, writeFileSync } from 'node:fs';
 import { parseEnv } from 'node:util';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 
-export function readEnvFile(filename) {
+export function readEnvFile(filename: any) {
   return existsSync(filename) ? parseEnv(readFileSync(filename, 'utf8')) : {};
 }
 
-export function loadEnvironment(rootDir) {
+export function loadEnvironment(rootDir: any) {
   return { ...readEnvFile(path.join(rootDir, '.env')), ...process.env };
 }
 
-export function databasePath(rootDir, environment) {
+export function databasePath(rootDir: any, environment: any) {
   return path.resolve(rootDir, environment.DATABASE_PATH || '.workflow-data/workflow.sqlite');
 }
 
 export const generateToken = () => randomBytes(32).toString('base64url');
 
-export function provisionDefaultTenant(database, rootDir, environment) {
+export function provisionDefaultTenant(database: any, rootDir: any, environment: any) {
   if (database.getTenant('default')) return false;
   const token = environment.DEFAULT_TENANT_TOKEN || generateToken();
   // Save the generated token before inserting its hash, so an interrupted initialization is recoverable.
@@ -32,9 +31,9 @@ export function provisionDefaultTenant(database, rootDir, environment) {
   return true;
 }
 
-export function tenantEnvironment(tenant, rootDir, environment) {
+export function tenantEnvironment(tenant: any, rootDir: any, environment: any) {
   // Explicit allowlist for OS tooling. Never pass server or other tenants' credentials to a child process.
-  const result = {};
+  const result: any = {};
   for (const key of ['PATH', 'HOME', 'USER', 'SHELL', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL', 'SYSTEMROOT']) {
     if (environment[key] !== undefined) result[key] = environment[key];
   }
@@ -52,9 +51,9 @@ export function tenantEnvironment(tenant, rootDir, environment) {
   return result;
 }
 
-export function canonicalWorkspace(value) {
+export function canonicalWorkspace(value: any) {
   let current = path.resolve(value);
-  const suffix = [];
+  const suffix: any[] = [];
   while (!existsSync(current)) {
     suffix.unshift(path.basename(current));
     current = path.dirname(current);
@@ -62,8 +61,8 @@ export function canonicalWorkspace(value) {
   return path.join(realpathSync(current), ...suffix);
 }
 
-export function assertSeparateWorkspaces(entries) {
-  const workspaces = entries.filter((entry) => entry.workspace).map((entry) => ({ ...entry, workspace: canonicalWorkspace(entry.workspace) }));
+export function assertSeparateWorkspaces(entries: any) {
+  const workspaces = entries.filter((entry: any) => entry.workspace).map((entry: any) => ({ ...entry, workspace: canonicalWorkspace(entry.workspace) }));
   for (let i = 0; i < workspaces.length; i++) {
     for (let j = i + 1; j < workspaces.length; j++) {
       const a = workspaces[i], b = workspaces[j];

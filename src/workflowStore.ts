@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -7,7 +6,7 @@ const STORE_VERSION = 1;
 const MAX_EXECUTION_RECORDS = 500;
 const MAX_PERSISTED_RUNS = 200;
 
-export function resolveUserStorageKey(config = {}) {
+export function resolveUserStorageKey(config: any = {}) {
   const assignee = normalizePersonIdentifier(config.assignee);
   const operatorId = normalizePersonIdentifier(config.operatorId);
 
@@ -18,7 +17,7 @@ export function resolveUserStorageKey(config = {}) {
   return "default";
 }
 
-export function normalizePersonIdentifier(value) {
+export function normalizePersonIdentifier(value: any) {
   if (value == null) return "";
   if (typeof value === "object") {
     return String(value.aid || value.employeeId || value.userCode || value.userName || value.name || "").trim();
@@ -26,7 +25,7 @@ export function normalizePersonIdentifier(value) {
   return String(value).trim();
 }
 
-export function safeStorageKey(value) {
+export function safeStorageKey(value: any) {
   return String(value || "default")
     .trim()
     .toLowerCase()
@@ -35,7 +34,7 @@ export function safeStorageKey(value) {
     .slice(0, 80) || "default";
 }
 
-export function createExecutionRecord(input = {}) {
+export function createExecutionRecord(input: any = {}) {
   const at = input.at || new Date().toISOString();
   return {
     id: input.id || `rec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -51,7 +50,7 @@ export function createExecutionRecord(input = {}) {
   };
 }
 
-export function recoverInterruptedRuns(runs = []) {
+export function recoverInterruptedRuns(runs: any = []) {
   for (const run of runs) {
     if (!run || typeof run !== "object") continue;
 
@@ -78,7 +77,7 @@ export function recoverInterruptedRuns(runs = []) {
       run.verification.process = { ...run.verification.process, status: "interrupted", finishedAt: run.finishedAt };
     }
 
-    const step = run.steps?.find((item) => item.status === "running");
+    const step = run.steps?.find((item: any) => item.status === "running");
     if (step) {
       step.status = "attention";
       step.message = "服务重启导致执行中断，请重新启动或人工处理。";
@@ -88,18 +87,18 @@ export function recoverInterruptedRuns(runs = []) {
   return runs;
 }
 
-export function createWorkflowStore(rootDir) {
+export function createWorkflowStore(rootDir: any) {
   const usersDir = path.join(rootDir, "users");
-  let saveTimer = null;
-  let pendingSave = null;
+  let saveTimer: any = null;
+  let pendingSave: any = null;
   let temporaryFileSequence = 0;
   const writeQueues = new Map();
 
-  function getStatePath(userKey) {
+  function getStatePath(userKey: any) {
     return path.join(usersDir, safeStorageKey(userKey), "state.json");
   }
 
-  function readUserState(userKey) {
+  function readUserState(userKey: any) {
     const filePath = getStatePath(userKey);
     if (!existsSync(filePath)) {
       return {
@@ -115,7 +114,7 @@ export function createWorkflowStore(rootDir) {
     try {
       const parsed = JSON.parse(readFileSync(filePath, "utf8"));
       return normalizeStoredState(parsed, userKey);
-    } catch (error) {
+    } catch (error: any) {
       console.warn(`Failed to read workflow state for ${userKey}: ${error.message}`);
       return {
         version: STORE_VERSION,
@@ -128,7 +127,7 @@ export function createWorkflowStore(rootDir) {
     }
   }
 
-  async function writeUserStateFile(userKey, snapshot) {
+  async function writeUserStateFile(userKey: any, snapshot: any) {
     const normalized = normalizeStoredState(snapshot, userKey);
     const filePath = getStatePath(userKey);
     const dir = path.dirname(filePath);
@@ -139,13 +138,13 @@ export function createWorkflowStore(rootDir) {
       await writeFile(temporaryPath, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
       await rename(temporaryPath, filePath);
       return normalized;
-    } catch (error) {
+    } catch (error: any) {
       await rm(temporaryPath, { force: true }).catch(() => {});
       throw error;
     }
   }
 
-  function writeUserState(userKey, snapshot) {
+  function writeUserState(userKey: any, snapshot: any) {
     const queueKey = safeStorageKey(userKey);
     const previousWrite = writeQueues.get(queueKey) || Promise.resolve();
     const currentWrite = previousWrite
@@ -162,15 +161,15 @@ export function createWorkflowStore(rootDir) {
     return currentWrite;
   }
 
-  function scheduleSave(userKey, snapshot, delayMs = 400) {
+  function scheduleSave(userKey: any, snapshot: any, delayMs = 400) {
     pendingSave = { userKey, snapshot };
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      const next = pendingSave;
+      const next: any = pendingSave;
       pendingSave = null;
       saveTimer = null;
       if (!next) return;
-      writeUserState(next.userKey, next.snapshot).catch((error) => {
+      writeUserState(next.userKey, next.snapshot).catch((error: any) => {
         console.warn(`Failed to persist workflow state for ${next.userKey}: ${error.message}`);
       });
     }, delayMs);
@@ -187,7 +186,7 @@ export function createWorkflowStore(rootDir) {
     return writeUserState(next.userKey, next.snapshot);
   }
 
-  function appendExecutionRecord(records, record) {
+  function appendExecutionRecord(records: any, record: any) {
     const next = [createExecutionRecord(record), ...(Array.isArray(records) ? records : [])];
     return next.slice(0, MAX_EXECUTION_RECORDS);
   }
@@ -203,7 +202,7 @@ export function createWorkflowStore(rootDir) {
   };
 }
 
-export function normalizeStoredState(raw, userKey) {
+export function normalizeStoredState(raw: any, userKey: any) {
   const bugs = Array.isArray(raw?.bugs) ? raw.bugs : [];
   const runs = Array.isArray(raw?.runs) ? raw.runs.slice(0, MAX_PERSISTED_RUNS) : [];
   const executionRecords = Array.isArray(raw?.executionRecords)
@@ -220,7 +219,7 @@ export function normalizeStoredState(raw, userKey) {
   };
 }
 
-export function buildUserSnapshot(state) {
+export function buildUserSnapshot(state: any) {
   return {
     bugs: state.bugs,
     runs: state.runs,
@@ -228,12 +227,12 @@ export function buildUserSnapshot(state) {
   };
 }
 
-export async function loadUserStateFile(filePath) {
+export async function loadUserStateFile(filePath: any) {
   const content = await readFile(filePath, "utf8");
   return JSON.parse(content);
 }
 
-export function ensureStoreRoot(rootDir) {
+export function ensureStoreRoot(rootDir: any) {
   const usersDir = path.join(rootDir, "users");
   if (!existsSync(usersDir)) {
     mkdirSync(usersDir, { recursive: true });

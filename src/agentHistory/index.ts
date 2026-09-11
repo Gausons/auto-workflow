@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createReadStream } from 'node:fs';
 import { readdir, realpath, stat } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
@@ -8,30 +7,30 @@ import { canonicalWorkspace } from '../tenancy.js';
 import { httpError } from '../rbac.js';
 import { defaultHistoryAdapters } from './adapters.js';
 
-const within = (root, target) => target === root || target.startsWith(root + path.sep);
-const date = (value) => Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
+const within = (root: any, target: any) => target === root || target.startsWith(root + path.sep);
+const date = (value: any) => Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
 const MAX_BYTES = 64 * 1024 * 1024;
 const MAX_ENTRIES = 10000;
 
-export function createAgentHistory({ environment = {}, tenantId = 'default', workspace, rootDir = process.cwd(), adapters = defaultHistoryAdapters }) {
+export function createAgentHistory({ environment = {}, tenantId = 'default', workspace, rootDir = process.cwd(), adapters = defaultHistoryAdapters }: any) {
   const registry = new Map();
   for (const adapter of adapters) {
     if (!/^[a-z][a-z0-9-]*$/.test(adapter.id) || registry.has(adapter.id) || typeof adapter.decode !== 'function' || typeof adapter.roots !== 'function') throw new Error('无效或重复的历史会话适配器');
     registry.set(adapter.id, adapter);
   }
   const cache = new Map();
-  let pending, latest;
+  let pending: any, latest: any;
   function scope() {
     if (environment.IDE_HISTORY_SCOPE !== 'workspace') return '*';
     const value = workspace?.(); return value ? canonicalWorkspace(value) : null;
   }
-  function authorized(cwd, allowed) { return typeof cwd === 'string' && path.isAbsolute(cwd) && allowed && (allowed === '*' || within(allowed, canonicalWorkspace(cwd))); }
+  function authorized(cwd: any, allowed: any) { return typeof cwd === 'string' && path.isAbsolute(cwd) && allowed && (allowed === '*' || within(allowed, canonicalWorkspace(cwd))); }
 
-  async function parse(file, adapter, allowed, info, detail = false) {
-    const session = { id: createHash('sha256').update(`${adapter.id}\0${file}`).digest('hex'), agent: adapter.id, agentLabel: adapter.label,
+  async function parse(file: any, adapter: any, allowed: any, info: any, detail = false) {
+    const session: any = { id: createHash('sha256').update(`${adapter.id}\0${file}`).digest('hex'), agent: adapter.id, agentLabel: adapter.label,
       sessionId: '', title: '', cwd: '', workspaces: [], model: '', branch: '', status: 'unknown', archived: file.split(path.sep).includes('archived_sessions'),
       createdAt: null, updatedAt: null, messageCount: 0, partial: info.size > MAX_BYTES };
-    const entries = [], fallback = [];
+    const entries: any[] = [], fallback = [];
     let count = 0, fallbackCount = 0, firstPrompt = '', fallbackPrompt = '', malformed = 0, conversationCount = 0;
     const checkedCwds = new Map();
     const stream = createReadStream(file, { encoding: 'utf8', start: 0, end: MAX_BYTES - 1 });
@@ -83,17 +82,17 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
   }
 
   async function scan() {
-    const allowed = scope(), sessions = [], providers = [], files = new Map(), alive = new Set();
+    const allowed = scope(), sessions: any = [], providers = [], files = new Map(), alive = new Set();
     if (!allowed) return { sessions, providers: [...registry.values()].map(({ id, label }) => ({ id, label, status: 'unconfigured', skipped: 0 })), files, allowed };
     for (const adapter of registry.values()) {
       const roots = adapter.roots(environment, tenantId);
-      const provider = { id: adapter.id, label: adapter.label, status: roots.length ? 'missing' : 'unconfigured', skipped: 0 };
+      const provider: any = { id: adapter.id, label: adapter.label, status: roots.length ? 'missing' : 'unconfigured', skipped: 0 };
       for (const source of roots) {
-        let root;
+        let root: any;
         try { root = await realpath(path.resolve(rootDir, source)); }
-        catch (error) { if (error.code !== 'ENOENT') provider.status = 'error'; continue; }
+        catch (error: any) { if (error.code !== 'ENOENT') provider.status = 'error'; continue; }
         if (provider.status !== 'error') provider.status = 'available';
-        async function walk(dir, depth = 0) {
+        async function walk(dir: any, depth = 0) {
           if (depth > 12) { provider.skipped++; return; }
           let children;
           try { children = await readdir(dir, { withFileTypes: true }); }
@@ -125,15 +124,15 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
       providers.push(provider);
     }
     for (const key of cache.keys()) if (!alive.has(key)) cache.delete(key);
-    sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
+    sessions.sort((a: any, b: any) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id));
     return { sessions, providers, files, allowed };
   }
   async function index() {
     if (!pending) pending = scan().then((result) => { latest = result; return result; }).finally(() => { pending = null; });
     return pending;
   }
-  function pagination(params, defaultLimit) {
-    const number = (key, fallback, max) => {
+  function pagination(params: any, defaultLimit: any) {
+    const number = (key: any, fallback: any, max: any) => {
       const raw = params.get(key); if (raw === null) return fallback;
       if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw)) || Number(raw) > max || (key === 'limit' && Number(raw) === 0)) throw httpError(400, '分页参数无效');
       return Number(raw);
@@ -145,14 +144,14 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
       const result = await index();
       return { sessions: result.sessions, providers: result.providers, scope: result.allowed === '*' ? 'all' : 'workspace' };
     },
-    async resolveSource(id) {
+    async resolveSource(id: any) {
       if (!/^[a-f0-9]{64}$/.test(id)) throw httpError(404, '会话不存在');
-      let result = latest?.allowed === scope() ? latest : await index();
+      let result: any = latest?.allowed === scope() ? latest : await index();
       if (!result.files.has(id)) result = await index();
       const source = result.files.get(id);
       if (!source || scope() !== result.allowed) throw httpError(404, '会话不存在');
       return { file: source.file, root: source.root, agent: source.adapter.id, allowed: result.allowed,
-        session: result.sessions.find((session) => session.id === id), current: () => scope() === result.allowed };
+        session: result.sessions.find((session: any) => session.id === id), current: () => scope() === result.allowed };
     },
     async list(params = new URLSearchParams()) {
       const agent = params.get('agent') || '', q = (params.get('q') || '').trim().toLowerCase();
@@ -167,10 +166,10 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
         for (const cwd of s.workspaces.length ? s.workspaces : ['__unknown__']) workspaceCounts.set(cwd, (workspaceCounts.get(cwd) || 0) + 1);
       }
       const workspaces = [...workspaceCounts].map(([path, count]) => ({ path, count })).sort((a, b) => a.path.localeCompare(b.path));
-      const matches = result.sessions.filter((s) => (!selectedWorkspace || (selectedWorkspace === '__unknown__' ? !s.workspaces.length : s.workspaces.includes(selectedWorkspace))) && (!agent || s.agent === agent) && (!q || [s.title, s.cwd, s.sessionId, s.model, s.branch].some((v) => v.toLowerCase().includes(q))));
+      const matches = result.sessions.filter((s: any) => (!selectedWorkspace || (selectedWorkspace === '__unknown__' ? !s.workspaces.length : s.workspaces.includes(selectedWorkspace))) && (!agent || s.agent === agent) && (!q || [s.title, s.cwd, s.sessionId, s.model, s.branch].some((v) => v.toLowerCase().includes(q))));
       return { providers: result.providers, sessions: matches.slice(offset, offset + limit), total: matches.length, offset, limit, workspace: selectedWorkspace, workspaces, scope: result.allowed === '*' ? 'all' : 'workspace' };
     },
-    async detail(id, params = new URLSearchParams()) {
+    async detail(id: any, params = new URLSearchParams()) {
       const { offset, limit } = pagination(params, 100);
       if (!/^[a-f0-9]{64}$/.test(id)) throw httpError(404, '会话不存在');
       const result = await index(), source = result.files.get(id);
