@@ -12,7 +12,7 @@
 ```mermaid
 flowchart TB
   User["组织成员"] --> Web["Web 工作台<br/>public/"]
-  subgraph Service["Node.js 服务 · server.mjs"]
+  subgraph Service["Node.js 服务 · server.ts"]
     Auth["登录与 RBAC<br/>identity / authHttp / rbac"]
     Runtime["组织独立运行时<br/>tenantRuntime"]
     Sources["TypeScript 数据源接口<br/>issueSources"]
@@ -156,7 +156,7 @@ npm run tenant -- migrate team-a
 
 ## 问题数据源（TypeScript）
 
-每个组织当前选择一个数据源。公开版本默认 `ISSUE_PROVIDER=jira`，使用 Jira Cloud。新增适配器、类型声明和测试全部使用 TypeScript，旧 `.mjs` 文件只调整集成入口。开发时运行：
+每个组织当前选择一个数据源。公开版本默认 `ISSUE_PROVIDER=jira`，使用 Jira Cloud。服务端、浏览器端、脚本和测试均使用 TypeScript；浏览器端源码会编译到 `public/build`。开发时运行：
 
 ```bash
 npm run typecheck

@@ -2,7 +2,7 @@ import { constants } from 'node:fs';
 import { open, realpath, type FileHandle } from 'node:fs/promises';
 import { createHash, createHmac, randomBytes, timingSafeEqual, type Hash } from 'node:crypto';
 import path from 'node:path';
-import { canonicalWorkspace } from '../tenancy.mjs';
+import { canonicalWorkspace } from '../tenancy.js';
 import { asObject, deliverRecord } from './records.ts';
 import type { Environment } from '../issueSources/types.ts';
 

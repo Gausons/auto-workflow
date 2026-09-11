@@ -6,16 +6,15 @@
     "strict": true,
     "noEmit": true,
     "allowImportingTsExtensions": true,
-    "allowJs": true,
-    "checkJs": false,
     "skipLibCheck": true,
     "types": [
       "node"
     ]
   },
   "include": [
-    "src/issueSources/**/*.ts",
-    "src/sessionDelivery/**/*.ts",
-    "test/**/*.test.ts"
+    "server.ts",
+    "src/**/*.ts",
+    "scripts/**/*.ts",
+    "test/**/*.ts"
   ]
 }

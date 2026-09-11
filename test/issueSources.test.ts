@@ -3,7 +3,7 @@ import test from 'node:test';
 import { createIssueSource, sourceStorageKey, syncCheckpoint } from '../src/issueSources/index.ts';
 import { buildJiraJql, jiraDescription, normalizeJiraIssue } from '../src/issueSources/jira.ts';
 import { sourceTransitionPlan } from '../src/issueSources/workflow.ts';
-import { tenantEnvironment } from '../src/tenancy.mjs';
+import { tenantEnvironment } from '../src/tenancy.js';
 import type { Environment, IssueSourceFactory } from '../src/issueSources/types.ts';
 
 const environment: Environment = {

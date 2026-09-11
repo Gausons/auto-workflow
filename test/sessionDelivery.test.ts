@@ -3,11 +3,11 @@ import test, { type TestContext } from 'node:test';
 import { mkdtemp, mkdir, writeFile, appendFile, rm, rename, symlink, open } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { createAgentHistory } from '../src/agentHistory/index.mjs';
+import { createAgentHistory } from '../src/agentHistory/index.js';
 import { createSessionDelivery } from '../src/sessionDelivery/index.ts';
 import { deliverRecord } from '../src/sessionDelivery/records.ts';
-import { createApp } from '../server.mjs';
-import { openDatabase } from '../src/database.mjs';
+import { createApp } from '../server.js';
+import { openDatabase } from '../src/database.js';
 
 const timestamp = '2026-09-09T01:00:00Z';
 const message = (text: string) => ({ type: 'response_item', timestamp, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } });

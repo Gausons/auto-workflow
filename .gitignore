@@ -6,8 +6,9 @@
 !/LICENSE
 !/package.json
 !/pnpm-lock.yaml
-!/server.mjs
+!/server.ts
 !/tsconfig.json
+!/tsconfig.client.json
 !/src/
 !/public/
 !/scripts/
@@ -33,6 +34,7 @@ exports/
 sessions/
 coverage/
 dist/
+public/build/
 .DS_Store
 *.sqlite*
 *.db
