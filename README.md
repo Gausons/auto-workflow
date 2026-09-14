@@ -223,7 +223,9 @@ REQUIRE_HUMAN_REVIEW=true
 ```
 
 - `IDE_EXECUTOR` 支持 `codex` 或 `claude`，也可在“执行流水线”页面每次生成流水线时单独选择。
-- Codex 使用 `codex exec`；Claude Code 使用 `claude --bare -p` 非交互模式，需本机已安装 `claude` CLI 并配置 `ANTHROPIC_API_KEY`。
+- 所有 Agent 执行统一采用 **ACP 优先**策略：先启动 Agent 的 ACP stdio 服务并完成 `initialize`、`session/new`、`session/prompt`；只有 ACP 不可用或在开始 Prompt 前协商失败时，才回退原有执行通道。Prompt 已开始后不会自动重试，避免重复修改代码。
+- Codex 默认查找 `codex-acp`，Claude Code 默认查找 `claude-agent-acp`。可分别用 `ACP_CODEX_EXECUTABLE` / `ACP_CLAUDE_EXECUTABLE` 指定绝对路径，用对应的 `ACP_*_ARGS` 传入 JSON 字符串数组。新增 Agent 也遵循 `ACP_<AGENT>_EXECUTABLE` / `ACP_<AGENT>_ARGS` 约定。
+- 未安装 ACP 适配器时，Codex 回退 `codex exec`，Claude Code 回退 `claude --bare -p`。可安装官方适配器：`npm install -g @agentclientprotocol/codex-acp @agentclientprotocol/claude-agent-acp`。设置 `ACP_ENABLED=false` 可整体禁用 ACP；`ACP_<AGENT>_ENABLED=false` 可只禁用一个 Agent。
 - GPT 模型列表支持 `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5`、`gpt-5.4` 和 `gpt-5.4-mini`。
 
 `CODEX_REASONING_EFFORT` 支持 `low / medium / high / xhigh`，对应页面里的低 / 中 / 高 / 超高。
@@ -407,14 +409,14 @@ pnpm device:sync
 ### 在工作台直接执行 Codex 任务
 
 1. 在工作台所在设备安装并登录 Codex 客户端，在客户端添加要执行的项目。项目目录须在组织配置的 `CODEX_WORKSPACE_DIR`（默认当前项目目录）内。
-2. 新建或选择任务，填写目标和下一步，点击 **执行 · Codex**，选择项目，再点击 **立即执行**。
-3. 工作台通过已安装的 `codex app-server` 创建持久化会话，并调用 `turn/start`。会话使用目标设备原有的 Codex 账号、模型和权限配置；不会创建临时会话，也不会直接修改 Codex 数据库。
+2. 新建或选择任务，填写目标和下一步，点击 **执行 Agent · ACP 优先**，选择执行目标，再点击 **立即执行**。
+3. 工作台优先通过 ACP v1 创建会话并调用 `session/prompt`；若 `codex-acp` 不可用，则通过已安装的 `codex app-server` 创建持久化会话并调用 `turn/start`。会话使用目标设备原有的账号、模型和权限配置。
 4. 目标设备通过 `codex://threads/<id>` 打开客户端对应任务。本机执行记录也提供 **在 Codex 中打开**。自动打开失败时执行记录会提示；客户端必须与执行器使用同一操作系统账号和 `CODEX_HOME`。
 5. 执行状态、最终回复、会话关联自动回传。若 Codex 请求操作确认或提问，点击工作台中的 **处理 Codex 请求**。可以停止正在执行的任务；本轮完成后，可以在 Codex 客户端继续该会话。
 
 原来的 **转交 / 分支** 保留用于手动传递上下文，与直接执行分开。若已有未完成的手动接续，请先取消该请求，再直接执行。为避免双重执行，正在运行或结果未知的任务不能再次提交。连接中断或工作台重启后会显示“结果待核对”；已有会话标识时使用 **核对执行结果** 读取原会话，不会自动重新提交任务。
 
-此集成依赖当前已安装 Codex 的 App Server 协议，包括 `project/list`、`thread/start`、`thread/name/set`、`turn/start` 等方法；旧版本缺少接口时需要升级。可用 `CODEX_EXECUTABLE` 指定目标 Codex 可执行文件的绝对路径。详细协议见 [OpenAI 官方 App Server 文档](https://learn.chatgpt.com/docs/app-server)。
+首选集成遵循 [Agent Client Protocol v1](https://agentclientprotocol.com/protocol/v1/overview)，依赖项目中的官方 TypeScript SDK 和本机 ACP Agent/适配器。回退集成依赖 Codex App Server 的 `project/list`、`thread/start`、`thread/name/set`、`turn/start` 等方法；可用 `CODEX_EXECUTABLE` 指定 Codex 可执行文件的绝对路径。
 
 #### 在其他设备启用直接执行
 
@@ -426,7 +428,7 @@ export CODEX_WORKSPACE_DIR=/path/to/your/project
 pnpm device:sync
 ```
 
-该设备须已登录 Codex，并在客户端添加项目。连接器会公布允许工作目录内的 Codex 项目；工作台的执行弹窗可以选择该设备和项目。执行模式每 3 秒同步状态，并在**执行设备**打开 Codex 客户端。未连接设备保留待执行请求，恢复后只领取一次；等待中的请求可以取消。关闭执行模式后，设备不再公布可执行项目。
+该设备须已登录目标 Agent。连接器优先公布 ACP 执行目标；ACP 不可用时公布允许工作目录内的 Codex 项目。工作台的执行弹窗会显示实际协议。执行模式每 3 秒同步状态；未连接设备保留待执行请求，恢复后只领取一次，等待中的请求可以取消。
 
 执行连接器需要持续运行，不支持 `--once`。执行日志保存在设备目录的 `executions/`；重启时对未完成的任务报告结果待核对，避免重复执行。远端停止和回复请求由该设备的连接器处理，离线期间需要等待其恢复。
 

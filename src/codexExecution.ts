@@ -2,6 +2,7 @@ import path from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
 import { CodexAppServer } from './codexAppServer.js';
+import { AcpPreferredRunner, AcpTaskRunner } from './acpAgent.js';
 import { httpError } from './rbac.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -136,10 +137,12 @@ export function recordExecution(data: any, job: any) {
       const previous = saved.status;
       Object.assign(saved, job);
       const task = data.tasks.find((t: any) => t.id === saved.taskId); if (!task) return;
-      if (job.threadId) {
-        const id = createHash('sha256').update(`codex-execution:${job.threadId}`).digest('hex');
+      const nativeSessionId = job.sessionId || job.threadId;
+      if (nativeSessionId) {
+        const agent = job.agent || 'codex';
+        const id = createHash('sha256').update(`agent-execution:${agent}:${nativeSessionId}`).digest('hex');
         let session = data.sessions.find((s: any) => s.id === id);
-        if (!session) { session = { id, source: 'codexExecution', deviceId: job.deviceId, agent: 'codex', agentLabel: 'Codex', nativeId: job.threadId, title: job.title, cwd: job.cwd, partial: true }; data.sessions.push(session); }
+        if (!session) { session = { id, source: 'agentExecution', deviceId: job.deviceId, agent, agentLabel: job.agentLabel || (agent === 'codex' ? 'Codex' : agent), nativeId: nativeSessionId, title: job.title, cwd: job.cwd, partial: true, protocol: job.protocol || 'legacy' }; data.sessions.push(session); }
         Object.assign(session, { status: job.status, updatedAt: job.updatedAt, excerpt: `${job.prompt}\n\n${job.output || ''}` });
         if (!task.sessionIds.includes(id)) task.sessionIds.push(id);
       }
@@ -155,11 +158,15 @@ export function createCodexExecution({ database, tenantId, workspace, environmen
   const update = (job: any) => {
     if (!closing) database.mutateTaskCenter(tenantId, (data: any) => recordExecution(data, job));
   };
-  const runner = runnerFactory ? runnerFactory(update) : new CodexRunner({ executable: environment.CODEX_EXECUTABLE || 'codex', environment: { ...process.env, ...environment }, onUpdate: update });
+  const runnerEnvironment = { ...process.env, ...environment };
+  const runner = runnerFactory ? runnerFactory(update) : new AcpPreferredRunner({
+    primary: new AcpTaskRunner({ agent: 'codex', environment: runnerEnvironment, onUpdate: update }),
+    fallback: new CodexRunner({ executable: environment.CODEX_EXECUTABLE || 'codex', environment: runnerEnvironment, onUpdate: update })
+  });
   database.mutateTaskCenter(tenantId, (data: any) => {
     data.executions ||= [];
     for (const job of data.executions) if (job.deviceId === 'local' && active.has(job.status)) {
-      job.status = 'unknown'; job.request = null; job.message = '工作台已重启，请核对原 Codex 会话，避免重复执行';
+      job.status = 'unknown'; job.request = null; job.message = '工作台已重启，请核对原 Agent 会话，避免重复执行';
       const task = data.tasks.find((t: any) => t.id === job.taskId); if (task) { task.status = 'error'; task.revision++; }
     }
   });
@@ -176,16 +183,16 @@ export function createCodexExecution({ database, tenantId, workspace, environmen
       const { projects } = await this.targets();
       const deviceId = input.deviceId || 'local';
       const project = projects.find((p: any) => p.id === input.projectId && p.cwd === input.cwd && p.deviceId === deviceId);
-      if (!project) throw httpError(400, '请选择当前组织工作目录内、已在 Codex 客户端添加的项目');
+      if (!project) throw httpError(400, '请选择当前组织工作目录内的可用 Agent 执行目标');
       const job = database.mutateTaskCenter(tenantId, (data: any) => {
         const task = data.tasks.find((t: any) => t.id === input.taskId);
         if (!task) throw httpError(404, '任务不存在');
         if (task.revision !== input.revision) throw httpError(409, '任务已更新，请刷新后执行');
         if (task.status === 'running' || (data.executions || []).some((j: any) => j.taskId === task.id && active.has(j.status))) throw httpError(409, '该任务已有执行，请先等待完成或停止，结果未知时请核对原会话');
         if (data.handoffs.some((h: any) => h.taskId === task.id && h.mode === 'continue' && ['pending', 'received'].includes(h.status))) throw httpError(409, '请先取消原手动接续请求，再直接执行');
-        const job: any = { id: randomUUID(), taskId: task.id, deviceId, projectId: project.id, cwd: project.cwd, title: task.title, prompt: executionPrompt(task), contextVersion: task.contextVersion, status: 'queued', createdAt: timestamp(), updatedAt: timestamp(), message: '已排队，准备交给 Codex', output: '', threadId: null, turnId: null };
+        const job: any = { id: randomUUID(), taskId: task.id, deviceId, projectId: project.id, cwd: project.cwd, title: task.title, prompt: executionPrompt(task), contextVersion: task.contextVersion, status: 'queued', createdAt: timestamp(), updatedAt: timestamp(), message: '已排队，准备交给 Agent', output: '', threadId: null, sessionId: null, turnId: null, protocol: project.protocol || 'legacy', agent: project.agent || 'codex', agentLabel: project.agent === 'codex' || !project.agent ? 'Codex' : project.agent };
         (data.executions ||= []).push(job); task.status = 'running'; task.revision++; task.updatedAt = timestamp();
-        task.events.unshift({ id: randomUUID(), at: task.updatedAt, message: '已提交 Codex 执行' });
+        task.events.unshift({ id: randomUUID(), at: task.updatedAt, message: `已提交 ${job.agentLabel} 执行（${job.protocol === 'acp' ? 'ACP' : '原通道'}）` });
         return structuredClone(job);
       });
       if (job.deviceId === 'local') void runner.start(job); return { executionId: job.id };
@@ -215,10 +222,12 @@ export function createCodexExecution({ database, tenantId, workspace, environmen
             if (!report || !['launching', 'running', 'waiting', 'completed', 'failed', 'interrupted', 'unknown'].includes(report.status)) throw httpError(400, '执行回报格式无效');
             if (saved.status === 'queued') throw httpError(409, '请先领取任务');
             if (report.threadId && !/^[a-f0-9-]{36}$/.test(report.threadId)) throw httpError(400, 'Codex 会话标识无效');
+            if (report.sessionId !== undefined && report.sessionId !== null && (typeof report.sessionId !== 'string' || !report.sessionId || report.sessionId.length > 250)) throw httpError(400, 'ACP 会话标识无效');
             if (saved.threadId && report.threadId !== undefined && saved.threadId !== report.threadId) throw httpError(409, '不能替换已绑定的 Codex 会话');
+            if (saved.sessionId && report.sessionId !== undefined && saved.sessionId !== report.sessionId) throw httpError(409, '不能替换已绑定的 ACP 会话');
             if (['completed', 'failed', 'interrupted'].includes(saved.status) && report.status !== saved.status) throw httpError(409, '执行已经结束');
             const patch: any = {};
-            for (const key of ['threadId', 'turnId', 'message', 'output', 'desktopMessage']) if (report[key] !== undefined) {
+            for (const key of ['threadId', 'sessionId', 'turnId', 'message', 'output', 'desktopMessage', 'protocol', 'agent', 'agentLabel']) if (report[key] !== undefined) {
               if (report[key] !== null && (typeof report[key] !== 'string' || report[key].length > (key === 'output' ? 24000 : 2000))) throw httpError(400, '回报字段无效');
               patch[key] = report[key];
             }

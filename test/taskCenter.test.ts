@@ -129,7 +129,11 @@ test('HTTP auth, viewer write rejection, and task UI assets', async t => {
   const viewer = (await req('/api/auth/login', 'POST', { tenantId: 'default', username: 'viewer', password })).data;
   assert.equal((await req('/api/task-center', 'GET', null, viewer.token)).data.tasks.length, 1);
   assert.equal((await req('/api/task-center', 'POST', { action: 'create', title: 'forbidden' }, viewer.token)).status, 403);
-  assert.equal((await fetch(base + '/taskCenter.js')).status, 200);
+  const taskCenterAsset = await fetch(base + '/taskCenter.js');
+  assert.equal(taskCenterAsset.status, 200);
+  const taskCenterScript = await taskCenterAsset.text();
+  assert.match(taskCenterScript, /root\.querySelector\(selector\)/, 'task center DOM lookup must query the provided root');
+  assert.doesNotMatch(taskCenterScript, /=>\s*selectFrom\(root, selector\)/, 'task center DOM lookup must not recurse');
   assert.match(await (await fetch(base + '/')).text(), /id="taskCenter"/);
 });
 

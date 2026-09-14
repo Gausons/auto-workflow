@@ -5,6 +5,7 @@ import { createSessionDelivery } from "./sessionDelivery/index.ts";
 import { createAgentHistory } from "./agentHistory/index.js";
 import { createTaskCenter } from "./taskCenter.js";
 import { createCodexExecution } from "./codexExecution.js";
+import { spawnAcpPreferredAgent } from "./acpAgent.js";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -33,6 +34,22 @@ import {
 
 // Each instance owns its state, credentials, timers and child-process callbacks for its entire lifetime.
 // Never switch a process-global current tenant when handling requests.
+
+function spawnIdeAgent(executor: any, config: any, handoff: any, environment: any) {
+  return spawnAcpPreferredAgent({
+    agent: executor,
+    cwd: handoff.workspaceDir,
+    prompt: `请读取并执行任务文件：${handoff.taskPath}`,
+    environment,
+    fallback: () => spawn(getIdeExecutable(executor), buildIdeExecArgs(executor, config, handoff.workspaceDir, handoff.taskPath), {
+      cwd: handoff.workspaceDir,
+      env: environment,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
+      windowsHide: true
+    })
+  });
+}
 export function createTenantRuntime({ database, tenant, environment, rootDir, validateWorkspace = () => {} }: any) {
 const requestIdentity = new AsyncLocalStorage<any>();
 const __dirname = rootDir;
@@ -1286,13 +1303,7 @@ async function startIdeExecution(run: any) {
   const command = buildIdeCommand(executor, state.config, handoff.workspaceDir, handoff.taskPath);
   appendRunLog(run, `[${source}] ${command}`);
 
-  const child = spawn(getIdeExecutable(executor), buildIdeExecArgs(executor, state.config, handoff.workspaceDir, handoff.taskPath), {
-    cwd: handoff.workspaceDir,
-    env: environment,
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: true,
-    windowsHide: true
-  });
+  const child = spawnIdeAgent(executor, state.config, handoff, environment);
 
   run.process = {
     pid: child.pid,
@@ -1303,16 +1314,16 @@ async function startIdeExecution(run: any) {
   activeProcesses.set(run.id, child);
   appendRunLog(run, `[${source}] PID ${child.pid || "unknown"}`);
 
-  child.stdout.on("data", (chunk) => appendRunLog(run, chunk.toString()));
-  child.stderr.on("data", (chunk) => appendRunLog(run, chunk.toString()));
+  child.stdout.on("data", (chunk: any) => appendRunLog(run, chunk.toString()));
+  child.stderr.on("data", (chunk: any) => appendRunLog(run, chunk.toString()));
 
-  child.on("error", (error) => {
+  child.on("error", (error: any) => {
     activeProcesses.delete(run.id);
     markRunFailed(run, `${getIdeExecutorLabel(executor)} 执行启动失败：${sanitizeError(error)}`);
     reportRunOperationLogIfReady(run).catch((uploadError) => markOperationLogUploadFailed(run, sanitizeError(uploadError)));
   });
 
-  child.on("close", (code, signal) => {
+  child.on("close", (code: any, signal: any) => {
     handleIdeExecutionClose(run, handoff, code, signal).catch((error) => {
       markRunFailed(run, sanitizeError(error));
       reportRunOperationLogIfReady(run).catch((uploadError) => markOperationLogUploadFailed(run, sanitizeError(uploadError)));
@@ -1510,13 +1521,7 @@ async function runIdeTaskProcess(run: any, handoff: any, { phase, label, round }
   const executor = resolveIdeExecutor(run);
   return new Promise((resolve, reject) => {
     const output: any = [];
-    const child = spawn(getIdeExecutable(executor), buildIdeExecArgs(executor, state.config, handoff.workspaceDir, handoff.taskPath), {
-      cwd: handoff.workspaceDir,
-      env: environment,
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: true,
-      windowsHide: true
-    });
+    const child = spawnIdeAgent(executor, state.config, handoff, environment);
 
     run.review = ensureReviewState(run);
     run.review.process = {
@@ -1532,18 +1537,18 @@ async function runIdeTaskProcess(run: any, handoff: any, { phase, label, round }
     appendRunLog(run, `[${phase}] ${label}: ${buildIdeCommand(executor, state.config, handoff.workspaceDir, handoff.taskPath)}`);
     appendRunLog(run, `[${phase}] PID ${child.pid || "unknown"}`);
 
-    child.stdout.on("data", (chunk) => {
+    child.stdout.on("data", (chunk: any) => {
       const text = chunk.toString();
       output.push(text);
       appendRunLog(run, text);
     });
-    child.stderr.on("data", (chunk) => {
+    child.stderr.on("data", (chunk: any) => {
       const text = chunk.toString();
       output.push(text);
       appendRunLog(run, text);
     });
 
-    child.on("error", (error) => {
+    child.on("error", (error: any) => {
       activeReviewProcesses.delete(run.id);
       run.review.process = {
         ...run.review.process,
@@ -1554,7 +1559,7 @@ async function runIdeTaskProcess(run: any, handoff: any, { phase, label, round }
       reject(error);
     });
 
-    child.on("close", (code, signal) => {
+    child.on("close", (code: any, signal: any) => {
       activeReviewProcesses.delete(run.id);
       run.review.process = {
         ...run.review.process,
@@ -2921,13 +2926,7 @@ async function runIdeMergeConflictProcess(run: any, handoff: any) {
   if (closing) return;
   const executor = resolveIdeExecutor(run);
   return new Promise<void>((resolve, reject) => {
-    const child = spawn(getIdeExecutable(executor), buildIdeExecArgs(executor, state.config, handoff.workspaceDir, handoff.taskPath), {
-      cwd: handoff.workspaceDir,
-      env: environment,
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: true,
-      windowsHide: true
-    });
+    const child = spawnIdeAgent(executor, state.config, handoff, environment);
 
     run.process = {
       pid: child.pid,
@@ -2940,10 +2939,10 @@ async function runIdeMergeConflictProcess(run: any, handoff: any) {
     appendRunLog(run, `[merge-conflict] ${buildIdeCommand(executor, state.config, handoff.workspaceDir, handoff.taskPath)}`);
     appendRunLog(run, `[merge-conflict] PID ${child.pid || "unknown"}`);
 
-    child.stdout.on("data", (chunk) => appendRunLog(run, chunk.toString()));
-    child.stderr.on("data", (chunk) => appendRunLog(run, chunk.toString()));
+    child.stdout.on("data", (chunk: any) => appendRunLog(run, chunk.toString()));
+    child.stderr.on("data", (chunk: any) => appendRunLog(run, chunk.toString()));
 
-    child.on("error", (error) => {
+    child.on("error", (error: any) => {
       activeProcesses.delete(run.id);
       run.process = {
         ...run.process,
@@ -2954,7 +2953,7 @@ async function runIdeMergeConflictProcess(run: any, handoff: any) {
       reject(error);
     });
 
-    child.on("close", (code, signal) => {
+    child.on("close", (code: any, signal: any) => {
       activeProcesses.delete(run.id);
       run.process = {
         ...run.process,

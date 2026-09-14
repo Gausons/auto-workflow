@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { mkdir, readFile, readdir, writeFile, rename } from 'node:fs/promises';
 import { CodexRunner } from './codexExecution.js';
+import { AcpPreferredRunner, AcpTaskRunner } from './acpAgent.js';
 
 // Journals the last known native thread before reconnecting. Uncertain launches
 // are reported for review rather than retried and possibly duplicated.
@@ -15,7 +16,10 @@ export class RemoteCodexWorker {
       this.saved.set(job.id, structuredClone(job)); this.pending.set(job.id, structuredClone(job));
       this.queue = this.queue.then(() => this.persist(job)).catch((error: any) => { this.storageError = error; });
     };
-    this.runner = runnerFactory ? runnerFactory(update) : new CodexRunner({ executable: process.env.CODEX_EXECUTABLE || 'codex', onUpdate: update });
+    this.runner = runnerFactory ? runnerFactory(update) : new AcpPreferredRunner({
+      primary: new AcpTaskRunner({ agent: 'codex', environment: process.env, onUpdate: update }),
+      fallback: new CodexRunner({ executable: process.env.CODEX_EXECUTABLE || 'codex', onUpdate: update })
+    });
     this.update = update;
   }
   async persist(job: any) {
@@ -39,7 +43,7 @@ export class RemoteCodexWorker {
         if (!/^[a-f0-9-]{36}\.json$/.test(file)) continue;
         const job = JSON.parse(await readFile(path.join(this.directory, file), 'utf8'));
         if (job.id + '.json' !== file || job.deviceId !== this.deviceId) continue;
-        if (['launching', 'running', 'waiting'].includes(job.status)) { job.status = 'unknown'; job.request = null; job.message = '连接器已重启，请核对原 Codex 会话，不会重复执行'; }
+        if (['launching', 'running', 'waiting'].includes(job.status)) { job.status = 'unknown'; job.request = null; job.message = '连接器已重启，请核对原 Agent 会话，不会重复执行'; }
         this.saved.set(job.id, job); this.pending.set(job.id, job);
       }
       this.loaded = true;
@@ -56,7 +60,7 @@ export class RemoteCodexWorker {
         this.saved.set(job.id, claimed); await this.persist(claimed);
         await this.runner.start(claimed);
       } else if (['launching', 'running', 'waiting'].includes(job.status) && !this.saved.has(job.id)) {
-        this.update({ ...job, status: 'unknown', request: null, message: '本机没有这次执行的运行记录，请核对 Codex 会话' });
+        this.update({ ...job, status: 'unknown', request: null, message: '本机没有这次执行的运行记录，请核对 Agent 会话' });
       }
       const current = this.saved.get(job.id);
       if (job.control && current && current.controlAck !== job.control.id) {

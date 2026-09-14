@@ -24,8 +24,8 @@ export function createTaskCenter({ database, tenantId, history }: any) {
   }
   function snapshot(local: any) {
     const data = database.readTaskCenter(tenantId);
-    const synthetic = new Set(data.sessions.filter((s: any) => s.source === 'codexExecution').map((s: any) => `${s.deviceId}:${s.nativeId}`));
-    const sessions = [...local.sessions.filter((s: any) => !synthetic.has(`local:${s.nativeId}`)), ...data.sessions.filter((s: any) => s.source === 'codexExecution' || !synthetic.has(`${s.deviceId}:${s.nativeId}`)).map((s: any) => s.source === 'codexExecution' && s.deviceId === 'local' ? { ...s, historyId: local.sessions.find((l: any) => l.nativeId === s.nativeId)?.historyId } : s)];
+    const synthetic = new Set(data.sessions.filter((s: any) => ['codexExecution', 'agentExecution'].includes(s.source)).map((s: any) => `${s.deviceId}:${s.nativeId}`));
+    const sessions = [...local.sessions.filter((s: any) => !synthetic.has(`local:${s.nativeId}`)), ...data.sessions.filter((s: any) => ['codexExecution', 'agentExecution'].includes(s.source) || !synthetic.has(`${s.deviceId}:${s.nativeId}`)).map((s: any) => ['codexExecution', 'agentExecution'].includes(s.source) && s.deviceId === 'local' ? { ...s, historyId: local.sessions.find((l: any) => l.nativeId === s.nativeId)?.historyId } : s)];
     return { ...data, devices: [local.device, ...data.devices].map(d => ({ ...d, online: online(d) })),
       sessions, tasks: data.tasks.sort((a: any, b: any) => statuses.indexOf(a.status) - statuses.indexOf(b.status) || b.updatedAt.localeCompare(a.updatedAt)) };
   }
@@ -58,7 +58,7 @@ export function createTaskCenter({ database, tenantId, history }: any) {
         }
         case 'update': {
           const task = taskFor(); editable(task);
-          if (data.executions?.some((j: any) => j.taskId === task.id && ['queued', 'launching', 'running', 'waiting', 'unknown'].includes(j.status))) throw httpError(409, 'Codex 正在执行或结果待核对，请先处理执行记录');
+          if (data.executions?.some((j: any) => j.taskId === task.id && ['queued', 'launching', 'running', 'waiting', 'unknown'].includes(j.status))) throw httpError(409, 'Agent 正在执行或结果待核对，请先处理执行记录');
           task.title = required(input.title, 120);
           if (!statuses.includes(input.status)) throw httpError(400, '任务状态无效');
           if (data.handoffs.some((h: any) => h.taskId === task.id && h.mode === 'continue' && ['pending', 'received'].includes(h.status))) throw httpError(409, '请先完成或取消当前交接，再修改任务');
@@ -79,7 +79,7 @@ export function createTaskCenter({ database, tenantId, history }: any) {
           Object.assign(device, { name: required(input.name, 120), agents: input.agents.map((a: any) => required(a, 80)), lastSeen: now(), transport: 'connector' });
           if (input.codexProjects !== undefined) {
             if (!Array.isArray(input.codexProjects) || input.codexProjects.length > 100) throw httpError(400, 'Codex 项目列表无效');
-            device.codexProjects = input.codexProjects.map((p: any) => ({ id: required(p?.id, 100), name: required(p?.name, 120), cwd: required(p?.cwd, 2000) }));
+            device.codexProjects = input.codexProjects.map((p: any) => ({ id: required(p?.id, 100), name: required(p?.name, 120), cwd: required(p?.cwd, 2000), protocol: p?.protocol === 'acp' ? 'acp' : 'legacy', agent: text(p?.agent ?? 'codex', 80) || 'codex' }));
           }
           if (!Array.isArray(input.sessions) || input.sessions.length > 100) throw httpError(400, '每批最多同步 100 个会话');
           for (const s of input.sessions) {
