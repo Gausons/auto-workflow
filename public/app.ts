@@ -127,7 +127,7 @@ async function init() {
   });
   bindMemberEvents();
   if (sessionStorage.getItem("bugflow.sessionToken")) {
-    try { await loadBootstrap(); showWorkspace(); if (state.view === 'tasks') await taskCenterUI.load(); if (state.view === "members") await loadMembers(); if (state.view === "history") await loadAgentHistory(); }
+    try { await loadBootstrap(); showWorkspace(); if (['tasks', 'new-task'].includes(state.view)) { await taskCenterUI.load(); if (state.view === 'new-task') await taskCenterUI.openNew(); else taskCenterUI.showTasks(); } if (state.view === "members") await loadMembers(); if (state.view === "history") await loadAgentHistory(); }
     catch (error: any) { select("#loginError").textContent = error.message; }
   }
 }
@@ -141,6 +141,7 @@ function renderPermissions() {
     select('#currentUser').textContent = label;
     select('#accountIdentity').textContent = `${state.user.username} · ${label}`;
   }
+  if (state.view === 'new-task' && !can('work.execute')) state.view = 'tasks';
   if ((state.view === 'members' && !can('members.manage')) || (state.view === 'config' && !can('config.manage'))) state.view = 'workbench';
   document.querySelectorAll('#assignmentPeopleList input, #assignmentPeopleList textarea').forEach((input: any) => { input.readOnly = !can('people.manage'); });
 }
@@ -220,10 +221,10 @@ function showWorkspace() {
 
 function bindEvents() {
   bindHistoryEvents();
-  window.addEventListener("hashchange", () => {
+  window.addEventListener("hashchange", async () => {
     state.view = currentView();
     render();
-    if (state.view === 'tasks') taskCenterUI.load();
+    if (['tasks', 'new-task'].includes(state.view)) { await taskCenterUI.load(); if (state.view === 'new-task') await taskCenterUI.openNew(); else taskCenterUI.showTasks(); }
     if (state.view === "members") loadMembers().catch((error) => showToast(error.message));
     if (state.view === "history") loadAgentHistory();
   });
@@ -939,7 +940,7 @@ function renderAssigneeOptions() {
 function renderPages() {
   document.body.dataset.view = state.view;
   document.querySelectorAll<HTMLElement>("[data-page]").forEach((page) => {
-    page.hidden = page.dataset.page !== state.view;
+    page.hidden = page.dataset.page !== (state.view === 'new-task' ? 'tasks' : state.view);
   });
 
   document.querySelectorAll<HTMLElement>("[data-nav]").forEach((link) => {
@@ -2141,7 +2142,7 @@ async function api(path: any, options: any = {}) {
 
 function currentView() {
   const view = location.hash.replace(/^#/, "");
-  return ["tasks", "workbench", "pipeline", "records", "history", "assignment", "config", "members", "account"].includes(view) ? view : "tasks";
+  return ["new-task", "tasks", "workbench", "pipeline", "records", "history", "assignment", "config", "members", "account"].includes(view) ? view : "tasks";
 }
 
 function bindHistoryEvents() {

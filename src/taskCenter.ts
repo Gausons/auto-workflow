@@ -54,7 +54,7 @@ export function createTaskCenter({ database, tenantId, history }: any) {
         case 'create': {
           const task = saveTask(input.title, input.context);
           if (input.sessionId) attach(task, input.sessionId);
-          return { taskId: task.id };
+          return { taskId: task.id, revision: task.revision };
         }
         case 'update': {
           const task = taskFor(); editable(task);

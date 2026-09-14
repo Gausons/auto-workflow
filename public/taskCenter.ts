@@ -9,6 +9,9 @@ const selectFrom = (root: ParentNode, selector: string): any => root.querySelect
 const time = (v: any) => v && Number.isFinite(Date.parse(v)) ? new Date(v).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '未知';
 export function createTaskCenterUI({ root, api, canEdit, toast }: any) {
   let data: any = { tasks: [], sessions: [], devices: [], handoffs: [], executions: [] }, selected: any = null, page = 'tasks', tab = 'progress', query = '', loaded = false, request = 0;
+  let draft = '', sourceSessionId: string | null = null, creating = false, createError = '';
+  let createTargets: any[] | null = null, createTargetsError = '', createProjectIndex = 0, createModel = '', createReasoningEffort = '', createCwd = '';
+  const createdMessages: { text: string; taskId: string; executed: boolean }[] = [];
   const device = (id: any) => data.devices.find((d: any) => d.id === id);
   const position = (s: any) => `${device(s?.deviceId)?.name || '未知设备'} / ${s?.agentLabel || s?.agent || '未知 Agent'}`;
   const linked = (id: any) => data.tasks.find((t: any) => t.sessionIds.includes(id));
@@ -19,7 +22,7 @@ export function createTaskCenterUI({ root, api, canEdit, toast }: any) {
     if (selectFrom(root, 'dialog[open]')) return;
     const id = ++request;
     if (!loaded) root.innerHTML = '<p role="status">正在汇总任务与会话…</p>';
-    try { const result = await api('/api/task-center'); if (id !== request) return; data = result; loaded = true; selected ||= data.tasks[0]?.id; render(); }
+    try { const result = await api('/api/task-center'); if (id !== request) return; data = result; loaded = true; selected ||= data.tasks[0]?.id; if (page !== 'new' || !selectFrom(root, '#tc-create-form')) render(); }
     catch (error: any) { if (id !== request) return; if (!quiet) { if (!loaded) root.innerHTML = `<p role="alert">${esc(error.message)}</p>${button('refresh', '重试')}`; else toast(error.message); } }
   }
   function sessionCard(s: any, assign = false) {
@@ -47,7 +50,7 @@ export function createTaskCenterUI({ root, api, canEdit, toast }: any) {
   function render() {
     const unassigned = data.sessions.filter((s: any) => !linked(s.id));
     const needle = query.toLowerCase();
-    root.innerHTML = `<header class="tc-heading"><div><p class="eyebrow">跨设备 · 跨 Agent</p><h1>任务中心</h1></div><div class="tc-actions">${button('refresh', '刷新')}${canEdit() ? button('new', '新建任务', '', true) : ''}</div></header><nav class="tc-nav" aria-label="任务中心视图">${[['tasks', '全部任务', data.tasks.length], ['inbox', '未归属会话', unassigned.length], ['devices', '设备与 Agent', data.devices.length]].map(([id, title, count]) => `<button type="button" data-tc="page" data-id="${id}" aria-pressed="${page === id}">${title}<span>${count}</span></button>`).join('')}</nav>${page === 'tasks' ? `<div class="tc-layout"><aside class="tc-list" aria-label="任务列表">${Object.entries(labels).map(([status, title]) => { const tasks = data.tasks.filter((t: any) => t.status === status); return tasks.length ? `<h3>${title} <span>${tasks.length}</span></h3>${tasks.map((t: any) => `<button type="button" class="tc-task" data-tc="select" data-id="${t.id}" aria-pressed="${selected === t.id}"><strong>${esc(t.title)}</strong><span>${esc(t.context.next || t.events[0]?.message)}</span><small>${time(t.updatedAt)} · ${t.sessionIds.length} 段会话</small><small>${t.sessionIds.length ? esc(position(data.sessions.find((s: any) => s.id === t.sessionIds.at(-1)))) : '尚未选择执行位置'}</small></button>`).join('')}` : ''; }).join('') || '<p class="tc-meta">暂无任务</p>'}</aside><div class="tc-detail">${detail()}</div></div>` : page === 'inbox' ? `<section class="tc-inbox"><div class="tc-actions"><h2>未归属会话</h2><label class="tc-search">搜索会话<input id="tc-query" value="${esc(query)}" placeholder="任务名、Agent 或工作目录" maxlength="200"></label></div><p class="tc-meta">自动汇总的历史记录需要手动关联任务；远端设备需运行同步连接器。</p><div id="tc-inbox-list">${unassigned.filter((s: any) => [s.title, s.agent, s.cwd, position(s)].join(' ').toLowerCase().includes(needle)).map((s: any) => sessionCard(s, true)).join('') || empty('暂无匹配会话', '可以调整搜索条件，或连接其他设备后刷新。')}</div></section>` : `<section class="tc-devices">${data.devices.map((d: any) => `<article><div class="tc-actions"><h2>${esc(d.name)}</h2><span class="tc-tag">${d.online ? '在线' : '离线'}</span></div><p>${d.agents.map(esc).join(' · ') || '未发现 Agent'}</p><p class="tc-meta">${d.transport === 'manual' ? '工作台所在设备 · 手动复制上下文接续' : '连接器 · 最近心跳 ' + time(d.lastSeen)}</p></article>`).join('')}<article><h2>连接另一台设备</h2><p>在设备上运行项目中的同步连接器，将会话目录和设备状态同步到同一工作台，并接收交接包。</p><code>pnpm device:sync</code><p class="tc-meta">连接参数见 README「多设备任务中心」。连接器不会启动 Agent 或执行交接指令。</p></article></section>`}`;
+    root.innerHTML = `<header class="tc-heading"><div><p class="eyebrow">跨设备 · 跨 Agent</p><h1>${page === 'new' ? '新建任务' : '任务中心'}</h1></div><div class="tc-actions">${page === 'new' ? button('page', '返回任务中心', 'tasks') : button('refresh', '刷新')}</div></header>${page === 'new' ? createConversation() : `<nav class="tc-nav" aria-label="任务中心视图">${[['tasks', '全部任务', data.tasks.length], ['inbox', '未归属会话', unassigned.length], ['devices', '设备与 Agent', data.devices.length]].map(([id, title, count]) => `<button type="button" data-tc="page" data-id="${id}" aria-pressed="${page === id}">${title}<span>${count}</span></button>`).join('')}</nav>`}${page === 'new' ? '' : page === 'tasks' ? `<div class="tc-layout"><aside class="tc-list" aria-label="任务列表">${Object.entries(labels).map(([status, title]) => { const tasks = data.tasks.filter((t: any) => t.status === status); return tasks.length ? `<h3>${title} <span>${tasks.length}</span></h3>${tasks.map((t: any) => `<button type="button" class="tc-task" data-tc="select" data-id="${t.id}" aria-pressed="${selected === t.id}"><strong>${esc(t.title)}</strong><span>${esc(t.context.next || t.events[0]?.message)}</span><small>${time(t.updatedAt)} · ${t.sessionIds.length} 段会话</small><small>${t.sessionIds.length ? esc(position(data.sessions.find((s: any) => s.id === t.sessionIds.at(-1)))) : '尚未选择执行位置'}</small></button>`).join('')}` : ''; }).join('') || '<p class="tc-meta">暂无任务</p>'}</aside><div class="tc-detail">${detail()}</div></div>` : page === 'inbox' ? `<section class="tc-inbox"><div class="tc-actions"><h2>未归属会话</h2><label class="tc-search">搜索会话<input id="tc-query" value="${esc(query)}" placeholder="任务名、Agent 或工作目录" maxlength="200"></label></div><p class="tc-meta">自动汇总的历史记录需要手动关联任务；远端设备需运行同步连接器。</p><div id="tc-inbox-list">${unassigned.filter((s: any) => [s.title, s.agent, s.cwd, position(s)].join(' ').toLowerCase().includes(needle)).map((s: any) => sessionCard(s, true)).join('') || empty('暂无匹配会话', '可以调整搜索条件，或连接其他设备后刷新。')}</div></section>` : `<section class="tc-devices">${data.devices.map((d: any) => `<article><div class="tc-actions"><h2>${esc(d.name)}</h2><span class="tc-tag">${d.online ? '在线' : '离线'}</span></div><p>${d.agents.map(esc).join(' · ') || '未发现 Agent'}</p><p class="tc-meta">${d.transport === 'manual' ? '工作台所在设备 · 手动复制上下文接续' : '连接器 · 最近心跳 ' + time(d.lastSeen)}</p></article>`).join('')}<article><h2>连接另一台设备</h2><p>在设备上运行项目中的同步连接器，将会话目录和设备状态同步到同一工作台，并接收交接包。</p><code>pnpm device:sync</code><p class="tc-meta">连接参数见 README「多设备任务中心」。连接器不会启动 Agent 或执行交接指令。</p></article></section>`}`;
   }
   function dialog(title: any, body: any, submit = '') {
     const d = document.createElement('dialog'); d.className = 'tc-dialog';
@@ -63,10 +66,79 @@ export function createTaskCenterUI({ root, api, canEdit, toast }: any) {
     };
   }
   const mutate = (body: any) => api('/api/task-center', { method: 'POST', body: JSON.stringify(body) });
-  function editDialog(t: any = null, sessionId: any = null) {
-    const s = data.sessions.find((s: any) => s.id === sessionId);
-    const d = dialog(t ? '编辑任务' : '新建任务', `<label>任务名称<input name="title" value="${esc(t?.title || s?.title)}" required maxlength="120"></label>${t ? `<label>任务状态<select name="status">${Object.entries(labels).map(([v, l]) => `<option value="${v}" ${t.status === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>` : ''}${Object.entries(fields).map(([k, label]) => `<label>${label}<textarea name="${k}" rows="${k === 'goal' || k === 'next' ? 3 : 2}" maxlength="12000">${esc(t?.context[k] || (k === 'goal' ? s?.title : ''))}</textarea></label>`).join('')}`, t ? '保存任务' : '创建任务');
-    onSubmit(d, async (f: any) => { const r = await mutate({ action: t ? 'update' : 'create', taskId: t?.id, revision: t?.revision, title: f.get('title'), status: f.get('status'), context: Object.fromEntries(Object.keys(fields).map(k => [k, f.get(k)])), sessionId }); selected = r.taskId; page = 'tasks'; });
+  const createProject = () => createTargets?.[createProjectIndex];
+  function createModelOptions() {
+    const project = createProject(), models = project?.models || [];
+    return `<option value="">默认模型${project?.defaultModel ? `（${esc(project.defaultModel)}）` : ''}</option>${models.map((model: any) => `<option value="${esc(model.id)}" ${createModel === model.id ? 'selected' : ''}>${esc(model.name || model.id)}</option>`).join('')}`;
+  }
+  function createEffortOptions() {
+    const project = createProject(), model = (project?.models || []).find((item: any) => item.id === createModel);
+    const efforts = Array.isArray(model?.reasoningEfforts) ? model.reasoningEfforts : project?.reasoningEfforts || [];
+    const fallback = model?.defaultReasoningEffort || project?.defaultReasoningEffort;
+    return `<option value="">默认强度${fallback ? `（${esc(fallback)}）` : ''}</option>${efforts.map((effort: any) => `<option value="${esc(effort.id)}" ${createReasoningEffort === effort.id ? 'selected' : ''}>${esc(effort.name || effort.id)}</option>`).join('')}`;
+  }
+  function createConversation() {
+    const project = createProject(), directories = project?.commonDirectories || [];
+    const targetOptions = (createTargets || []).map((item: any, index: number) => `<option value="${index}" ${index === createProjectIndex ? 'selected' : ''}>${esc(item.name)} · ${esc(item.deviceName)}${item.online ? '' : '（离线）'}</option>`).join('');
+    return `<section class="tc-create" aria-label="新建任务会话"><div class="tc-create-log" role="log" aria-live="polite">${createdMessages.length ? createdMessages.map(m => `<p class="tc-create-message">${esc(m.text)}</p><div class="tc-create-reply">${m.executed ? '任务已创建并提交 Agent。' : '任务已创建。'}${button('open-created', '查看任务', m.taskId)}</div>`).join('') : empty('想让 Agent 完成什么？', '描述任务并选择运行配置，发送后会创建任务和 Agent 会话。')}</div><form id="tc-create-form" class="tc-composer" aria-busy="${creating}">${sourceSessionId ? `<p class="tc-meta">将关联会话：${esc(data.sessions.find((s: any) => s.id === sourceSessionId)?.title)}</p>` : ''}<textarea id="tc-create-message" aria-label="任务描述" placeholder="描述任务、期望结果，或需要解决的问题…" rows="4" maxlength="12000" required ${creating ? 'disabled' : ''}>${esc(draft)}</textarea>${createTargets === null ? '<p class="tc-create-hint">正在读取可用模型和工作目录…</p>' : project ? `<div class="tc-create-settings"><label class="tc-create-setting">执行位置<select id="tc-create-project" ${creating ? 'disabled' : ''}>${targetOptions}</select></label><label class="tc-create-setting">模型<select id="tc-create-model" ${creating ? 'disabled' : ''}>${createModelOptions()}</select></label><label class="tc-create-setting">思考强度<select id="tc-create-effort" ${creating ? 'disabled' : ''}>${createEffortOptions()}</select></label></div><div class="tc-create-directory"><span aria-hidden="true">▣</span><input id="tc-create-cwd" aria-label="工作目录" value="${esc(createCwd)}" placeholder="${esc(project.cwd || '选择工作目录')}" maxlength="2000" ${creating ? 'disabled' : ''}><button type="button" class="button ghost" data-tc="create-clear-directory" ${creating ? 'disabled' : ''}>默认目录</button><button type="button" class="button secondary" data-tc="create-pick-directory" ${creating ? 'disabled' : ''}>选择目录</button></div>${directories.length ? `<div class="tc-actions">${directories.slice(0, 4).map((cwd: string, index: number) => `<button type="button" class="button ghost" data-tc="create-directory" data-id="${index}" title="${esc(cwd)}">${esc(cwd)}</button>`).join('')}</div>` : ''}<p class="tc-create-hint">${esc((project.models || []).find((model: any) => model.id === createModel)?.description || '未选择时使用目标 Agent 的默认模型与思考强度。')}</p>` : `<p class="tc-create-hint" role="alert">${esc(createTargetsError || '未发现可用的 Agent 执行目标，请检查对接配置。任务仍可单独创建。')}</p>`}<footer><span class="tc-meta">⌘ / Ctrl + Enter 发送</span><button class="button primary" type="submit" ${creating || !draft.trim() ? 'disabled' : ''}>${creating ? '正在创建…' : project ? '创建并运行' : '创建任务'}</button></footer><p class="tc-form-error" role="alert" ${createError ? '' : 'hidden'}>${esc(createError)}</p></form></section>`;
+  }
+  async function loadCreateTargets() {
+    if (createTargets !== null) return;
+    try {
+      const result = await api('/api/task-center/codex');
+      const targets = Array.isArray(result.projects) ? result.projects : [];
+      createTargets = targets;
+      createTargetsError = result.localError || '';
+      createProjectIndex = Math.min(createProjectIndex, Math.max(0, targets.length - 1));
+    } catch (error: any) { createTargets = []; createTargetsError = error.message; }
+    if (page === 'new') render();
+  }
+  async function openCreate(sessionId: string | null = null) {
+    if (!canEdit()) return;
+    if (sessionId && !creating) {
+      sourceSessionId = sessionId;
+      draft = data.sessions.find((s: any) => s.id === sessionId)?.title || '';
+      createError = '';
+    }
+    page = 'new'; render();
+    await loadCreateTargets();
+    selectFrom(root, '#tc-create-message')?.focus();
+  }
+  root.addEventListener('submit', async (e: any) => {
+    if (e.target.id !== 'tc-create-form') return;
+    e.preventDefault();
+    if (creating || !canEdit() || !draft.trim()) return;
+    const description = draft.trim();
+    const title = description.split(/\n/)[0].slice(0, 120);
+    creating = true; createError = ''; render();
+    try {
+      const result = await mutate({ action: 'create', title, context: { goal: description }, sessionId: sourceSessionId });
+      const project = createProject(); let executed = false;
+      if (project) {
+        try { await api('/api/task-center/execute', { method: 'POST', body: JSON.stringify({ taskId: result.taskId, revision: result.revision || 1, projectId: project.id, cwd: createCwd.trim(), model: createModel, reasoningEffort: createReasoningEffort, deviceId: project.deviceId }) }); executed = true; }
+        catch (error: any) { createError = `任务已创建，但 Agent 启动失败：${error.message}`; }
+      }
+      createdMessages.push({ text: description, taskId: result.taskId, executed });
+      selected = result.taskId; draft = ''; sourceSessionId = null; createCwd = '';
+      await load({ quiet: true });
+    } catch (error: any) { createError = error.message; }
+    finally {
+      creating = false; render();
+      if (page === 'new') {
+        selectFrom(root, '#tc-create-message')?.focus();
+        const log = selectFrom(root, '.tc-create-log'); log.scrollTop = log.scrollHeight;
+      }
+    }
+  });
+  root.addEventListener('keydown', (e: any) => {
+    if (e.target.id === 'tc-create-message' && e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.isComposing) {
+      e.preventDefault(); selectFrom(root, '#tc-create-form').requestSubmit();
+    }
+  });
+  function editDialog(t: any) {
+    if (!t) return;
+    const d = dialog('编辑任务', `<label>任务名称<input name="title" value="${esc(t.title)}" required maxlength="120"></label><label>任务状态<select name="status">${Object.entries(labels).map(([v, l]) => `<option value="${v}" ${t.status === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>${Object.entries(fields).map(([k, label]) => `<label>${label}<textarea name="${k}" rows="${k === 'goal' || k === 'next' ? 3 : 2}" maxlength="12000">${esc(t.context[k])}</textarea></label>`).join('')}`, '保存任务');
+    onSubmit(d, async (f: any) => { const r = await mutate({ action: 'update', taskId: t.id, revision: t.revision, title: f.get('title'), status: f.get('status'), context: Object.fromEntries(Object.keys(fields).map(k => [k, f.get(k)])) }); selected = r.taskId; page = 'tasks'; });
   }
   function handoffDialog() {
     const t = task(); const targets = data.devices.flatMap((d: any) => d.agents.map((agent: any) => ({ device: d, agent })));
@@ -88,15 +160,50 @@ export function createTaskCenterUI({ root, api, canEdit, toast }: any) {
   }
   function packetText(h: any) { const p = h.packet; return [`# ${p.title}`, `目标：${device(h.deviceId)?.name} / ${h.agent}`, `上下文版本：${p.contextVersion}`, h.targetSessionId ? `目标会话：${data.sessions.find((s: any) => s.id === h.targetSessionId)?.nativeId || h.targetSessionId}` : '', ...Object.entries(fields).map(([k, l]) => `## ${l}\n${p.context[k] || '未填写'}`), `## 下一位 Agent 的指令\n${p.instruction}`, '## 来源', ...p.sources.map((s: any) => `${s.title} · ${s.agent} · ${s.nativeId}\n${s.cwd}\n${s.excerpt || '仅包含来源索引，可回到工作台查看原始记录。'}`), p.limitations].join('\n\n'); }
   root.addEventListener('input', (e: any) => {
+    if (e.target.id === 'tc-create-message') {
+      draft = e.target.value;
+      selectFrom(root, '#tc-create-form [type="submit"]').disabled = creating || !draft.trim();
+      return;
+    }
+    if (e.target.id === 'tc-create-cwd') { createCwd = e.target.value; return; }
     if (e.target.id !== 'tc-query') return;
     query = e.target.value; const needle = query.toLowerCase();
     selectFrom(root, '#tc-inbox-list').innerHTML = data.sessions.filter((s: any) => !linked(s.id) && [s.title, s.agent, s.cwd, position(s)].join(' ').toLowerCase().includes(needle)).map((s: any) => sessionCard(s, true)).join('') || empty('暂无匹配会话', '试试其他搜索词。');
+  });
+  root.addEventListener('change', (e: any) => {
+    if (e.target.id === 'tc-create-project') {
+      createProjectIndex = Number(e.target.value) || 0; createModel = ''; createReasoningEffort = ''; createCwd = ''; render();
+    }
+    if (e.target.id === 'tc-create-model') { createModel = e.target.value; createReasoningEffort = ''; render(); }
+    if (e.target.id === 'tc-create-effort') createReasoningEffort = e.target.value;
   });
   root.addEventListener('click', async (e: any) => {
     const b = e.target.closest('[data-tc]'); if (!b) return; const id = b.dataset.id, action = b.dataset.tc;
     try {
       if (action === 'refresh') return await load();
       if (action === 'page') { page = id; render(); }
+      if (action === 'create-directory') { createCwd = createProject()?.commonDirectories?.[Number(id)] || ''; render(); }
+      if (action === 'create-clear-directory') { createCwd = ''; render(); }
+      if (action === 'create-pick-directory') {
+        const project = createProject(); if (!project) return;
+        b.disabled = true;
+        try {
+          const response = await api('/api/task-center/directory-picker', { method: 'POST', body: JSON.stringify({ deviceId: project.deviceId, projectId: project.id }) });
+          if (response.status === 'completed') createCwd = response.cwd;
+          else {
+            for (let attempt = 0; attempt < 300; attempt++) {
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              const status = await api(`/api/task-center/directory-picker?requestId=${encodeURIComponent(response.requestId)}`);
+              if (status.status === 'completed') { createCwd = status.cwd; break; }
+              if (status.status === 'cancelled') throw new Error('已取消选择目录');
+              if (status.status === 'failed') throw new Error(status.message || '无法选择目录');
+              if (attempt === 299) throw new Error('等待目录选择超时');
+            }
+          }
+          render();
+        } catch (error: any) { createError = error.message; render(); }
+        finally { b.disabled = false; }
+      }
       if (action === 'select') { selected = id; render(); }
       if (action === 'tab') { tab = id; render(); }
       if (action === 'execute-dialog') {
@@ -159,13 +266,14 @@ export function createTaskCenterUI({ root, api, canEdit, toast }: any) {
         const d = dialog('回复 Agent', body, '发送回复');
         onSubmit(d, (f: any) => api('/api/task-center/execution-action', { method: 'POST', body: JSON.stringify({ executionId: id, action: 'respond', decision: f.get('decision'), ...(questions ? { answers: Object.fromEntries(questions.map((q: any, i: any) => [q.id, f.get('answer' + i)])) } : {}) }) }));
       }
-      if (action === 'new') editDialog();
+      if (action === 'new') await openCreate();
+      if (action === 'open-created') { selected = id; page = 'tasks'; tab = 'progress'; render(); await load(); }
       if (action === 'edit') editDialog(task());
       if (action === 'handoff-dialog') handoffDialog();
       if (action === 'link-dialog') {
         const owner = linked(id); if (owner) { selected = owner.id; page = 'tasks'; render(); return; }
         const d = dialog('关联会话', `<label>选择已有任务<select name="taskId" required><option value="">请选择任务</option>${data.tasks.map((t: any) => `<option value="${t.id}">${esc(t.title)}</option>`).join('')}</select></label><button class="button secondary" type="button" id="tc-from-session">用此会话创建任务</button>`, '关联任务');
-        selectFrom(d, '#tc-from-session').onclick = () => { d.close(); editDialog(null, id); };
+        selectFrom(d, '#tc-from-session').onclick = () => { d.close(); openCreate(id); };
         onSubmit(d, async (f: any) => { const t = data.tasks.find((t: any) => t.id === f.get('taskId')); await mutate({ action: 'link', taskId: t.id, revision: t.revision, sessionId: id }); selected = t.id; page = 'tasks'; });
       }
       if (action === 'session') {
@@ -191,5 +299,5 @@ export function createTaskCenterUI({ root, api, canEdit, toast }: any) {
     } catch (error: any) { toast(error.message); b.disabled = false; }
   });
   setInterval(() => { if (!root.hidden && sessionStorage.getItem('bugflow.sessionToken')) load({ quiet: true }); }, 3000);
-  return { load };
+  return { load, openNew: () => openCreate(), showTasks: () => { page = 'tasks'; render(); } };
 }
