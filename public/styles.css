@@ -2391,6 +2391,13 @@ body[data-view="tasks"] .topbar { display: none; }
 .tc-heading { margin-bottom: 24px; }
 .tc-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .tc-actions .button { font-size: 14px; }
+#tc-common-directories { margin-top: -6px; }
+#tc-common-directories .tc-actions { align-items: stretch; }
+#tc-common-directories .button { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+#tc-common-directories details { margin-top: 10px; }
+#tc-common-directories details .tc-actions { margin-top: 10px; }
+.tc-picker-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; }
+.tc-picker-row input[readonly] { background: #f8fafb; color: var(--ink); }
 .tc-nav, .tc-tabs { display: flex; gap: 22px; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
 .tc-nav { margin-bottom: 24px; }
 .tc-nav button, .tc-tabs button { border: 0; background: transparent; padding: 12px 0; color: var(--muted); cursor: pointer; font-size: 14px; }
@@ -2443,7 +2450,7 @@ body[data-view="tasks"] .topbar { display: none; }
 .tc-message { border-bottom: 1px solid var(--line); margin: 18px 0; }
 #tc-messages { white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 1100px) { .tc-layout { grid-template-columns: 230px minmax(0, 1fr); } .tc-detail { padding: 20px; } }
-@media (max-width: 800px) { .tc-layout { grid-template-columns: 1fr; } .tc-list { border-right: 0; border-bottom: 1px solid var(--line); } .tc-two { grid-template-columns: 1fr; gap: 0; } .tc-search { margin-left: 0; } .tc-nav { gap: 16px; } }
+@media (max-width: 800px) { .tc-layout { grid-template-columns: 1fr; } .tc-list { border-right: 0; border-bottom: 1px solid var(--line); } .tc-two, .tc-picker-row { grid-template-columns: 1fr; gap: 0; } .tc-picker-row .button { margin-top: 8px; } .tc-search { margin-left: 0; } .tc-nav { gap: 16px; } }
 body[data-can-execute="false"] .task-center [data-tc="new"], body[data-can-execute="false"] .task-center [data-tc="edit"], body[data-can-execute="false"] .task-center [data-tc="handoff-dialog"] { display: none; }
 .tc-execution { margin: 18px 0; padding: 18px; border: 1px solid #bbd9d3; border-radius: 8px; background: #f7fbfa; }
 .tc-execution p { margin: 8px 0; overflow-wrap: anywhere; }

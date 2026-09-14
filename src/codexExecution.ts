@@ -1,8 +1,8 @@
 import path from 'node:path';
-import { realpath } from 'node:fs/promises';
+import { realpath, stat } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
 import { CodexAppServer } from './codexAppServer.js';
-import { AcpPreferredRunner, AcpTaskRunner } from './acpAgent.js';
+import { AcpPreferredRunner, AcpTaskRunner, AgentRunnerSet, configuredAcpAgents } from './acpAgent.js';
 import { httpError } from './rbac.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -13,15 +13,36 @@ const inside = (root: any, target: any) => target === root || target.startsWith(
 export async function openCodexThread(threadId: any) {
   if (!/^[a-f0-9-]{36}$/.test(threadId)) throw new Error('Codex 会话标识无效');
   const url = `codex://threads/${threadId}`;
-  const command: [string, string[]] = process.platform === 'darwin' ? ['open', ['-g', url]] : process.platform === 'win32' ? ['rundll32.exe', ['url.dll,FileProtocolHandler', url]] : ['xdg-open', [url]];
+  const command: [string, string[]] = process.platform === 'darwin' ? ['open', [url]] : process.platform === 'win32' ? ['rundll32.exe', ['url.dll,FileProtocolHandler', url]] : ['xdg-open', [url]];
   await promisify(execFile)(command[0], command[1], { timeout: 10000 });
+}
+
+export async function pickNativeDirectory(defaultCwd = process.cwd()) {
+  try {
+    let result: any;
+    if (process.platform === 'darwin') {
+      const script = 'on run argv\nset chosenFolder to choose folder with prompt "选择 IDE 工作目录" default location POSIX file (item 1 of argv)\nreturn POSIX path of chosenFolder\nend run';
+      result = await promisify(execFile)('osascript', ['-e', script, defaultCwd], { timeout: 300000 });
+    } else if (process.platform === 'win32') {
+      const script = 'Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.FolderBrowserDialog; if($d.ShowDialog() -eq "OK"){[Console]::Write($d.SelectedPath)}else{exit 2}';
+      result = await promisify(execFile)('powershell.exe', ['-NoProfile', '-Command', script], { timeout: 300000 });
+    } else {
+      result = await promisify(execFile)('zenity', ['--file-selection', '--directory', `--filename=${defaultCwd}${path.sep}`], { timeout: 300000 });
+    }
+    return await realpath(String(result.stdout || '').trim());
+  } catch (error: any) {
+    if (error.code === 2 || error.code === 1 || /cancel|取消|-128/i.test(`${error.message || ''}\n${error.stderr || ''}`)) {
+      throw Object.assign(new Error('已取消选择目录'), { code: 'DIRECTORY_PICKER_CANCELLED' });
+    }
+    throw new Error(`无法在目标机器打开目录选择器：${error.message}`);
+  }
 }
 export function executionPrompt(task: any) {
   return [`任务：${task.title}`, ...Object.entries({ goal: '目标', constraints: '约束', decisions: '已确认结论', next: '下一步', files: '相关文件与版本' }).map(([key, label]) => `${label}：\n${task.context[key] || '未填写'}`), '请在指定项目中执行任务，完成后说明结果、验证情况和未完成事项。'].join('\n\n');
 }
 
 export class CodexRunner {
-  clientFactory: any; onUpdate: any; jobs: any; pendingRequests: any; connecting: any; client: any; desktopOpener: any;
+  clientFactory: any; onUpdate: any; jobs: any; pendingRequests: any; connecting: any; client: any; desktopOpener: any; modelCatalog: any = undefined;
 
   constructor({ executable = 'codex', environment = process.env, clientFactory = () => new CodexAppServer({ executable, environment }), onUpdate = () => {}, desktopOpener = openCodexThread }: any = {}) {
     this.clientFactory = clientFactory; this.onUpdate = onUpdate; this.jobs = new Map(); this.pendingRequests = new Map(); this.connecting = null; this.client = null;
@@ -43,19 +64,38 @@ export class CodexRunner {
     })().finally(() => { this.connecting = null; });
     return this.connecting;
   }
+  async models() {
+    if (this.modelCatalog !== undefined) return this.modelCatalog;
+    try {
+      const result: any = await (await this.connect()).call('model/list', {});
+      this.modelCatalog = (result.data || []).filter((model: any) => !model.hidden).map((model: any) => ({
+        id: model.id, name: model.displayName || model.id, description: model.description || '',
+        reasoningEfforts: (model.supportedReasoningEfforts || []).map((effort: any) => ({ id: effort.reasoningEffort, name: effort.reasoningEffort, description: effort.description || '' })),
+        defaultReasoningEffort: model.defaultReasoningEffort || ''
+      }));
+    } catch { this.modelCatalog = []; }
+    return this.modelCatalog;
+  }
   async projects(allowedRoot: any) {
     const client = await this.connect();
     const account = await client.call('account/read', {});
     if (!account.account && account.requiresOpenaiAuth) throw new Error('请先在目标设备的 Codex 客户端登录');
-    const root = await realpath(allowedRoot);
+    const root = await realpath(allowedRoot), models = await this.models();
     const projects: any[] = []; let cursor;
-    do {
-      const result: any = await client.call('project/list', { ...(cursor ? { cursor } : {}) });
-      for (const project of result.data || []) for (const entry of project.roots || []) {
-        try { const cwd = await realpath(entry.path); if (inside(root, cwd)) projects.push({ id: project.id, name: project.name, cwd }); } catch { /* Removed project roots aren't executable. */ }
-      }
-      cursor = result.nextCursor;
-    } while (cursor);
+    try {
+      do {
+        const result: any = await client.call('project/list', { ...(cursor ? { cursor } : {}) });
+        for (const project of result.data || []) for (const entry of project.roots || []) {
+          try { const cwd = await realpath(entry.path); if (inside(root, cwd)) projects.push({ id: project.id, appServerProjectId: project.id, name: project.name, cwd, protocol: 'legacy', agent: 'codex', models }); } catch { /* Removed project roots aren't executable. */ }
+        }
+        cursor = result.nextCursor;
+      } while (cursor);
+    } catch (error: any) {
+      // Codex 0.144 removed project/list. A cwd-only thread remains supported,
+      // so expose the tenant's already validated workspace as the target.
+      if (error.code !== -32601 && !/(project\/list.*(not found|unknown|unsupported|supported methods)|(not found|unknown|unsupported).*project\/list)/i.test(error.message || '')) throw error;
+      return [{ id: `workspace:${createHash('sha256').update(root).digest('hex').slice(0, 16)}`, appServerProjectId: null, name: path.basename(root) || root, cwd: root, protocol: 'legacy', agent: 'codex', models }];
+    }
     return projects;
   }
   async start(job: any) {
@@ -66,10 +106,15 @@ export class CodexRunner {
       const client = await this.connect();
       this.publish(job, { status: 'launching', message: '正在创建 Codex 会话' });
       creating = true;
-      const result = await client.call('thread/start', { cwd: job.cwd, projectId: job.projectId, ephemeral: false, serviceName: 'bugflow_workbench' });
+      const appServerProjectId = job.appServerProjectId !== undefined ? job.appServerProjectId : String(job.projectId || '').startsWith('workspace:') ? null : job.projectId;
+      const result = await client.call('thread/start', { cwd: job.cwd, ...(appServerProjectId ? { projectId: appServerProjectId } : {}), ...(job.model ? { model: job.model } : {}), ...(job.reasoningEffort ? { config: { model_reasoning_effort: job.reasoningEffort } } : {}), ephemeral: false, serviceName: 'bugflow_workbench' });
       this.publish(job, { threadId: result.thread.id, message: 'Codex 会话已创建' });
       creating = false;
-      await client.call('thread/name/set', { threadId: job.threadId, name: job.title });
+      // Older Codex stores can create persistent threads but do not implement
+      // metadata updates. A missing custom title must not block the turn or the
+      // desktop deep-link.
+      try { await client.call('thread/name/set', { threadId: job.threadId, name: job.title }); }
+      catch { /* Keep the generated Codex title. */ }
       const turn = await client.call('turn/start', { threadId: job.threadId, input: [{ type: 'text', text: job.prompt }], clientUserMessageId: job.id });
       this.publish(job, { turnId: turn.turn.id, ...(job.status === 'launching' ? { status: 'running', message: 'Codex 正在执行' } : {}) });
       try { await this.desktopOpener(job.threadId); this.publish(job, { desktopOpened: true }); }
@@ -153,16 +198,36 @@ export function recordExecution(data: any, job: any) {
 
 }
 
-export function createCodexExecution({ database, tenantId, workspace, environment = {}, runnerFactory }: any = {}) {
+function frequentDirectories(data: any, deviceId: string, fallback = '') {
+  const usage = new Map<string, { count: number; updatedAt: string }>();
+  for (const item of [...(data.executions || []), ...(data.sessions || [])]) {
+    if (item.deviceId !== deviceId || typeof item.cwd !== 'string' || !item.cwd.trim()) continue;
+    const cwd = item.cwd.trim(), previous = usage.get(cwd);
+    usage.set(cwd, { count: (previous?.count || 0) + 1, updatedAt: String(item.updatedAt || item.createdAt || '') > String(previous?.updatedAt || '') ? String(item.updatedAt || item.createdAt || '') : String(previous?.updatedAt || '') });
+  }
+  const sorted = [...usage].sort((a, b) => b[1].count - a[1].count || b[1].updatedAt.localeCompare(a[1].updatedAt)).map(([cwd]) => cwd);
+  if (fallback && !usage.has(fallback)) sorted.unshift(fallback);
+  return sorted.slice(0, 50);
+}
+
+export function createCodexExecution({ database, tenantId, workspace, environment = {}, runnerFactory, directoryPicker = pickNativeDirectory }: any = {}) {
   let closing = false;
   const update = (job: any) => {
     if (!closing) database.mutateTaskCenter(tenantId, (data: any) => recordExecution(data, job));
   };
   const runnerEnvironment = { ...process.env, ...environment };
-  const runner = runnerFactory ? runnerFactory(update) : new AcpPreferredRunner({
-    primary: new AcpTaskRunner({ agent: 'codex', environment: runnerEnvironment, onUpdate: update }),
-    fallback: new CodexRunner({ executable: environment.CODEX_EXECUTABLE || 'codex', environment: runnerEnvironment, onUpdate: update })
-  });
+  const runner = runnerFactory ? runnerFactory(update) : (() => {
+    const fallback = new CodexRunner({ executable: environment.CODEX_EXECUTABLE || 'codex', environment: runnerEnvironment, onUpdate: update, desktopOpener: async () => {} });
+    const codex = new AcpTaskRunner({
+      agent: 'codex', environment: runnerEnvironment, onUpdate: update,
+      threadNamer: async (threadId: string, name: string) => (await fallback.connect()).call('thread/name/set', { threadId, name })
+    });
+    const entries: [string, any][] = [['codex', new AcpPreferredRunner({ primary: codex, fallback })]];
+    for (const agent of configuredAcpAgents(runnerEnvironment)) {
+      if (agent !== 'codex') entries.push([agent, new AcpTaskRunner({ agent, environment: runnerEnvironment, onUpdate: update })]);
+    }
+    return new AgentRunnerSet(entries);
+  })();
   database.mutateTaskCenter(tenantId, (data: any) => {
     data.executions ||= [];
     for (const job of data.executions) if (job.deviceId === 'local' && active.has(job.status)) {
@@ -175,22 +240,74 @@ export function createCodexExecution({ database, tenantId, workspace, environmen
       let localError: any = null, projects = [];
       try { projects = (await runner.projects(workspace())).map((p: any) => ({ ...p, deviceId: 'local', deviceName: '工作台所在设备', online: true })); }
       catch (error: any) { localError = error.message; }
-      const devices = database.readTaskCenter(tenantId).devices;
+      const data = database.readTaskCenter(tenantId), devices = data.devices;
       for (const d of devices) for (const p of d.codexProjects || []) projects.push({ ...p, deviceId: d.id, deviceName: d.name, online: Date.now() - Date.parse(d.lastSeen) < 90000 });
+      projects = projects.map((project: any) => ({ ...project, commonDirectories: frequentDirectories(data, project.deviceId, project.cwd) }));
       return { projects, localError };
+    },
+    async pickDirectory(input: any, actor: any = {}) {
+      const deviceId = String(input?.deviceId || 'local');
+      const target = (await this.targets()).projects.find((project: any) => project.deviceId === deviceId && (!input.projectId || project.id === input.projectId));
+      if (!target) throw httpError(400, '目标机器不可用');
+      if (deviceId === 'local') return { status: 'completed', cwd: await directoryPicker(target.cwd || workspace()) };
+      return database.mutateTaskCenter(tenantId, (data: any) => {
+        const device = data.devices.find((item: any) => item.id === deviceId);
+        if (!device) throw httpError(404, '目标机器不存在');
+        const request = { id: randomUUID(), deviceId, projectId: input.projectId || null, requestedBy: actor.id, status: 'pending', createdAt: timestamp(), updatedAt: timestamp() };
+        (data.directoryRequests ||= []).push(request); data.directoryRequests = data.directoryRequests.slice(-100);
+        return { requestId: request.id, status: request.status };
+      });
+    },
+    directoryStatus(input: any, actor: any = {}) {
+      const request = database.readTaskCenter(tenantId).directoryRequests?.find((item: any) => item.id === input.requestId);
+      if (!request) throw httpError(404, '目录选择请求不存在');
+      const device = database.readTaskCenter(tenantId).devices.find((item: any) => item.id === request.deviceId);
+      if (!device || request.requestedBy !== actor.id) throw httpError(403, '无权查看该目录选择请求');
+      return structuredClone(request);
+    },
+    directoryAction(input: any, actor: any = {}) {
+      return database.mutateTaskCenter(tenantId, (data: any) => {
+        const request = data.directoryRequests?.find((item: any) => item.id === input.requestId), device = data.devices.find((item: any) => item.id === request?.deviceId);
+        if (!request) throw httpError(404, '目录选择请求不存在');
+        if (!device || device.owner !== actor.id) throw httpError(403, '只有目标机器连接器可以处理目录选择');
+        if (input.action === 'claim') {
+          if (request.status !== 'pending') throw httpError(409, '目录选择请求已被处理');
+          request.status = 'selecting'; request.updatedAt = timestamp(); return { request: structuredClone(request) };
+        }
+        if (input.action !== 'report' || request.status !== 'selecting') throw httpError(409, '目录选择请求状态无效');
+        if (input.cwd !== undefined && (typeof input.cwd !== 'string' || input.cwd.length > 2000)) throw httpError(400, '目录格式无效');
+        request.status = input.cwd ? 'completed' : input.cancelled ? 'cancelled' : 'failed';
+        request.cwd = input.cwd || null; request.message = input.message ? String(input.message).slice(0, 2000) : null; request.updatedAt = timestamp();
+        return { requestId: request.id, status: request.status };
+      });
     },
     async execute(input: any) {
       const { projects } = await this.targets();
       const deviceId = input.deviceId || 'local';
-      const project = projects.find((p: any) => p.id === input.projectId && p.cwd === input.cwd && p.deviceId === deviceId);
-      if (!project) throw httpError(400, '请选择当前组织工作目录内的可用 Agent 执行目标');
+      const project = projects.find((p: any) => p.id === input.projectId && p.deviceId === deviceId);
+      if (!project) throw httpError(400, '请选择可用的 Agent 执行目标');
+      if (input.cwd !== undefined && typeof input.cwd !== 'string') throw httpError(400, 'IDE 工作目录格式无效');
+      if (typeof input.cwd === 'string' && input.cwd.length > 2000) throw httpError(400, 'IDE 工作目录过长');
+      const model = typeof input.model === 'string' ? input.model.trim() : '';
+      const reasoningEffort = typeof input.reasoningEffort === 'string' ? input.reasoningEffort.trim() : '';
+      const selectedModel = (project.models || []).find((item: any) => item.id === model);
+      if (model && !selectedModel) throw httpError(400, '所选模型不属于目标 Agent');
+      const efforts = Array.isArray(selectedModel?.reasoningEfforts) ? selectedModel.reasoningEfforts : project.reasoningEfforts || [];
+      if (reasoningEffort && !efforts.some((item: any) => item.id === reasoningEffort)) throw httpError(400, '所选思考强度不受当前模型支持');
+      let cwd = String(input.cwd || '').trim() || project.cwd;
+      if (deviceId === 'local') {
+        try {
+          cwd = await realpath(cwd);
+          if (!(await stat(cwd)).isDirectory()) throw new Error('not-directory');
+        } catch { throw httpError(400, 'IDE 工作目录不存在或不是可访问的目录'); }
+      }
       const job = database.mutateTaskCenter(tenantId, (data: any) => {
         const task = data.tasks.find((t: any) => t.id === input.taskId);
         if (!task) throw httpError(404, '任务不存在');
         if (task.revision !== input.revision) throw httpError(409, '任务已更新，请刷新后执行');
         if (task.status === 'running' || (data.executions || []).some((j: any) => j.taskId === task.id && active.has(j.status))) throw httpError(409, '该任务已有执行，请先等待完成或停止，结果未知时请核对原会话');
         if (data.handoffs.some((h: any) => h.taskId === task.id && h.mode === 'continue' && ['pending', 'received'].includes(h.status))) throw httpError(409, '请先取消原手动接续请求，再直接执行');
-        const job: any = { id: randomUUID(), taskId: task.id, deviceId, projectId: project.id, cwd: project.cwd, title: task.title, prompt: executionPrompt(task), contextVersion: task.contextVersion, status: 'queued', createdAt: timestamp(), updatedAt: timestamp(), message: '已排队，准备交给 Agent', output: '', threadId: null, sessionId: null, turnId: null, protocol: project.protocol || 'legacy', agent: project.agent || 'codex', agentLabel: project.agent === 'codex' || !project.agent ? 'Codex' : project.agent };
+        const job: any = { id: randomUUID(), taskId: task.id, deviceId, projectId: project.id, appServerProjectId: project.appServerProjectId, cwd, model: model || null, reasoningEffort: reasoningEffort || null, title: task.title, prompt: executionPrompt(task), contextVersion: task.contextVersion, status: 'queued', createdAt: timestamp(), updatedAt: timestamp(), message: '已排队，准备交给 Agent', output: '', threadId: null, sessionId: null, turnId: null, protocol: project.protocol || 'legacy', agent: project.agent || 'codex', agentLabel: project.agent === 'codex' || !project.agent ? 'Codex' : project.agent };
         (data.executions ||= []).push(job); task.status = 'running'; task.revision++; task.updatedAt = timestamp();
         task.events.unshift({ id: randomUUID(), at: task.updatedAt, message: `已提交 ${job.agentLabel} 执行（${job.protocol === 'acp' ? 'ACP' : '原通道'}）` });
         return structuredClone(job);

@@ -33,8 +33,9 @@ export function createTaskCenterUI({ root, api, canEdit, toast }: any) {
     return `<article class="tc-handoff"><div class="tc-actions"><strong>${modeLabels[h.mode]} → ${esc(target?.name)} / ${esc(h.agent)}</strong><span class="tc-tag">${ack}</span></div><p class="tc-meta">${time(h.createdAt)} · 上下文 v${h.packet.contextVersion}${h.mode === 'branch' ? ' · 关联分支' : ''}</p><div class="tc-actions">${button('packet', '查看上下文', h.id)}${canEdit() && h.status === 'pending' ? button('received', '确认已接收', h.id) : ''}${canEdit() && h.status === 'received' && h.mode !== 'reference' ? button('started-dialog', '关联已开始的新会话', h.id) : ''}${canEdit() && ['pending', 'received'].includes(h.status) ? button('cancelled', '取消', h.id) : ''}${canEdit() && ['pending', 'received'].includes(h.status) ? button('failed-dialog', '报告失败', h.id) : ''}</div></article>`;
   }
   function executionCard(job: any) {
-    const link = job.threadId && job.deviceId === 'local' ? `<a class="button secondary" href="codex://threads/${encodeURIComponent(job.threadId)}">在 Codex 中打开 ↗</a>` : '';
-    return `<article class="tc-execution"><div class="tc-actions"><strong>${executionLabels[job.status]}</strong><span class="tc-meta">${time(job.createdAt)}</span></div><p>${esc(job.message)}</p>${job.desktopMessage ? `<p class="tc-meta">${esc(job.desktopMessage)}</p>` : ''}${job.controlError ? `<p role="alert">${esc(job.controlError)}</p>` : ''}${job.deviceId !== 'local' && (job.sessionId || job.threadId) ? `<p class="tc-meta">目标设备的 Agent 会话：${esc(job.sessionId || job.threadId)}</p>` : ''}<p class="tc-meta">${esc(job.agentLabel || job.agent || 'Agent')} · ${esc(String(job.protocol || 'legacy').toUpperCase())} · ${esc(job.cwd)} · 上下文 v${job.contextVersion}</p><div class="tc-actions">${link}${canEdit() && job.status === 'waiting' && job.request ? button('execution-respond', '处理 Agent 请求', job.id, true) : ''}${canEdit() && ['queued', 'running', 'waiting'].includes(job.status) ? button('execution-stop', job.status === 'queued' ? '取消等待' : '停止执行', job.id) : ''}${canEdit() && job.status === 'unknown' ? button('execution-reconcile', '核对执行结果', job.id) : ''}</div>${job.output ? `<details><summary>查看执行回复</summary><pre>${esc(job.output)}</pre></details>` : ''}</article>`;
+    const codexThreadId = job.threadId || (job.agent === 'codex' ? job.sessionId : null);
+    const link = codexThreadId && job.deviceId === 'local' ? `<a class="button secondary" href="codex://threads/${encodeURIComponent(codexThreadId)}">在 Codex 中打开 ↗</a>` : '';
+    return `<article class="tc-execution"><div class="tc-actions"><strong>${executionLabels[job.status]}</strong><span class="tc-meta">${time(job.createdAt)}</span></div><p>${esc(job.message)}</p>${job.desktopMessage ? `<p class="tc-meta">${esc(job.desktopMessage)}</p>` : ''}${job.controlError ? `<p role="alert">${esc(job.controlError)}</p>` : ''}${job.deviceId !== 'local' && (job.sessionId || job.threadId) ? `<p class="tc-meta">目标设备的 Agent 会话：${esc(job.sessionId || job.threadId)}</p>` : ''}<p class="tc-meta">${esc(job.agentLabel || job.agent || 'Agent')} · ${esc(String(job.protocol || 'legacy').toUpperCase())} · ${esc(job.model || '默认模型')} · ${esc(job.reasoningEffort || '默认思考强度')} · ${esc(job.cwd)} · 上下文 v${job.contextVersion}</p><div class="tc-actions">${link}${canEdit() && job.status === 'waiting' && job.request ? button('execution-respond', '处理 Agent 请求', job.id, true) : ''}${canEdit() && ['queued', 'running', 'waiting'].includes(job.status) ? button('execution-stop', job.status === 'queued' ? '取消等待' : '停止执行', job.id) : ''}${canEdit() && job.status === 'unknown' ? button('execution-reconcile', '核对执行结果', job.id) : ''}</div>${job.output ? `<details><summary>查看执行回复</summary><pre>${esc(job.output)}</pre></details>` : ''}</article>`;
   }
   function detail() {
     const t = task(); if (!t) return empty('从一件事开始', '创建任务，或把未归属会话关联到任务。');
@@ -103,8 +104,47 @@ export function createTaskCenterUI({ root, api, canEdit, toast }: any) {
         try {
           const result = await api('/api/task-center/codex');
           if (!result.projects.length) { toast(result.localError || '未发现可用的 Agent 执行目标，请检查 ACP Agent 或原执行器配置。'); return; }
-          const d = dialog('交给 Agent 执行', `<p>优先通过 ACP 创建标准 Agent 会话；Agent 不支持 ACP 时使用原执行通道。</p><label>执行目标<select name="project">${result.projects.map((p: any, i: any) => `<option value="${i}">${esc(p.deviceName)} / ${esc(p.name)} · ${esc(String(p.protocol || 'legacy').toUpperCase())} · ${p.online ? '在线' : '离线，等待连接'} · ${esc(p.cwd)}</option>`).join('')}</select></label><h3>${esc(t.title)}</h3><p>${esc(t.context.next || t.context.goal || t.title)}</p><p class="tc-meta">使用目标 Agent 的登录和权限配置；交互授权会回传到此任务。</p>`, '立即执行');
-          onSubmit(d, async (f: any) => { const p = result.projects[Number(f.get('project'))]; await api('/api/task-center/execute', { method: 'POST', body: JSON.stringify({ taskId: t.id, revision: t.revision, projectId: p.id, cwd: p.cwd, deviceId: p.deviceId }) }); tab = 'progress'; toast('已提交 Agent，执行状态将自动更新'); });
+          const d = dialog('交给 Agent 执行', `<p>优先通过 ACP 创建标准 Agent 会话；Agent 不支持 ACP 时使用原执行通道。</p><label>执行目标<select name="project">${result.projects.map((p: any, i: any) => `<option value="${i}">${esc(p.deviceName)} / ${esc(p.name)} · ${esc(String(p.protocol || 'legacy').toUpperCase())} · ${p.online ? '在线' : '离线，等待连接'}</option>`).join('')}</select></label><label>IDE 工作目录<div class="tc-picker-row"><input name="cwd" readonly maxlength="2000" placeholder="未选择，使用目标默认目录"><button type="button" class="button secondary" id="tc-pick-directory">选择目录</button><button type="button" class="button ghost" id="tc-clear-directory">使用默认</button></div></label><section id="tc-common-directories"></section><div class="tc-two"><label>模型<select name="model"></select></label><label>思考强度<select name="reasoningEffort"></select></label></div><p class="tc-meta" id="tc-model-description"></p><h3>${esc(t.title)}</h3><p>${esc(t.context.next || t.context.goal || t.title)}</p><p class="tc-meta">目录选择器会在目标机器打开；模型和思考强度以目标 Agent 实际支持范围为准。</p>`, '立即执行');
+          const form: any = selectFrom(d, 'form');
+          const setDirectory = (cwd = '') => { form.elements.cwd.value = cwd; };
+          const renderDirectories = () => {
+            const p = result.projects[Number(form.elements.project.value)], directories = p.commonDirectories || [];
+            const visible = directories.slice(0, 5), overflow = directories.slice(5);
+            const choices = (items: any[], offset = 0) => `<div class="tc-actions">${items.map((cwd: any, i: any) => `<button type="button" class="button secondary" data-directory="${i + offset}">${esc(cwd)}</button>`).join('')}</div>`;
+            selectFrom(d, '#tc-common-directories').innerHTML = directories.length ? `<p class="tc-meta">常用目录</p>${choices(visible)}${overflow.length ? `<details><summary>更多目录（${overflow.length}）</summary>${choices(overflow, 5)}</details>` : ''}` : '<p class="tc-meta">暂无常用目录，可直接输入。</p>';
+            d.querySelectorAll('[data-directory]').forEach((button: any) => { button.onclick = () => setDirectory(directories[Number(button.dataset.directory)]); });
+          };
+          const renderModels = () => {
+            const p = result.projects[Number(form.elements.project.value)], previousModel = form.elements.model.value;
+            form.elements.model.innerHTML = `<option value="">使用 Agent 默认模型${p.defaultModel ? `（${esc(p.defaultModel)}）` : ''}</option>${(p.models || []).map((model: any) => `<option value="${esc(model.id)}">${esc(model.name || model.id)}</option>`).join('')}`;
+            if ([...form.elements.model.options].some((option: any) => option.value === previousModel)) form.elements.model.value = previousModel;
+            const model = (p.models || []).find((item: any) => item.id === form.elements.model.value), efforts = Array.isArray(model?.reasoningEfforts) ? model.reasoningEfforts : p.reasoningEfforts || [];
+            form.elements.reasoningEffort.innerHTML = `<option value="">使用模型默认${model?.defaultReasoningEffort || p.defaultReasoningEffort ? `（${esc(model?.defaultReasoningEffort || p.defaultReasoningEffort)}）` : ''}</option>${efforts.map((effort: any) => `<option value="${esc(effort.id)}">${esc(effort.name || effort.id)}</option>`).join('')}`;
+            selectFrom(d, '#tc-model-description').textContent = model?.description || '不选择时沿用目标 Agent 的默认配置。';
+          };
+          const pollDirectory = async (requestId: string) => {
+            for (let attempt = 0; attempt < 300; attempt++) {
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              const status = await api(`/api/task-center/directory-picker?requestId=${encodeURIComponent(requestId)}`);
+              if (status.status === 'completed') return status.cwd;
+              if (status.status === 'cancelled') throw new Error('已在目标机器取消选择目录');
+              if (status.status === 'failed') throw new Error(status.message || '目标机器无法选择目录');
+            }
+            throw new Error('等待目标机器选择目录超时');
+          };
+          selectFrom(d, '#tc-pick-directory').onclick = async (event: any) => {
+            const button = event.currentTarget, p = result.projects[Number(form.elements.project.value)]; button.disabled = true;
+            try {
+              const response = await api('/api/task-center/directory-picker', { method: 'POST', body: JSON.stringify({ deviceId: p.deviceId, projectId: p.id }) });
+              setDirectory(response.status === 'completed' ? response.cwd : await pollDirectory(response.requestId));
+            } catch (error: any) { selectFrom(d, '.tc-form-error').textContent = error.message; }
+            finally { button.disabled = false; }
+          };
+          selectFrom(d, '#tc-clear-directory').onclick = () => setDirectory('');
+          form.elements.project.onchange = () => { setDirectory(''); renderDirectories(); renderModels(); };
+          form.elements.model.onchange = renderModels;
+          renderDirectories(); renderModels();
+          onSubmit(d, async (f: any) => { const p = result.projects[Number(f.get('project'))]; await api('/api/task-center/execute', { method: 'POST', body: JSON.stringify({ taskId: t.id, revision: t.revision, projectId: p.id, cwd: String(f.get('cwd') || '').trim(), model: String(f.get('model') || ''), reasoningEffort: String(f.get('reasoningEffort') || ''), deviceId: p.deviceId }) }); tab = 'progress'; toast('已提交 Agent，执行状态将自动更新'); });
         } finally { b.disabled = false; }
       }
       if (action === 'execution-stop' || action === 'execution-reconcile') {

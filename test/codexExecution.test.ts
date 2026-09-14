@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { CodexRunner, createCodexExecution } from '../src/codexExecution.js';
@@ -25,6 +25,11 @@ const job = () => ({ id: 'job-1', taskId: 'task-1', title: '任务', prompt: '�
 
 test('creates durable project thread, starts a real turn and opens desktop without overriding permissions/model', async () => {
   const client = new FakeClient(), updates: any = [], opened: any = [];
+  const originalCall = client.call.bind(client);
+  client.call = async (method: any, params: any) => {
+    if (method === 'thread/name/set') throw Object.assign(new Error('thread metadata update is not supported'), { code: -32601 });
+    return originalCall(method, params);
+  };
   const runner = new CodexRunner({ clientFactory: () => client, onUpdate: (j: any) => updates.push(j), desktopOpener: async (id: any) => opened.push(id) });
   await runner.start(job()); await runner.start(job());
   const starts = client.calls.filter((c: any) => c.method === 'thread/start');
@@ -39,6 +44,16 @@ test('creates durable project thread, starts a real turn and opens desktop witho
   client.emit('notification', { method: 'turn/completed', params: { threadId: opened[0], turn: { id: 'turn-1', status: 'completed' } } });
   assert.equal(updates.at(-1).status, 'completed'); assert.equal(updates.at(-1).output, '验证通过');
   runner.close(); assert.equal(updates.at(-1).status, 'completed');
+});
+
+test('passes an explicitly selected model and reasoning effort to Codex', async () => {
+  const client = new FakeClient();
+  const runner = new CodexRunner({ clientFactory: () => client, desktopOpener: async () => {} });
+  await runner.start({ ...job(), model: 'gpt-test', reasoningEffort: 'high' });
+  const start = client.calls.find((call: any) => call.method === 'thread/start');
+  assert.equal(start.params.model, 'gpt-test');
+  assert.deepEqual(start.params.config, { model_reasoning_effort: 'high' });
+  runner.close();
 });
 
 test('approval and input require an explicit answer; stop uses native turn interrupt', async () => {
@@ -65,8 +80,26 @@ test('uncertain create and disconnected runs never automatically rerun', async (
   assert.equal(updates.at(-1).threadId, undefined); runner.close();
 });
 
+test('uses the configured workspace when newer Codex removes project/list', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'codex-workspace-target-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const client = new FakeClient();
+  const originalCall = client.call.bind(client);
+  client.call = async (method: any, params: any) => {
+    if (method === 'project/list') throw Object.assign(new Error('Method not found: project/list. Supported methods: thread/start'), { code: -32601 });
+    return originalCall(method, params);
+  };
+  const runner = new CodexRunner({ clientFactory: () => client, desktopOpener: async () => {} });
+  const targets = await runner.projects(root);
+  assert.equal(targets.length, 1); assert.equal(targets[0].cwd, await realpath(root)); assert.equal(targets[0].appServerProjectId, null);
+  await runner.start({ ...job(), id: 'workspace-job', cwd: targets[0].cwd, projectId: targets[0].id, appServerProjectId: null });
+  const start = client.calls.find((call: any) => call.method === 'thread/start');
+  assert.equal(start.params.cwd, targets[0].cwd); assert.equal(start.params.projectId, undefined);
+  runner.close();
+});
+
 test('durable execution reservations isolate tenants, reject duplicates, and recover restart as unknown', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'codex-execution-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const alternative = path.join(root, 'another-project'); await mkdir(alternative);
   const db = openDatabase(':memory:'); t.after(() => db.close());
   db.createTenant({ id: 'default', token: 'x'.repeat(32) }); db.createTenant({ id: 'other', token: 'y'.repeat(32) });
   const history: any = { catalog: async () => ({ sessions: [], providers: [] }) };
@@ -74,11 +107,13 @@ test('durable execution reservations isolate tenants, reject duplicates, and rec
   await center.command({ action: 'create', title: '测试执行' }, { id: 'owner' });
   const task = (await center.snapshot()).tasks[0];
   let update: any, started = 0;
-  const factory = (fn: any) => { update = fn; return { projects: async () => [{ id: 'project-1', name: 'Repo', cwd: root }], start: async (j: any) => { started++; fn({ ...j, threadId: '12345678-1234-1234-1234-123456789abc', status: 'running', message: 'running' }); }, close() {} }; };
-  const service = createCodexExecution({ database: db, tenantId: 'default', workspace: () => root, runnerFactory: factory });
+  const factory = (fn: any) => { update = fn; return { projects: async () => [{ id: 'project-1', name: 'Repo', cwd: root, models: [{ id: 'model-1', name: 'Model 1', reasoningEfforts: [{ id: 'high', name: 'High' }] }] }], start: async (j: any) => { started++; fn({ ...j, threadId: '12345678-1234-1234-1234-123456789abc', status: 'running', message: 'running' }); }, close() {} }; };
+  const service = createCodexExecution({ database: db, tenantId: 'default', workspace: () => root, runnerFactory: factory, directoryPicker: async () => alternative });
   const input: any = { taskId: task.id, revision: task.revision, projectId: 'project-1', cwd: root };
   await assert.rejects(service.execute({ ...input, cwd: '/outside' }), { statusCode: 400 });
-  const result = await service.execute(input); assert.equal(started, 1);
+  assert.deepEqual(await service.pickDirectory({ deviceId: 'local', projectId: 'project-1' }, { id: 'owner' }), { status: 'completed', cwd: alternative });
+  const result = await service.execute({ ...input, cwd: '' }); assert.equal(started, 1);
+  assert.equal(db.readTaskCenter('default').executions[0].cwd, await realpath(root), 'blank cwd uses the target default');
   await assert.rejects(service.execute(input), { statusCode: 409 });
   const snapshot = await center.snapshot(); assert.equal(snapshot.tasks[0].status, 'running'); assert.equal(snapshot.tasks[0].sessionIds.length, 1);
   assert.equal(snapshot.sessions.length, 1); assert.equal(db.readTaskCenter('other').executions, undefined);
@@ -86,7 +121,11 @@ test('durable execution reservations isolate tenants, reject duplicates, and rec
   update({ ...db.readTaskCenter('default').executions[0], status: 'completed', message: 'completed', output: 'ok' });
   assert.equal((await center.snapshot()).tasks[0].status, 'completed');
   const latest = (await center.snapshot()).tasks[0];
-  await service.execute({ ...input, revision: latest.revision });
+  await service.execute({ ...input, revision: latest.revision, cwd: alternative, model: 'model-1', reasoningEffort: 'high' });
+  assert.equal(db.readTaskCenter('default').executions.at(-1).cwd, await realpath(alternative), 'an arbitrary accessible cwd is accepted');
+  assert.equal(db.readTaskCenter('default').executions.at(-1).model, 'model-1');
+  assert.equal(db.readTaskCenter('default').executions.at(-1).reasoningEffort, 'high');
+  assert.ok((await service.targets()).projects[0].commonDirectories.includes(await realpath(alternative)));
   update({ ...db.readTaskCenter('default').executions[0], status: 'completed', desktopOpened: true });
   assert.equal((await center.snapshot()).tasks[0].status, 'running', 'late updates from an old run must not overwrite the newer run');
   service.close();
@@ -108,14 +147,16 @@ test('remote device claims once, reports real thread state, and rejects other de
   t.after(() => service.close());
   const task = (await center.snapshot()).tasks[0];
   const { executionId } = await service.execute({ taskId: task.id, revision: task.revision, deviceId: 'remote', projectId: 'p', cwd: root });
+  const selection = await service.pickDirectory({ deviceId: 'remote', projectId: 'p' }, { id: 'requester' });
   assert.equal(db.readTaskCenter('default').executions[0].status, 'queued');
   await assert.rejects(service.action({ action: 'claim', executionId }, { id: 'other' }), { statusCode: 403 });
   const client = new FakeClient(); let runner: any;
-  const worker = new RemoteCodexWorker({ deviceId: 'remote', workspace: root, directory: path.join(root, 'journal'), request: (method: any, body: any) => method === 'GET' ? center.snapshot() : service.action(body, owner), runnerFactory: (update: any) => {
+  const worker = new RemoteCodexWorker({ deviceId: 'remote', workspace: root, directory: path.join(root, 'journal'), directoryPicker: async () => root, request: (method: any, body: any, endpoint: any) => method === 'GET' ? center.snapshot() : endpoint === '/api/task-center/directory-action' ? service.directoryAction(body, owner) : service.action(body, owner), runnerFactory: (update: any) => {
     runner = new CodexRunner({ clientFactory: () => client, onUpdate: update, desktopOpener: async () => {} });
     runner.projects = async () => [{ id: 'p', name: 'Repo', cwd: root }]; return runner;
   } });
   await worker.sync();
+  assert.equal(service.directoryStatus({ requestId: selection.requestId }, { id: 'requester' }).cwd, root);
   let saved = db.readTaskCenter('default').executions[0]; assert.equal(saved.status, 'running'); assert.ok(saved.threadId);
   await assert.rejects(service.action({ action: 'claim', executionId }, owner), { statusCode: 409 });
   await assert.rejects(service.action({ action: 'report', executionId, report: { status: 'running', threadId: null } }, owner), { statusCode: 409 });

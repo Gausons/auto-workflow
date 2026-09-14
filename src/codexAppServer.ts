@@ -18,7 +18,7 @@ export class CodexAppServer extends EventEmitter {
       if (message.method) { this.emit(message.id !== undefined ? 'request' : 'notification', message); return; }
       const pending = this.pending.get(message.id); if (!pending) return;
       clearTimeout(pending.timer); this.pending.delete(message.id);
-      if (message.error) pending.reject(new Error(message.error.message || 'Codex 请求失败'));
+      if (message.error) pending.reject(Object.assign(new Error(message.error.message || 'Codex 请求失败'), { code: message.error.code }));
       else pending.resolve(message.result);
     });
     const ended = (error: any) => {

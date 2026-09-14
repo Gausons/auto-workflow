@@ -37,6 +37,11 @@ export function resolveAcpLaunch(agent: string, environment: any = process.env):
   return { command, args: parseArgs(environment[envName(agent, 'ARGS')]) };
 }
 
+export function configuredAcpAgents(environment: any = process.env) {
+  const configured = String(environment.ACP_AGENTS || '').split(',').map(value => value.trim()).filter(Boolean);
+  return [...new Set(['codex', 'claude', ...configured])];
+}
+
 function childEnvironment(agent: string, environment: any) {
   const result = { ...environment };
   // The official Codex adapter otherwise starts conservatively in read-only mode.
@@ -47,6 +52,21 @@ function childEnvironment(agent: string, environment: any) {
 function textFromUpdate(update: any) {
   return update?.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text'
     ? String(update.content.text || '') : '';
+}
+
+function flatOptions(option: any) {
+  return (option?.options || []).flatMap((item: any) => Array.isArray(item.options) ? item.options : [item]);
+}
+
+function configurationCatalog(configOptions: any[] = []) {
+  const model = configOptions.find((option: any) => option.type === 'select' && (option.category === 'model' || option.id === 'model'));
+  const effort = configOptions.find((option: any) => option.type === 'select' && (option.category === 'thought_level' || ['reasoning_effort', 'effort'].includes(option.id)));
+  return {
+    models: flatOptions(model).map((item: any) => ({ id: item.value, name: item.name, description: item.description || '' })),
+    defaultModel: model?.currentValue || '',
+    reasoningEfforts: flatOptions(effort).map((item: any) => ({ id: item.value, name: item.name, description: item.description || '' })),
+    defaultReasoningEffort: effort?.currentValue || ''
+  };
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -98,7 +118,7 @@ export class AcpAgentConnection extends EventEmitter {
     this.context = this.connection.agent;
     const request = this.context.request(acp.methods.agent.initialize, {
       protocolVersion: acp.PROTOCOL_VERSION,
-      clientCapabilities: {},
+      clientCapabilities: { session: { configOptions: {} } },
       clientInfo: { name: 'bugflow-workbench', title: 'Agent 任务工作台', version: '0.4.0' }
     });
     const result: any = await withTimeout(Promise.race([request, this.processFailurePromise()]), timeoutMs, 'ACP initialize 响应超时');
@@ -112,6 +132,40 @@ export class AcpAgentConnection extends EventEmitter {
     }), timeoutMs, 'ACP session/new 响应超时');
     this.sessionId = result.sessionId;
     return result;
+  }
+
+  async configure(session: any, modelId?: string, reasoningEffort?: string) {
+    let options = session.configOptions || [];
+    const apply = async (category: string, aliases: string[], value?: string) => {
+      if (!value) return;
+      const option = options.find((item: any) => item.type === 'select' && (item.category === category || aliases.includes(item.id)));
+      if (!option) throw new Error(`当前 Agent 不支持${category === 'model' ? '模型' : '思考强度'}选择`);
+      if (!flatOptions(option).some((item: any) => item.value === value)) throw new Error(`${option.name} 不支持选项：${value}`);
+      const response: any = await this.context.request(acp.methods.agent.session.setConfigOption, { sessionId: this.sessionId, configId: option.id, value });
+      options = response.configOptions || options;
+    };
+    await apply('model', ['model'], modelId);
+    await apply('thought_level', ['reasoning_effort', 'effort'], reasoningEffort);
+    return options;
+  }
+
+  async catalog(session: any) {
+    const base = configurationCatalog(session.configOptions || []), models = [];
+    const modelOption = (session.configOptions || []).find((item: any) => item.type === 'select' && (item.category === 'model' || item.id === 'model'));
+    for (const model of base.models) {
+      let options = session.configOptions || [];
+      try {
+        const response: any = await this.context.request(acp.methods.agent.session.setConfigOption, { sessionId: this.sessionId, configId: modelOption.id, value: model.id });
+        options = response.configOptions || options;
+      } catch { /* Keep the model visible even if live capability discovery fails. */ }
+      const effort = configurationCatalog(options);
+      models.push({ ...model, reasoningEfforts: effort.reasoningEfforts, defaultReasoningEffort: effort.defaultReasoningEffort });
+    }
+    return { ...base, models };
+  }
+
+  async closeSession() {
+    if (this.sessionId) await this.context.request(acp.methods.agent.session.close, { sessionId: this.sessionId });
   }
 
   prompt(text: string) {
@@ -210,8 +264,9 @@ export function spawnAcpPreferredAgent({ agent, cwd, prompt, environment = proce
   return facade;
 }
 
-export function acpProject(root: string, agent = 'codex') {
-  return { id: `acp:${agent}`, name: `${agent === 'codex' ? 'Codex' : agent} · ACP`, cwd: path.resolve(root), protocol: 'acp', agent };
+export function acpProject(root: string, agent = 'codex', configuration: any = {}) {
+  const labels: Record<string, string> = { codex: 'Codex', claude: 'Claude Code' };
+  return { id: `acp:${agent}`, name: labels[agent] || agent, cwd: path.resolve(root), protocol: 'acp', agent, ...configuration };
 }
 
 const activeStatuses = new Set(['launching', 'running', 'waiting']);
@@ -220,16 +275,30 @@ const now = () => new Date().toISOString();
 /** ACP implementation of the task-center runner. One process is kept for each
  * active session so permissions and cancellation remain bidirectional. */
 export class AcpTaskRunner {
-  agent: string; environment: any; onUpdate: any; connectionFactory: any; jobs = new Map(); connections = new Map(); available: any = undefined;
-  constructor({ agent = 'codex', environment = process.env, onUpdate = () => {}, connectionFactory }: any = {}) {
-    this.agent = agent; this.environment = environment; this.onUpdate = onUpdate; this.connectionFactory = connectionFactory;
+  agent: string; environment: any; onUpdate: any; connectionFactory: any; desktopOpener: any; threadNamer: any; jobs = new Map(); connections = new Map(); available: any = undefined; configuration: any = undefined;
+  constructor({ agent = 'codex', environment = process.env, onUpdate = () => {}, connectionFactory, desktopOpener = async () => {}, threadNamer = async () => {} }: any = {}) {
+    this.agent = agent; this.environment = environment; this.onUpdate = onUpdate; this.connectionFactory = connectionFactory; this.desktopOpener = desktopOpener; this.threadNamer = threadNamer;
   }
   publish(job: any, patch: any) { Object.assign(job, patch, { updatedAt: now() }); this.onUpdate(structuredClone(job)); }
   async projects(root: string) {
-    if (this.available === undefined) this.available = await probeAcpAgent(this.agent, this.environment, this.connectionFactory);
-    if (!this.available) throw Object.assign(new Error(`${this.agent} 未提供可用的 ACP 服务`), { code: 'ACP_UNAVAILABLE' });
     const cwd = await realpath(root);
-    return [acpProject(cwd, this.agent)];
+    if (this.available === undefined) {
+      const launch = resolveAcpLaunch(this.agent, this.environment);
+      if (!launch) this.available = false;
+      else {
+        const connection = this.connectionFactory ? this.connectionFactory({ agent: this.agent, launch, environment: this.environment }) : new AcpAgentConnection({ agent: this.agent, launch, environment: this.environment });
+        try {
+          await connection.initialize(5000);
+          const session = await connection.newSession(cwd);
+          this.configuration = await connection.catalog(session);
+          try { await connection.closeSession(); } catch { /* Empty discovery sessions may not have a persisted transcript. */ }
+          this.available = true;
+        } catch { this.available = false; }
+        finally { connection.close(); }
+      }
+    }
+    if (!this.available) throw Object.assign(new Error(`${this.agent} 未提供可用的 ACP 服务`), { code: 'ACP_UNAVAILABLE' });
+    return [acpProject(cwd, this.agent, this.configuration)];
   }
   async start(input: any) {
     if (this.jobs.has(input.id)) return this.jobs.get(input.id);
@@ -255,7 +324,13 @@ export class AcpTaskRunner {
       this.publish(job, { status: 'launching', message: `正在通过 ACP 创建 ${job.agentLabel || job.agent} 会话` });
       await connection.initialize();
       const session = await connection.newSession(job.cwd);
+      await connection.configure(session, job.model, job.reasoningEffort);
       this.publish(job, { sessionId: session.sessionId, status: 'running', message: `${job.agentLabel || job.agent} 正在通过 ACP 执行` });
+      if (job.agent === 'codex' && /^[a-f0-9-]{36}$/.test(session.sessionId)) {
+        try { await this.threadNamer(session.sessionId, job.title); } catch { /* The session still works without a custom title. */ }
+        try { await this.desktopOpener(session.sessionId); this.publish(job, { desktopOpened: true }); }
+        catch { this.publish(job, { desktopOpened: false, desktopMessage: 'Codex 会话已创建，但无法自动在客户端打开。' }); }
+      }
       void connection.prompt(job.prompt).then((result: any) => {
         const status = result.stopReason === 'end_turn' ? 'completed' : result.stopReason === 'cancelled' ? 'interrupted' : 'failed';
         this.publish(job, { status, request: null, message: status === 'completed' ? 'ACP 本轮执行完成' : `ACP 执行结束：${result.stopReason}` });
@@ -265,7 +340,12 @@ export class AcpTaskRunner {
         this.connections.delete(job.id); connection.close();
       });
     } catch (error: any) {
-      this.connections.delete(job.id); connection.close(); this.available = false;
+      this.connections.delete(job.id); connection.close();
+      if (connection.sessionId) {
+        this.publish(job, { status: 'failed', request: null, message: error.message });
+        return job;
+      }
+      this.available = false;
       if (!connection.promptStarted) {
         this.jobs.delete(job.id);
         throw Object.assign(error, { code: 'ACP_UNAVAILABLE' });
@@ -317,4 +397,28 @@ export class AcpPreferredRunner {
   async stop(id: string) { return this.route(id).stop(id); }
   async reconcile(job: any) { return this.route(job).reconcile(job); }
   close() { this.primary.close(); this.fallback.close(); }
+}
+
+/** Routes task-center jobs across every locally available Agent while keeping
+ * one runner (and therefore one permission/cancellation channel) per Agent. */
+export class AgentRunnerSet {
+  runners: Map<string, any>; routes = new Map<string, string>();
+  constructor(entries: Iterable<[string, any]>) { this.runners = new Map(entries); }
+  async projects(root: string) {
+    const results = await Promise.allSettled([...this.runners.values()].map(runner => runner.projects(root)));
+    const projects = results.flatMap(result => result.status === 'fulfilled' ? result.value : []);
+    if (projects.length) return projects;
+    const failure: any = results.find(result => result.status === 'rejected');
+    throw failure?.reason || new Error('未发现可用的 Agent 执行目标');
+  }
+  runner(agent: string) {
+    const runner = this.runners.get(agent);
+    if (!runner) throw httpError(400, `Agent ${agent} 不可用`);
+    return runner;
+  }
+  async start(job: any) { this.routes.set(job.id, job.agent); return this.runner(job.agent).start(job); }
+  async respond(id: string, input: any) { return this.runner(this.routes.get(id) || 'codex').respond(id, input); }
+  async stop(id: string) { return this.runner(this.routes.get(id) || 'codex').stop(id); }
+  async reconcile(job: any) { return this.runner(job.agent || this.routes.get(job.id) || 'codex').reconcile(job); }
+  close() { for (const runner of this.runners.values()) runner.close(); }
 }

@@ -79,7 +79,12 @@ export function createTaskCenter({ database, tenantId, history }: any) {
           Object.assign(device, { name: required(input.name, 120), agents: input.agents.map((a: any) => required(a, 80)), lastSeen: now(), transport: 'connector' });
           if (input.codexProjects !== undefined) {
             if (!Array.isArray(input.codexProjects) || input.codexProjects.length > 100) throw httpError(400, 'Codex 项目列表无效');
-            device.codexProjects = input.codexProjects.map((p: any) => ({ id: required(p?.id, 100), name: required(p?.name, 120), cwd: required(p?.cwd, 2000), protocol: p?.protocol === 'acp' ? 'acp' : 'legacy', agent: text(p?.agent ?? 'codex', 80) || 'codex' }));
+            device.codexProjects = input.codexProjects.map((p: any) => ({
+              id: required(p?.id, 100), name: required(p?.name, 120), cwd: required(p?.cwd, 2000), protocol: p?.protocol === 'acp' ? 'acp' : 'legacy', agent: text(p?.agent ?? 'codex', 80) || 'codex', appServerProjectId: p?.appServerProjectId === null ? null : text(p?.appServerProjectId ?? '', 100) || undefined,
+              models: Array.isArray(p?.models) ? p.models.slice(0, 30).map((model: any) => ({ id: required(model?.id, 120), name: required(model?.name || model?.id, 120), description: text(model?.description || '', 500), defaultReasoningEffort: text(model?.defaultReasoningEffort || '', 40), reasoningEfforts: Array.isArray(model?.reasoningEfforts) ? model.reasoningEfforts.slice(0, 10).map((effort: any) => ({ id: required(effort?.id, 40), name: required(effort?.name || effort?.id, 80), description: text(effort?.description || '', 500) })) : [] })) : [],
+              defaultModel: text(p?.defaultModel || '', 120), defaultReasoningEffort: text(p?.defaultReasoningEffort || '', 40),
+              reasoningEfforts: Array.isArray(p?.reasoningEfforts) ? p.reasoningEfforts.slice(0, 10).map((effort: any) => ({ id: required(effort?.id, 40), name: required(effort?.name || effort?.id, 80), description: text(effort?.description || '', 500) })) : []
+            }));
           }
           if (!Array.isArray(input.sessions) || input.sessions.length > 100) throw httpError(400, '每批最多同步 100 个会话');
           for (const s of input.sessions) {

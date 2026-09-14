@@ -408,15 +408,17 @@ pnpm device:sync
 
 ### 在工作台直接执行 Codex 任务
 
-1. 在工作台所在设备安装并登录 Codex 客户端，在客户端添加要执行的项目。项目目录须在组织配置的 `CODEX_WORKSPACE_DIR`（默认当前项目目录）内。
-2. 新建或选择任务，填写目标和下一步，点击 **执行 Agent · ACP 优先**，选择执行目标，再点击 **立即执行**。
-3. 工作台优先通过 ACP v1 创建会话并调用 `session/prompt`；若 `codex-acp` 不可用，则通过已安装的 `codex app-server` 创建持久化会话并调用 `turn/start`。会话使用目标设备原有的账号、模型和权限配置。
-4. 目标设备通过 `codex://threads/<id>` 打开客户端对应任务。本机执行记录也提供 **在 Codex 中打开**。自动打开失败时执行记录会提示；客户端必须与执行器使用同一操作系统账号和 `CODEX_HOME`。
+1. 在工作台所在设备安装并登录目标 Agent。`CODEX_WORKSPACE_DIR`（默认当前项目目录）作为该设备执行目标的默认 IDE 工作目录。
+2. 新建或选择任务，填写目标和下一步，点击 **执行 Agent · ACP 优先**，选择执行目标；IDE 工作目录可以留空、从常用目录选择，或点击 **选择目录** 在目标机器打开系统目录选择器。
+3. 可以选择目标 Agent 实际提供的模型和思考强度；留空时沿用 Agent 默认值。工作台优先通过 ACP v1 创建会话、应用会话配置并调用 `session/prompt`；若 `codex-acp` 不可用，则通过已安装的 `codex app-server` 创建持久化会话并调用 `turn/start`。
+4. 网页提交后不会自动跳转客户端。本机 Codex 执行记录提供 **在 Codex 中打开**，需要查看时再手动打开对应任务；客户端必须与执行器使用同一操作系统账号和 `CODEX_HOME`。
 5. 执行状态、最终回复、会话关联自动回传。若 Codex 请求操作确认或提问，点击工作台中的 **处理 Codex 请求**。可以停止正在执行的任务；本轮完成后，可以在 Codex 客户端继续该会话。
 
 原来的 **转交 / 分支** 保留用于手动传递上下文，与直接执行分开。若已有未完成的手动接续，请先取消该请求，再直接执行。为避免双重执行，正在运行或结果未知的任务不能再次提交。连接中断或工作台重启后会显示“结果待核对”；已有会话标识时使用 **核对执行结果** 读取原会话，不会自动重新提交任务。
 
 首选集成遵循 [Agent Client Protocol v1](https://agentclientprotocol.com/protocol/v1/overview)，依赖项目中的官方 TypeScript SDK 和本机 ACP Agent/适配器。回退集成依赖 Codex App Server 的 `project/list`、`thread/start`、`thread/name/set`、`turn/start` 等方法；可用 `CODEX_EXECUTABLE` 指定 Codex 可执行文件的绝对路径。
+
+任务中心默认探测 Codex 和 Claude Code 的 ACP 适配器，并为每个可用 Agent 显示一个执行目标。可用 `ACP_AGENTS=codex,claude,my-agent` 增加自定义 Agent；自定义 Agent 还需配置对应的 `ACP_<AGENT>_EXECUTABLE`。执行过的目录按使用次数和最近使用时间形成常用目录，前 5 条直接显示，其余折叠；留空时使用目标的 `CODEX_WORKSPACE_DIR` 默认值。本机目录选择器由工作台服务打开，远端目录选择请求由目标设备连接器接收并在目标机器打开。
 
 #### 在其他设备启用直接执行
 

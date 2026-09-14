@@ -1,25 +1,31 @@
 import path from 'node:path';
 import { mkdir, readFile, readdir, writeFile, rename } from 'node:fs/promises';
-import { CodexRunner } from './codexExecution.js';
-import { AcpPreferredRunner, AcpTaskRunner } from './acpAgent.js';
+import { CodexRunner, pickNativeDirectory } from './codexExecution.js';
+import { AcpPreferredRunner, AcpTaskRunner, AgentRunnerSet, configuredAcpAgents } from './acpAgent.js';
 
 // Journals the last known native thread before reconnecting. Uncertain launches
 // are reported for review rather than retried and possibly duplicated.
 export class RemoteCodexWorker {
   pending: any; saved: any; queue: any; loaded: any; storageError: any; runner: any; update: any;
-  request: any; deviceId!: string; directory!: string; workspace!: string;
+  request: any; directoryPicker: any; deviceId!: string; directory!: string; workspace!: string;
 
-  constructor({ request, deviceId, directory, workspace, runnerFactory }: any) {
-    Object.assign(this, { request, deviceId, directory, workspace });
+  constructor({ request, deviceId, directory, workspace, runnerFactory, directoryPicker = pickNativeDirectory }: any) {
+    Object.assign(this, { request, deviceId, directory, workspace, directoryPicker });
     this.pending = new Map(); this.saved = new Map(); this.queue = Promise.resolve(); this.loaded = false;
     const update = (job: any) => {
       this.saved.set(job.id, structuredClone(job)); this.pending.set(job.id, structuredClone(job));
       this.queue = this.queue.then(() => this.persist(job)).catch((error: any) => { this.storageError = error; });
     };
-    this.runner = runnerFactory ? runnerFactory(update) : new AcpPreferredRunner({
-      primary: new AcpTaskRunner({ agent: 'codex', environment: process.env, onUpdate: update }),
-      fallback: new CodexRunner({ executable: process.env.CODEX_EXECUTABLE || 'codex', onUpdate: update })
-    });
+    this.runner = runnerFactory ? runnerFactory(update) : (() => {
+      const fallback = new CodexRunner({ executable: process.env.CODEX_EXECUTABLE || 'codex', onUpdate: update, desktopOpener: async () => {} });
+      const codex = new AcpTaskRunner({ agent: 'codex', environment: process.env, onUpdate: update,
+        threadNamer: async (threadId: string, name: string) => (await fallback.connect()).call('thread/name/set', { threadId, name }) });
+      const entries: [string, any][] = [['codex', new AcpPreferredRunner({ primary: codex, fallback })]];
+      for (const agent of configuredAcpAgents(process.env)) {
+        if (agent !== 'codex') entries.push([agent, new AcpTaskRunner({ agent, environment: process.env, onUpdate: update })]);
+      }
+      return new AgentRunnerSet(entries);
+    })();
     this.update = update;
   }
   async persist(job: any) {
@@ -50,6 +56,15 @@ export class RemoteCodexWorker {
     }
     await this.flush();
     const snapshot = await this.request('GET');
+    for (const selection of (snapshot.directoryRequests || []).filter((item: any) => item.deviceId === this.deviceId && item.status === 'pending').slice(0, 1)) {
+      await this.request('POST', { action: 'claim', requestId: selection.id }, '/api/task-center/directory-action');
+      try {
+        const cwd = await this.directoryPicker(this.workspace);
+        await this.request('POST', { action: 'report', requestId: selection.id, cwd }, '/api/task-center/directory-action');
+      } catch (error: any) {
+        await this.request('POST', { action: 'report', requestId: selection.id, cancelled: error.code === 'DIRECTORY_PICKER_CANCELLED', message: error.message }, '/api/task-center/directory-action');
+      }
+    }
     for (const job of (snapshot.executions || []).filter((j: any) => j.deviceId === this.deviceId)) {
       if (!/^[a-f0-9-]{36}$/.test(job.id)) throw new Error('执行标识无效');
       if (job.status === 'queued' && !this.saved.has(job.id)) {

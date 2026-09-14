@@ -263,6 +263,15 @@ function pickPersistedConfig(config: any) {
 }
 
 async function handleApi(req: any, res: any, url: any) {
+  if (url.pathname === '/api/task-center/directory-picker') {
+    const actor = requestIdentity.getStore().user;
+    if (req.method === 'GET') sendJson(res, 200, codexExecution.directoryStatus({ requestId: url.searchParams.get('requestId') }, actor));
+    else sendJson(res, 200, await codexExecution.pickDirectory(await readJson(req), actor));
+    return;
+  }
+  if (url.pathname === '/api/task-center/directory-action') {
+    sendJson(res, 200, codexExecution.directoryAction(await readJson(req), requestIdentity.getStore().user)); return;
+  }
   if (url.pathname === '/api/task-center/codex') {
     sendJson(res, 200, await codexExecution.targets()); return;
   }
