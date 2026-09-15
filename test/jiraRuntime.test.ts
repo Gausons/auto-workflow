@@ -17,7 +17,7 @@ test('Jira runtime sync, attachment/assignment dispatch, auth, failure atomicity
     DEFAULT_TENANT_TOKEN: setupToken, ISSUE_PROVIDER: 'jira',
     JIRA_BASE_URL: 'https://jira.example.com', JIRA_JQL: 'project = DEMO',
     JIRA_EMAIL: 'test@example.com', JIRA_API_TOKEN: 'fictional-jira-token',
-    ENABLE_AI_ASSIGNMENT: 'false', ENABLE_AI_ROUTING: 'false'
+    ENABLE_AI_ASSIGNMENT: 'false'
   };
   let app: ReturnType<typeof createApp> | undefined;
   let base = '', fail = false;
@@ -66,6 +66,16 @@ test('Jira runtime sync, attachment/assignment dispatch, auth, failure atomicity
     assert.match(synced.body.storageUserKey, /^jira-/);
     const checkpoint = synced.body.scheduler.lastSyncTime;
     assert.equal((await request(viewer, '/api/bugs/jira%3A100/attachments')).body.attachments[0].name, 'demo.txt');
+    assert.equal((await request(viewer, '/api/bugs/jira%3A100/task', 'POST', {})).status, 403);
+    const createdTask = await request(owner, '/api/bugs/jira%3A100/task', 'POST', {});
+    assert.equal(createdTask.status, 201);
+    const taskSnapshot = await request(owner, '/api/task-center');
+    assert.equal(taskSnapshot.body.tasks[0].source.id, 'jira:100');
+    assert.match(taskSnapshot.body.tasks[0].context.goal, /DEMO-1/);
+    assert.match(taskSnapshot.body.tasks[0].context.files, /demo\.txt/);
+    const existingTask = await request(owner, '/api/bugs/jira%3A100/task', 'POST', {});
+    assert.equal(existingTask.body.taskId, createdTask.body.taskId);
+    assert.equal(existingTask.body.existing, true);
     const assignment = await request(owner, '/api/bugs/jira%3A100/assignment/apply', 'POST', { assigneeId: 'account-b' });
     assert.equal(assignment.status, 200);
     assert.ok(calls.some(url => url.endsWith('/issue/100/assignee')));
@@ -79,7 +89,7 @@ test('Jira runtime sync, attachment/assignment dispatch, auth, failure atomicity
     // Persisted legacy keys remain recoverable and are never mixed with Jira IDs.
     await app!.close(); app = undefined;
     const db = openDatabase(path.join(rootDir, '.workflow-data/workflow.sqlite'));
-    await db.createStore('default').writeUserState('default', { bugs: [{ id: '100', aid: '100', title: 'Archived fixture issue' }], runs: [], executionRecords: [] });
+    await db.createStore('default').writeUserState('default', { bugs: [{ id: '100', aid: '100', title: 'Archived fixture issue' }] });
     db.close();
     environment.ISSUE_PROVIDER = 'fixture';
     await start();

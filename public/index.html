@@ -51,8 +51,6 @@
           <a class="nav-create-task" href="#new-task" data-nav="new-task"><span aria-hidden="true">＋</span> 新建任务</a>
           <a href="#tasks" data-nav="tasks">任务中心</a>
           <a href="#workbench" data-nav="workbench">缺陷工作台</a>
-          <a href="#pipeline" data-nav="pipeline">执行流水线</a>
-          <a href="#records" data-nav="records">执行记录</a>
           <a href="#history" data-nav="history">Agent 历史会话</a>
           <a href="#assignment" data-nav="assignment">分配规则</a>
           <a href="#config" data-nav="config">对接配置</a>
@@ -75,12 +73,12 @@
         <header class="topbar">
           <div>
             <p class="eyebrow">个人缺陷自动处理原型</p>
-            <h1>自动拉取、交给 Codex、验证并准备回写</h1>
+            <h1>集中管理缺陷，并直接生成 Agent 任务</h1>
           </div>
           <div class="top-actions">
             <button class="button secondary" id="assignAll" type="button">一键分配</button>
             <button class="button secondary" id="syncNow" type="button">立即拉取</button>
-            <button class="button primary" id="openPipeline" type="button">进入流水线</button>
+            <button class="button primary" id="createTaskFromBug" type="button">从缺陷生成任务</button>
           </div>
         </header>
 
@@ -175,78 +173,17 @@
                 <input name="operatorId" autocomplete="off" placeholder="流程流转时使用" />
               </label>
               <label>
-                <span>IDE 执行器</span>
-                <select name="ideExecutor">
-                  <option value="codex">Codex</option>
-                  <option value="claude">Claude Code</option>
-                </select>
-              </label>
-              <label>
                 <span>IDE 执行路径</span>
                 <input name="codexWorkspaceDir" autocomplete="off" placeholder="/srv/bugflow/repos/my-project" />
                 <small id="workspacePolicy" hidden>工作目录由团队管理员配置；需要调整时请联系管理员。</small>
-              </label>
-              <label class="ide-model-field" data-ide-model="codex">
-                <span>Codex 模型</span>
-                <select name="codexModel">
-                  <option value="gpt-5.6-sol">GPT-5.6 Sol</option>
-                  <option value="gpt-5.6-terra">GPT-5.6 Terra</option>
-                  <option value="gpt-5.6-luna">GPT-5.6 Luna</option>
-                  <option value="gpt-5.5">GPT-5.5</option>
-                  <option value="gpt-5.4">GPT-5.4</option>
-                  <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
-                </select>
-              </label>
-              <label class="ide-model-field" data-ide-model="codex">
-                <span>推理强度</span>
-                <select name="codexReasoningEffort">
-                  <option value="low">低</option>
-                  <option value="medium">中</option>
-                  <option value="high">高</option>
-                  <option value="xhigh">超高</option>
-                </select>
-              </label>
-              <label class="ide-model-field" data-ide-model="claude" hidden>
-                <span>Claude 模型</span>
-                <select name="claudeModel">
-                  <option value="claude-opus-4-8">Claude Opus 4.8</option>
-                  <option value="claude-opus-4-6">claude-opus-4-6</option>
-                  <option value="claude-sonnet-4-8">claude-sonnet-4-8</option>
-                  <option value="claude-sonnet-4-6">claude-sonnet-4-6</option>
-                  <option value="claude-haiku-4-5">claude-haiku-4-5</option>
-                </select>
-              </label>
-              <label>
-                <span>主分支</span>
-                <input name="codexBaseBranch" autocomplete="off" placeholder="main" />
-              </label>
-              <label>
-                <span>允许 IDE 自主修复优先级</span>
-                <input name="allowedAutoFixPriorities" autocomplete="off" placeholder="P2,P3" />
               </label>
               <label>
                 <span>轮询间隔（分钟）</span>
                 <input name="intervalMinutes" type="number" min="1" max="240" />
               </label>
-              <label>
-                <span>Review 最大轮数</span>
-                <input name="codexReviewMaxRounds" type="number" min="1" max="10" />
-              </label>
               <label class="checkbox-field">
                 <input name="selfOnly" type="checkbox" value="true" />
                 <span>只看当前个人 Token 数据</span>
-              </label>
-              <label class="checkbox-field">
-                <input name="enableBugInfoCompletion" type="checkbox" value="true" />
-                <span>开启 Bug 信息补全</span>
-              </label>
-              <label class="checkbox-field">
-                <input name="allowSkipInfoCompletion" type="checkbox" value="true" />
-                <span>允许跳过信息补全</span>
-              </label>
-              <label class="checkbox-field">
-                <input name="enableAIRouting" type="checkbox" value="true" />
-                <span>开启 AI 路由分类</span>
               </label>
               <label class="checkbox-field">
                 <input name="enableAIAssignment" type="checkbox" value="true" />
@@ -268,35 +205,12 @@
                 </select>
               </label>
               <label>
-                <span>AI 路由模型</span>
-                <select name="aiRoutingModel">
-                  <option value="gpt-5.6-sol">GPT-5.6 Sol</option>
-                  <option value="gpt-5.6-terra">GPT-5.6 Terra</option>
-                  <option value="gpt-5.6-luna">GPT-5.6 Luna</option>
-                  <option value="gpt-5.5">GPT-5.5</option>
-                  <option value="gpt-5.4">GPT-5.4</option>
-                  <option value="gpt-5.4-mini">GPT-5.4 Mini</option>
-                </select>
+                <span>OpenAI Base URL</span>
+                <input name="openaiBaseUrl" autocomplete="off" placeholder="https://api.openai.com/v1" />
               </label>
               <label>
-                <span>AI 路由 Base URL</span>
-                <input name="aiRoutingBaseUrl" autocomplete="off" placeholder="https://api.openai.com/v1" />
-              </label>
-              <label>
-                <span>AI 路由超时（ms）</span>
-                <input name="aiRoutingTimeoutMs" type="number" min="5000" max="120000" />
-              </label>
-              <label class="checkbox-field">
-                <input name="requireVerificationReport" type="checkbox" value="true" />
-                <span>强制生成验证报告</span>
-              </label>
-              <label class="checkbox-field">
-                <input name="requireRegressionTest" type="checkbox" value="true" />
-                <span>强制要求回归测试</span>
-              </label>
-              <label class="checkbox-field">
-                <input name="requireHumanReview" type="checkbox" value="true" />
-                <span>要求人工 Review</span>
+                <span>OpenAI 请求超时（ms）</span>
+                <input name="openaiTimeoutMs" type="number" min="5000" max="120000" />
               </label>
             </div>
 
@@ -310,7 +224,7 @@
         </section>
 
         <section class="page" data-page="assignment" hidden>
-          <section class="pipeline-actions-panel">
+          <section class="config-band">
             <div class="panel-title">
               <div>
                 <h2>分配规则</h2>
@@ -387,160 +301,6 @@
         </section>
         </section>
 
-        <section class="page github-records-page" data-page="records" hidden>
-          <section class="records-page-header">
-            <div class="github-breadcrumb" aria-label="当前位置">
-              <span>Actions</span><b>/</b><strong>Execution history</strong>
-            </div>
-            <div class="records-title-row">
-              <div>
-                <h2>执行记录</h2>
-                <p>查看当前用户的工作流事件；点击带流水线的记录可返回对应运行详情。</p>
-              </div>
-              <span class="records-user" id="executionRecordUser"></span>
-            </div>
-          </section>
-
-          <section class="records-summary" aria-label="执行记录概览">
-            <div class="records-summary-card">
-              <span>事件总数</span>
-              <strong id="executionRecordCount">0</strong>
-            </div>
-            <div class="records-summary-card">
-              <span>关联流水线</span>
-              <strong id="executionRecordRunCount">0</strong>
-            </div>
-          </section>
-
-          <section class="execution-records-panel">
-            <div class="panel-title">
-              <div>
-                <p class="github-section-kicker">Workflow activity</p>
-                <h2>全部事件</h2>
-              </div>
-              <span class="panel-hint">按时间倒序</span>
-            </div>
-            <div class="execution-record-list" id="executionRecordList"></div>
-          </section>
-        </section>
-
-        <section class="page github-pipeline-page" data-page="pipeline" hidden>
-          <section class="pipeline-actions-panel github-run-header">
-            <div class="github-breadcrumb" aria-label="当前位置">
-              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 2.5h4.5l1.5 2h6.5v9h-12.5z"></path></svg>
-              <span>Actions</span><b>/</b><strong>Bug fix workflow</strong>
-            </div>
-            <div class="github-run-title-row">
-              <div>
-                <h2>Bug 修复流水线</h2>
-                <p class="panel-subtitle">生成任务、跟踪节点输出，并在进入 Review 前检查完整技术闭环。</p>
-              </div>
-              <span class="github-status-pill" id="runState">等待执行</span>
-            </div>
-            <div class="form-actions github-run-actions">
-              <label class="executor-picker">
-                <span>IDE 执行器</span>
-                <select id="ideExecutorPicker">
-                  <option value="codex">Codex</option>
-                  <option value="claude">Claude Code</option>
-                </select>
-              </label>
-              <button class="button secondary" id="runManual" type="button">生成人工流水线</button>
-              <button class="button primary" id="runAuto" type="button">生成自动流水线</button>
-            </div>
-          </section>
-
-          <section class="pipeline-page-grid" id="pipeline">
-            <aside class="run-list-panel github-sidebar-box">
-              <div class="panel-title">
-                <h2><span class="github-panel-icon" aria-hidden="true">#</span> 缺陷</h2>
-              </div>
-              <div class="pipeline-bug-list" id="pipelineBugList"></div>
-              <div class="panel-title compact-title">
-                <h2><span class="github-panel-icon" aria-hidden="true">▶</span> 运行记录</h2>
-              </div>
-              <div class="run-list" id="runList"></div>
-            </aside>
-
-            <div class="pipeline-workspace">
-              <div class="pipeline-panel github-checks-box">
-                <div class="panel-title">
-                  <div>
-                    <p class="github-section-kicker">Workflow run</p>
-                    <h2>Checks</h2>
-                  </div>
-                  <span class="github-panel-label" id="pipelineNodeCount">0 个节点</span>
-                </div>
-                <div class="pipeline" id="pipelineSteps"></div>
-              </div>
-
-              <div class="node-detail-panel github-detail-box">
-                <div class="panel-title">
-                  <div>
-                    <p class="github-section-kicker">Job details</p>
-                    <h2>节点详情</h2>
-                  </div>
-                  <div class="panel-actions">
-                    <button class="button primary" id="startNode" type="button" hidden>执行任务</button>
-                    <button class="button primary" id="startReview" type="button" hidden>开始 Review</button>
-                    <button class="button primary" id="startVerify" type="button" hidden>开始验证</button>
-                    <button class="button secondary" id="stopNode" type="button" hidden>停止任务</button>
-                    <button class="button ghost" id="completeNode" type="button" hidden>标记完成</button>
-                    <button class="button ghost" id="reviewNode" type="button" hidden>标记复核</button>
-                  </div>
-                </div>
-                <article class="bug-detail" id="nodeDetail"></article>
-              </div>
-            </div>
-          </section>
-
-        <section class="task-band github-artifact-box" id="ideSupplementPanel" hidden>
-          <div class="panel-title">
-            <div>
-              <h2>IDE 执行前补充信息</h2>
-              <p class="panel-subtitle">启动 IDE 任务前可补充复现说明、账号环境、截图等材料，图片会保存到目标仓库并写入任务包。</p>
-            </div>
-            <span id="ideSupplementState">可选</span>
-          </div>
-          <div class="supplement-form">
-            <label>
-              <span>补充文本</span>
-              <textarea id="ideSupplementText" rows="4" placeholder="例如：复现账号、环境、关键路径、截图说明、期望 Codex 重点检查的位置"></textarea>
-            </label>
-            <label>
-              <span>补充图片</span>
-              <input id="ideSupplementImages" type="file" accept="image/*" multiple />
-              <small id="ideSupplementFileState">最多 8 张，每张不超过 10MB。</small>
-            </label>
-          </div>
-          <div class="supplement-saved" id="ideSupplementSaved"></div>
-        </section>
-
-        <section class="task-band github-artifact-box">
-          <div class="panel-title">
-            <div>
-              <p class="github-section-kicker">Artifact</p>
-              <h2>IDE 任务包</h2>
-            </div>
-            <div class="panel-actions">
-              <button class="button ghost" id="copyCommand" type="button">复制命令</button>
-              <button class="button ghost" id="copyTask" type="button">复制任务包</button>
-            </div>
-          </div>
-          <div class="handoff-meta" id="handoffMeta" hidden></div>
-          <pre id="taskPacket">选择一个缺陷并生成 IDE 任务包。</pre>
-        </section>
-
-        <section class="task-band github-artifact-box">
-          <div class="panel-title">
-            <div>
-              <p class="github-section-kicker">Raw logs</p>
-              <h2>执行日志</h2>
-            </div>
-          </div>
-          <div class="log-box" id="logBox">暂无日志</div>
-        </section>
-        </section>
       </main>
     </div>
 

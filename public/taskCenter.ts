@@ -299,5 +299,10 @@ export function createTaskCenterUI({ root, api, canEdit, toast }: any) {
     } catch (error: any) { toast(error.message); b.disabled = false; }
   });
   setInterval(() => { if (!root.hidden && sessionStorage.getItem('bugflow.sessionToken')) load({ quiet: true }); }, 3000);
-  return { load, openNew: () => openCreate(), showTasks: () => { page = 'tasks'; render(); } };
+  return {
+    load,
+    openNew: () => openCreate(),
+    showTasks: () => { page = 'tasks'; render(); },
+    selectTask: (taskId: string) => { selected = taskId; page = 'tasks'; tab = 'progress'; render(); }
+  };
 }

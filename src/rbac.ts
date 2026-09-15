@@ -16,16 +16,15 @@ export function permissionForRoute(method: any, pathname: any) {
   if (pathname === '/api/task-center' && ['GET', 'POST'].includes(method)) return method === 'GET' ? 'read' : 'work.execute';
   if (method === 'GET' && (pathname === '/api/sessions' || /^\/api\/sessions\/[a-f0-9]{64}(?:\/(events|records))?$/.test(pathname))) return 'read';
   if (method === 'GET' && (pathname === '/api/agent-sessions' || /^\/api\/agent-sessions\/[a-f0-9]{64}$/.test(pathname))) return 'read';
-  if (method === 'GET' && ['/api/bootstrap', '/api/workflows/records', '/api/assignment/people'].includes(pathname)) return 'read';
+  if (method === 'GET' && ['/api/bootstrap', '/api/assignment/people'].includes(pathname)) return 'read';
   if (method === 'GET' && /^\/api\/bugs\/[^/]+\/attachments$/.test(pathname)) return 'read';
   if (method === 'GET' && pathname === '/api/issues/diagnostics') return 'config.manage';
   if (method === 'PUT' && pathname === '/api/config') return 'config.manage';
   if (method === 'PUT' && pathname === '/api/assignment/people') return 'people.manage';
   if (method === 'POST' && pathname === '/api/scheduler') return 'config.manage';
-  if (method === 'POST' && ['/api/sync', '/api/assignments/apply-all', '/api/workflows/run'].includes(pathname)) return 'work.execute';
+  if (method === 'POST' && ['/api/sync', '/api/assignments/apply-all'].includes(pathname)) return 'work.execute';
+  if (method === 'POST' && /^\/api\/bugs\/[^/]+\/task$/.test(pathname)) return 'work.execute';
   if (method === 'POST' && /^\/api\/bugs\/[^/]+\/assignment\/(recommend|apply)$/.test(pathname)) return 'work.execute';
-  if (method === 'POST' && /^\/api\/workflows\/[^/]+\/(supplement|start|stop|verify\/start)$/.test(pathname)) return 'work.execute';
-  if (method === 'POST' && /^\/api\/workflows\/[^/]+\/(review\/start|nodes\/[^/]+\/complete|operation-log\/upload)$/.test(pathname)) return 'work.approve';
   return null; // New routes must be explicitly assigned a permission.
 }
 

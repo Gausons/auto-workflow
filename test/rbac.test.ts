@@ -45,17 +45,16 @@ test('organization members, role enforcement, cross-organization access and imme
     }
     const viewer = users.viewer, admin = users.admin, operator = users.operator;
     assert.equal((await request(viewer.token, '/api/bootstrap')).status, 200);
-    assert.equal((await request(viewer.token, '/api/workflows/records')).status, 200);
+    assert.equal((await request(viewer.token, '/api/task-center')).status, 200);
     for (const [method, endpoint] of [
       ['PUT', '/api/config'], ['PUT', '/api/assignment/people'], ['POST', '/api/sync'], ['GET', '/api/issues/diagnostics'],
-      ['POST', '/api/scheduler'], ['POST', '/api/workflows/run'], ['POST', '/api/workflows/x/start'], ['POST', '/api/workflows/x/stop'],
-      ['POST', '/api/workflows/x/supplement'], ['POST', '/api/bugs/x/assignment/apply'], ['POST', '/api/bugs/x/assignment/recommend'],
-      ['POST', '/api/assignments/apply-all'], ['POST', '/api/workflows/x/nodes/humanReview/complete'],
-      ['POST', '/api/workflows/x/nodes/releaseClose/complete'], ['POST', '/api/workflows/x/operation-log/upload'],
+      ['POST', '/api/scheduler'], ['POST', '/api/bugs/x/task'],
+      ['POST', '/api/bugs/x/assignment/apply'], ['POST', '/api/bugs/x/assignment/recommend'],
+      ['POST', '/api/assignments/apply-all'],
       ['GET', '/api/organization/members'], ['POST', '/api/organization/members'], ['GET', '/api/organization/audit']
     ]) assert.equal((await request(viewer.token, endpoint, method, method === 'GET' ? undefined : { role: 'owner', tenantId: 'other' })).status, 403, endpoint);
-    assert.equal((await request(operator.token, '/api/workflows/run', 'POST', { bugId: 'not-found' })).status, 404);
-    for (const endpoint of ['/api/config', '/api/organization/members', '/api/workflows/x/nodes/releaseClose/complete']) {
+    assert.equal((await request(operator.token, '/api/bugs/not-found/task', 'POST', {})).status, 404);
+    for (const endpoint of ['/api/config', '/api/organization/members']) {
       assert.equal((await request(operator.token, endpoint, endpoint === '/api/config' ? 'PUT' : 'POST', {})).status, 403);
     }
     assert.equal((await request(admin.token, '/api/config', 'PUT', { assignee: 'admin-assignee' })).status, 200);
@@ -70,9 +69,9 @@ test('organization members, role enforcement, cross-organization access and imme
 
     // A live token follows role changes without requiring another login.
     assert.equal((await request(admin.token, `/api/organization/members/${viewer.user.id}`, 'PATCH', { role: 'operator' })).status, 200);
-    assert.equal((await request(viewer.token, '/api/workflows/run', 'POST', { bugId: 'missing' })).status, 404);
+    assert.equal((await request(viewer.token, '/api/bugs/missing/task', 'POST', {})).status, 404);
     await request(admin.token, `/api/organization/members/${viewer.user.id}`, 'PATCH', { role: 'viewer' });
-    assert.equal((await request(viewer.token, '/api/workflows/run', 'POST', { bugId: 'missing' })).status, 403);
+    assert.equal((await request(viewer.token, '/api/bugs/missing/task', 'POST', {})).status, 403);
     await request(admin.token, `/api/organization/members/${viewer.user.id}`, 'PATCH', { enabled: false });
     assert.equal((await request(viewer.token, '/api/bootstrap')).status, 401);
     assert.equal((await request(null, '/api/auth/login', 'POST', { tenantId: 'default', username: 'viewer', password })).status, 401);
@@ -124,6 +123,7 @@ test('version 1 migration preserves tenant data; salted passwords, session expir
   raw.prepare('INSERT INTO tenant_settings(tenant_id, config) VALUES (?, ?)').run('test', '{"assignee":"legacy-line"}');
   raw.prepare('INSERT INTO user_states VALUES (?, ?, ?)').run('test', 'person', '2026-01-01');
   raw.prepare('INSERT INTO workflow_items VALUES (?, ?, ?, ?, ?, ?)').run('test', 'person', 'bugs', 'legacy-bug', 0, '{"id":"legacy-bug","title":"preserved"}');
+  raw.prepare('INSERT INTO workflow_items VALUES (?, ?, ?, ?, ?, ?)').run('test', 'person', 'runs', 'legacy-run', 0, '{"id":"legacy-run"}');
   raw.exec('PRAGMA user_version = 1'); raw.close();
   const db = openDatabase(filename);
   try {
@@ -144,7 +144,9 @@ test('version 1 migration preserves tenant data; salted passwords, session expir
     assert.notEqual(hashes[0]!.password_hash, hashes[1]!.password_hash);
     raw.prepare('UPDATE user_sessions SET expires_at = ?').run(Date.now() - 1);
     assert.equal(db.authenticateSession(session.token), null);
-    assert.equal(raw.prepare('PRAGMA user_version').get()?.user_version, 3);
+    assert.equal(raw.prepare('PRAGMA user_version').get()?.user_version, 4);
+    assert.equal(raw.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workflow_items'").get(), undefined);
+    assert.equal(raw.prepare('SELECT count(*) AS count FROM issue_items').get()?.count, 1);
     raw.close();
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
 });

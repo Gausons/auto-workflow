@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { EventEmitter } from 'node:events';
-import { AcpAgentConnection, AcpPreferredRunner, AcpTaskRunner, AgentRunnerSet, configuredAcpAgents, resolveAcpLaunch, spawnAcpPreferredAgent } from '../src/acpAgent.js';
+import { AcpAgentConnection, AcpPreferredRunner, AcpTaskRunner, AgentRunnerSet, configuredAcpAgents, resolveAcpLaunch } from '../src/acpAgent.js';
 
 test('resolves ACP for built-in and custom agents and supports explicit opt-out', () => {
   assert.deepEqual(resolveAcpLaunch('codex', {}), { command: 'codex-acp', args: [] });
@@ -67,15 +67,6 @@ test('performs a real ACP v1 initialize, session/new, session/prompt and update 
   assert.deepEqual(await connection.prompt('执行'), { stopReason: 'end_turn' });
   assert.equal(updates[0].update.content.text, 'ACP 完成:yes');
 
-  let fallbackStarted = false, output = '';
-  const childFacade: any = spawnAcpPreferredAgent({
-    agent: 'fixture', cwd: root, prompt: '执行',
-    environment: { ...process.env, ACP_FIXTURE_EXECUTABLE: process.execPath, ACP_FIXTURE_ARGS: JSON.stringify([agentFile]) },
-    fallback: () => { fallbackStarted = true; throw new Error('不应回退'); }
-  });
-  childFacade.stdout.on('data', (chunk: any) => { output += chunk.toString(); });
-  const [code] = await new Promise<any[]>(resolve => childFacade.on('close', (...args: any[]) => resolve(args)));
-  assert.equal(code, 0); assert.equal(childFacade.protocol, 'acp'); assert.equal(fallbackStarted, false); assert.equal(output, 'ACP 完成:no');
 });
 
 test('ACP preferred runner only falls back when ACP is unavailable', async () => {

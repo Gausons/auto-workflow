@@ -1,6 +1,5 @@
 import type { WorkIssue } from './types.ts';
 
-/** Platform-specific transitions stay outside the public workflow engine. */
 export function sourceTransitionPlan(issue: Pick<WorkIssue, 'source' | 'sourceUrl'>) {
   return {
     source: issue.source || '',

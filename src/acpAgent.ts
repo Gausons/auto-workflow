@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { PassThrough, Readable, Writable } from 'node:stream';
+import { Readable, Writable } from 'node:stream';
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
@@ -216,52 +216,6 @@ export async function probeAcpAgent(agent: string, environment: any = process.en
   try { await connection.initialize(5000); return true; }
   catch { return false; }
   finally { connection.close(); }
-}
-
-/** ChildProcess-shaped one-shot bridge used by the existing workflow engine. */
-export function spawnAcpPreferredAgent({ agent, cwd, prompt, environment = process.env, fallback }: any) {
-  const facade: any = new EventEmitter();
-  facade.stdout = new PassThrough(); facade.stderr = new PassThrough(); facade.pid = undefined;
-  facade.protocol = 'probing'; facade.connection = null; facade.child = null; facade.stopped = false;
-  facade.kill = (signal = 'SIGTERM') => {
-    facade.stopped = true;
-    if (facade.connection) { void facade.connection.cancel().finally(() => facade.connection.close()); return true; }
-    return facade.child?.kill(signal) ?? false;
-  };
-  queueMicrotask(async () => {
-    const launch = resolveAcpLaunch(agent, environment);
-    if (launch) {
-      const connection = new AcpAgentConnection({ agent, launch, environment });
-      facade.connection = connection; facade.pid = connection.child.pid;
-      connection.on('diagnostic', (value: string) => facade.stderr.write(value));
-      connection.on('update', ({ update }: any) => { const value = textFromUpdate(update); if (value) facade.stdout.write(value); });
-      connection.on('permission', () => connection.respond('decline'));
-      try {
-        await connection.initialize(); await connection.newSession(cwd);
-        facade.protocol = 'acp'; facade.emit('protocol', 'acp');
-        const result: any = await connection.prompt(prompt);
-        connection.close(); facade.stdout.end(); facade.stderr.end();
-        facade.emit('close', result.stopReason === 'end_turn' ? 0 : 1, result.stopReason === 'cancelled' ? 'SIGTERM' : null);
-        return;
-      } catch (error: any) {
-        const mayFallback = !connection.promptStarted;
-        connection.close(); facade.connection = null;
-        if (facade.stopped) { facade.stdout.end(); facade.stderr.end(); facade.emit('close', null, 'SIGTERM'); return; }
-        if (!mayFallback) { facade.stderr.write(error.message); facade.emit('close', 1, null); return; }
-        facade.stderr.write(`[acp] ${error.message}；回退到原执行通道。\n`);
-      }
-    }
-    if (facade.stopped) { facade.stdout.end(); facade.stderr.end(); facade.emit('close', null, 'SIGTERM'); return; }
-    try {
-      facade.protocol = 'legacy'; facade.emit('protocol', 'legacy');
-      const child = fallback(); facade.child = child; facade.pid = child.pid;
-      child.stdout?.on('data', (chunk: any) => facade.stdout.write(chunk));
-      child.stderr?.on('data', (chunk: any) => facade.stderr.write(chunk));
-      child.on('error', (error: any) => facade.emit('error', error));
-      child.on('close', (code: any, signal: any) => { facade.stdout.end(); facade.stderr.end(); facade.emit('close', code, signal); });
-    } catch (error: any) { facade.emit('error', error); }
-  });
-  return facade;
 }
 
 export function acpProject(root: string, agent = 'codex', configuration: any = {}) {

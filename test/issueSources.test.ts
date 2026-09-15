@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createIssueSource, sourceStorageKey, syncCheckpoint } from '../src/issueSources/index.ts';
 import { buildJiraJql, jiraDescription, normalizeJiraIssue } from '../src/issueSources/jira.ts';
-import { sourceTransitionPlan } from '../src/issueSources/workflow.ts';
+import { sourceTransitionPlan } from '../src/issueSources/transition.ts';
 import { tenantEnvironment } from '../src/tenancy.js';
 import type { Environment, IssueSourceFactory } from '../src/issueSources/types.ts';
 
@@ -143,7 +143,7 @@ test('configuration validation, source registration and storage preserve existin
 });
 
 
-test('workflow transition plan directs users to the original platform without embedded endpoints', () => {
+test('issue transition plan directs users to the original platform without embedded endpoints', () => {
   const plan = sourceTransitionPlan({ source: 'jira', sourceUrl: 'https://jira.example.com/browse/DEMO-1' });
   assert.equal(plan.automaticTransition, false);
   assert.equal(plan.issueUrl, 'https://jira.example.com/browse/DEMO-1');

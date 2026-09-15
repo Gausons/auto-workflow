@@ -42,6 +42,7 @@ export function createTaskCenter({ database, tenantId, history }: any) {
         const task: any = { id: randomUUID(), title: required(title, 120), status: 'ready', revision: 1, contextVersion: 1,
           context: Object.fromEntries(['goal', 'constraints', 'decisions', 'next', 'files'].map(k => [k, text(context[k] ?? (k === 'goal' ? title : ''))])),
           sessionIds: [], events: [], createdAt: now(), updatedAt: now() };
+        if (input.source?.type === 'defect') task.source = { type: 'defect', id: required(input.source.id, 250), code: text(input.source.code ?? '', 120) };
         event(task, '创建任务'); data.tasks.push(task); return task;
       };
       const attach = (task: any, id: any) => {

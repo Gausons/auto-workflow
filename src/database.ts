@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, readFileSync, readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { createExecutionRecord, normalizeStoredState } from './workflowStore.js';
+import { normalizeIssueState } from './issueStore.js';
 import { createIdentityStore } from './identity.js';
 
 export const hashToken = (token: any) => createHash('sha256').update(token).digest('hex');
@@ -12,7 +12,7 @@ export function openDatabase(filename: any) {
   const db = new DatabaseSync(filename);
   db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
   const version = Number(db.prepare('PRAGMA user_version').get()?.user_version || 0);
-  if (version > 3) { db.close(); throw new Error('数据库版本高于当前程序支持的版本'); }
+  if (version > 4) { db.close(); throw new Error('数据库版本高于当前程序支持的版本'); }
   if (version === 0) {
     transaction(() => {
       db.exec(readFileSync(new URL('../migrations/001_initial.sql', import.meta.url), 'utf8'));
@@ -30,6 +30,12 @@ export function openDatabase(filename: any) {
     transaction(() => {
       db.exec(readFileSync(new URL('../migrations/003_task_center.sql', import.meta.url), 'utf8'));
       db.exec('PRAGMA user_version = 3');
+    });
+  }
+  if (version < 4) {
+    transaction(() => {
+      db.exec(readFileSync(new URL('../migrations/004_remove_workflows.sql', import.meta.url), 'utf8'));
+      db.exec('PRAGMA user_version = 4');
     });
   }
 
@@ -64,23 +70,21 @@ export function openDatabase(filename: any) {
     if (assignmentPeople !== undefined) db.prepare('UPDATE tenant_settings SET assignment_people = ? WHERE tenant_id = ?').run(JSON.stringify(assignmentPeople), tenantId);
   }
   function readState(tenantId: any, userKey: any) {
-    const result: any = { tenantId, userKey, bugs: [], runs: [], executionRecords: [] };
+    const result: any = { tenantId, userKey, bugs: [] };
     result.updatedAt = db.prepare('SELECT updated_at FROM user_states WHERE tenant_id = ? AND user_key = ?').get(tenantId, userKey)?.updated_at || null;
-    for (const row of db.prepare('SELECT kind, payload FROM workflow_items WHERE tenant_id = ? AND user_key = ? ORDER BY position').all(tenantId, userKey)) {
-      result[String(row.kind)].push(JSON.parse(String(row.payload)));
+    for (const row of db.prepare('SELECT payload FROM issue_items WHERE tenant_id = ? AND user_key = ? ORDER BY position').all(tenantId, userKey)) {
+      result.bugs.push(JSON.parse(String(row.payload)));
     }
     return result;
   }
   function writeStateRows(tenantId: any, userKey: any, snapshot: any) {
-    const normalized: any = normalizeStoredState(snapshot, userKey);
+    const normalized: any = normalizeIssueState(snapshot, userKey);
     // The database uses the exact key; legacy filesystem normalization is only used during import.
     db.prepare('INSERT INTO user_states VALUES (?, ?, ?) ON CONFLICT(tenant_id, user_key) DO UPDATE SET updated_at = excluded.updated_at')
       .run(tenantId, userKey, normalized.updatedAt);
-    db.prepare('DELETE FROM workflow_items WHERE tenant_id = ? AND user_key = ?').run(tenantId, userKey);
-    const insert = db.prepare('INSERT INTO workflow_items VALUES (?, ?, ?, ?, ?, ?)');
-    for (const kind of ['bugs', 'runs', 'executionRecords']) {
-      normalized[kind].forEach((item: any, index: any) => insert.run(tenantId, userKey, kind, String(item.id || `position-${index}`), index, JSON.stringify(item)));
-    }
+    db.prepare('DELETE FROM issue_items WHERE tenant_id = ? AND user_key = ?').run(tenantId, userKey);
+    const insert = db.prepare('INSERT INTO issue_items VALUES (?, ?, ?, ?, ?)');
+    normalized.bugs.forEach((item: any, index: any) => insert.run(tenantId, userKey, String(item.id || `position-${index}`), index, JSON.stringify(item)));
   }
   function writeState(tenantId: any, userKey: any, snapshot: any) {
     transaction(() => writeStateRows(tenantId, userKey, snapshot));
@@ -93,7 +97,6 @@ export function openDatabase(filename: any) {
       // Commit synchronously, including background progress, so no cross-user debounce can drop writes.
       scheduleSave: (userKey: any, snapshot: any) => writeState(tenantId, userKey, snapshot),
       flushSave: async () => {},
-      appendExecutionRecord: (records: any, record: any) => [createExecutionRecord(record), ...records].slice(0, 500)
     };
   }
   function importLegacy(rootDir: any, tenantId: any, defaults: any = {}) {
@@ -110,7 +113,7 @@ export function openDatabase(filename: any) {
         const file = path.join(dir, entry.name, 'state.json');
         if (entry.isDirectory() && existsSync(file)) {
           const snapshot = readJson(file);
-          if (!Array.isArray(snapshot.bugs) || !Array.isArray(snapshot.runs)) throw new Error(`旧数据格式不正确：${file}`);
+          if (!Array.isArray(snapshot.bugs)) throw new Error(`旧数据格式不正确：${file}`);
           if (snapshots.has(entry.name)) throw new Error(`旧数据用户目录重复：${entry.name}，请先合并重复目录`);
           snapshots.set(entry.name, snapshot);
         }
