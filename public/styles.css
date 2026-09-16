@@ -1066,6 +1066,131 @@ pre {
   }
 }
 
+/* Keep authentication and application views mutually exclusive. This explicit
+   rule is required because layout declarations such as `.app-shell { display:
+   grid }` otherwise win over the browser's default styling for `hidden`. */
+[hidden] {
+  display: none !important;
+}
+
+.login-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.login-card {
+  width: min(440px, 100%);
+  padding: 36px;
+  border: 1px solid #dce2ea;
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 16px 50px rgb(23 43 77 / 5%);
+}
+
+.login-card h1 {
+  margin: 12px 0;
+  font-size: 26px;
+}
+
+.login-card p {
+  line-height: 1.7;
+  color: #64748b;
+}
+
+.login-card label {
+  display: block;
+  margin: 24px 0 8px;
+  font-weight: 600;
+}
+
+.login-card input {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+}
+
+.login-card .button {
+  width: 100%;
+}
+
+.login-card .login-error {
+  min-height: 24px;
+  color: #b42318;
+  font-size: 13px;
+}
+
+.setup-details {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.setup-details summary {
+  color: var(--teal);
+  cursor: pointer;
+}
+
+.tenant-panel {
+  display: grid;
+  gap: 10px;
+  padding: 16px 0;
+  font-size: 12px;
+}
+
+.tenant-panel strong {
+  overflow-wrap: anywhere;
+}
+
+.member-list {
+  display: grid;
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.member-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.member-card .fields-grid {
+  margin-top: 14px;
+}
+
+.member-card p {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.role-table {
+  width: 100%;
+  margin: 16px 0 28px;
+  border-collapse: collapse;
+}
+
+.role-table th,
+.role-table td {
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+body[data-can-execute="false"] :is(#syncNow, #assignAll, [data-assignment-recommend], [data-assignment-apply]),
+body[data-can-configure="false"] :is([data-nav="config"], #toggleScheduler),
+body[data-can-manage-people="false"] :is(#assignmentPeopleForm, [data-save-person], [data-delete-person]),
+body[data-can-manage-members="false"] [data-nav="members"] {
+  display: none !important;
+}
+
 /* Codex-style history: quiet navigation and a typography-first conversation. */
 body[data-view="history"] { background: #fff; color: #242424; --line: #e8e8e8; --muted: #858585; }
 body[data-view="history"] .app-shell { grid-template-columns: 200px minmax(0, 1fr); }
