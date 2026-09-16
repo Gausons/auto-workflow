@@ -5,7 +5,7 @@ const select = (selector: string): any => document.querySelector(selector);
 const escapeHtml = (value: any) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
 const state: any = {
   user: null, permissions: [], config: {}, scheduler: {}, assignmentPeople: [], bugs: [], metrics: {},
-  selectedBugId: null, view: currentView()
+  selectedBugId: null, view: currentView(), settingsSection: currentSettingsSection()
 };
 const historyState: any = { offset: 0, total: 0, selected: null, listRequest: 0, detailRequest: 0, detail: null, agent: '', query: '', workspace: '' };
 const els: any = {
@@ -79,8 +79,13 @@ async function logout() {
 function bindEvents() {
   window.addEventListener('hashchange', async () => {
     state.view = currentView();
+    state.settingsSection = currentSettingsSection();
     render();
     await loadCurrentView();
+  });
+  select('.settings-nav').addEventListener('click', (event: any) => {
+    const button = event.target.closest('[data-settings-target]');
+    if (button) location.hash = `settings/${button.dataset.settingsTarget}`;
   });
   els.syncNow.addEventListener('click', syncNow);
   els.assignAll.addEventListener('click', applyAllAssignments);
@@ -107,7 +112,7 @@ async function loadCurrentView() {
     if (state.view === 'new-task') await taskCenterUI.openNew();
     else taskCenterUI.showTasks();
   }
-  if (state.view === 'members') await loadMembers();
+  if (state.view === 'settings' && state.settingsSection === 'members') await loadMembers();
   if (state.view === 'history') await loadAgentHistory();
 }
 
@@ -139,8 +144,8 @@ function renderPermissions() {
   document.body.dataset.canConfigure = String(can('config.manage'));
   document.body.dataset.canManagePeople = String(can('people.manage'));
   document.body.dataset.canManageMembers = String(can('members.manage'));
-  if (state.view === 'members' && !can('members.manage')) state.view = 'workbench';
-  if (state.view === 'config' && !can('config.manage')) state.view = 'workbench';
+  if (state.view === 'settings' && state.settingsSection === 'members' && !can('members.manage')) state.settingsSection = 'account';
+  if (state.view === 'settings' && state.settingsSection === 'config' && !can('config.manage')) state.settingsSection = 'assignment';
 }
 
 function render() {
@@ -152,17 +157,26 @@ function render() {
     'new-task': ['新建任务', '描述目标并选择 Agent'],
     workbench: ['缺陷工作台', '同步缺陷并直接生成任务'],
     history: ['Agent 历史会话', '查看本地 Agent 工作记录'],
-    assignment: ['分配规则', '维护缺陷经办人建议'],
-    config: ['对接配置', '管理数据源和任务工作目录'],
-    members: ['组织成员', '管理账号、角色和审计'],
-    account: ['我的账号', '管理个人登录信息']
+    settings: ['设置', '管理工作台和组织偏好']
   };
   const copy = title[state.view] || title.workbench;
   select('.topbar h1').textContent = copy[0];
   select('.topbar .eyebrow').textContent = copy[1];
   const workbench = state.view === 'workbench';
   els.syncNow.hidden = !workbench; els.assignAll.hidden = !workbench; els.createTaskFromBug.hidden = !workbench;
+  renderSettings();
   renderMetrics(); renderBugList(); renderBugDetail(); renderConfig(); renderAssignmentPeople();
+}
+
+function renderSettings() {
+  document.querySelectorAll('[data-settings-panel]').forEach((panel: any) => {
+    panel.hidden = panel.dataset.settingsPanel !== state.settingsSection;
+  });
+  document.querySelectorAll('[data-settings-target]').forEach((button: any) => {
+    const active = button.dataset.settingsTarget === state.settingsSection;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
 }
 
 function renderMetrics() {
@@ -393,33 +407,108 @@ async function loadMembers() {
 }
 
 function bindHistoryEvents() {
-  select('#historyFilters').addEventListener('submit', (event: any) => { event.preventDefault(); historyState.offset = 0; loadAgentHistory(); });
-  select('#historyPrev').addEventListener('click', () => { historyState.offset = Math.max(0, historyState.offset - 30); loadAgentHistory(); });
-  select('#historyNext').addEventListener('click', () => { historyState.offset += 30; loadAgentHistory(); });
-  select('#historyList').addEventListener('click', (event: any) => { const button = event.target.closest('[data-session-id]'); if (button) loadAgentHistoryDetail(button.dataset.sessionId); });
-}
-async function loadAgentHistory() {
-  const query = new URLSearchParams({ offset: String(historyState.offset), limit: '30', q: select('#historyQuery').value || '', agent: select('#historyAgent').value || '', workspace: select('#historyWorkspace').value || '' });
-  try {
-    const data = await api(`/api/agent-sessions?${query}`);
-    historyState.total = data.total || 0;
-    select('#historyStatus').textContent = `${historyState.total} 个会话`;
-    select('#historyList').innerHTML = (data.sessions || []).map((item: any) => `<button class="history-item" data-session-id="${escapeHtml(item.id)}"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.agentLabel || item.agent)}</span><small>${escapeHtml(item.updatedAt || '')}</small></button>`).join('') || '<div class="empty">暂无会话。</div>';
-    select('#historyPrev').disabled = historyState.offset === 0;
-    select('#historyNext').disabled = historyState.offset + 30 >= historyState.total;
-    select('#historyPage').textContent = `${Math.floor(historyState.offset / 30) + 1}`;
-    if (!select('#historyAgent').dataset.loaded) {
-      select('#historyAgent').innerHTML += (data.providers || []).map((item: any) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label || item.id)}</option>`).join('');
-      select('#historyWorkspace').innerHTML += (data.workspaces || []).map((item: any) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`).join('');
-      select('#historyAgent').dataset.loaded = 'true';
+  select('#historyFilters').addEventListener('submit', (event: any) => {
+    event.preventDefault();
+    historyState.agent = select('#historyAgent').value;
+    historyState.query = select('#historyQuery').value.trim();
+    historyState.workspace = select('#historyWorkspace').value;
+    loadAgentHistory(0);
+  });
+  for (const selector of ['#historyAgent', '#historyWorkspace']) {
+    select(selector).addEventListener('change', () => select('#historyFilters').requestSubmit());
+  }
+  select('#historyPrev').addEventListener('click', () => loadAgentHistory(Math.max(0, historyState.offset - 30)));
+  select('#historyNext').addEventListener('click', () => loadAgentHistory(historyState.offset + 30));
+  select('#historyList').addEventListener('click', (event: any) => {
+    const button = event.target.closest('[data-session-id]');
+    if (button) loadAgentSession(button.dataset.sessionId);
+  });
+  select('#historyDetail').addEventListener('click', (event: any) => {
+    if (event.target.closest('[data-more-messages]') && historyState.detail) {
+      loadAgentSession(historyState.selected, historyState.detail.messages.length);
     }
-  } catch (error: any) { select('#historyStatus').textContent = error.message; }
+  });
 }
-async function loadAgentHistoryDetail(id: string) {
+
+const historyStatusLabel = (value: any) => ({ completed: '本轮结束', interrupted: '已中断', error: '发生错误', unknown: '运行状态未知' } as Record<string, string>)[value] || '运行状态未知';
+const historyTime = (value: any) => Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('zh-CN') : '时间未知';
+
+async function loadAgentHistory(offset = historyState.offset) {
+  const request = ++historyState.listRequest;
+  ++historyState.detailRequest;
+  historyState.selected = null;
+  historyState.detail = null;
+  select('#historyDetail').innerHTML = '<div class="history-empty"><span>◎</span><h2>从一个会话开始</h2><p>选择历史会话，查看对话与工作过程</p></div>';
+  select('#historyStatus').textContent = '正在读取历史会话，首次索引可能需要一些时间…';
+  select('#historyList').replaceChildren();
+  select('#historyPrev').disabled = true;
+  select('#historyNext').disabled = true;
   try {
-    const data = await api(`/api/agent-sessions/${encodeURIComponent(id)}?limit=100`);
-    select('#historyDetail').innerHTML = `<div class="history-detail-heading"><h2>${escapeHtml(data.session?.title || data.title || '会话')}</h2></div><div class="history-messages">${renderMessages(data.messages || [])}</div>`;
-  } catch (error: any) { showToast(error.message); }
+    const query = new URLSearchParams({ offset: String(offset), limit: '30', agent: historyState.agent, q: historyState.query, workspace: historyState.workspace });
+    const data = await api(`/api/agent-sessions?${query}`);
+    if (request !== historyState.listRequest) return;
+    historyState.offset = data.offset;
+    historyState.total = data.total;
+    const sourceLabels: any = { available: '可读取', missing: '未找到历史目录', unconfigured: '未配置', error: '无法读取目录' };
+    select('#historySources').textContent = `${data.scope === 'all' ? '全部本地工作区' : '仅组织工作目录'} · ${data.providers.map((provider: any) => `${provider.label}：${sourceLabels[provider.status]}${provider.skipped ? `（${provider.skipped} 项未能读取）` : ''}`).join(' · ')}`;
+    select('#historyAgent').innerHTML = '<option value="">全部 Agent</option>' + data.providers.map((provider: any) => `<option value="${escapeHtml(provider.id)}">${escapeHtml(provider.label)}</option>`).join('');
+    select('#historyAgent').value = historyState.agent;
+    select('#historyWorkspace').innerHTML = '<option value="">全部工作区</option>' + data.workspaces.map((workspace: any) => `<option value="${escapeHtml(workspace.path)}">${escapeHtml(workspace.path === '__unknown__' ? '未知工作区' : workspace.path)} (${workspace.count})</option>`).join('');
+    if (historyState.workspace && !data.workspaces.some((workspace: any) => workspace.path === historyState.workspace)) {
+      const option = document.createElement('option');
+      option.value = historyState.workspace;
+      option.textContent = historyState.workspace + ' (0)';
+      select('#historyWorkspace').append(option);
+    }
+    select('#historyWorkspace').value = historyState.workspace;
+    select('#historyStatus').textContent = data.total ? `共 ${data.total} 个会话，按最近更新时间排序` : '没有匹配的会话，试试其他工作区或搜索词。';
+    select('#historyList').innerHTML = data.sessions.map((session: any) => `<button class="history-card" type="button" data-session-id="${escapeHtml(session.id)}" aria-pressed="false">
+      <strong>${escapeHtml(session.title)}</strong>
+      <span class="history-meta">${escapeHtml(session.agentLabel)} · ${historyTime(session.updatedAt)}</span>
+      <span>${escapeHtml(historyStatusLabel(session.status))} · ${session.messageCount} 条记录${session.archived ? ' · 已归档' : ''}${session.partial ? ' · 部分记录' : ''}</span>
+      <span class="history-meta">${escapeHtml(session.cwd?.split('/').filter(Boolean).at(-1) || '未知工作区')}${session.branch ? ' · ' + escapeHtml(session.branch) : ''}</span></button>`).join('');
+    select('#historyPage').textContent = data.total ? `${data.offset + 1}–${Math.min(data.offset + data.limit, data.total)} / ${data.total}` : '0 / 0';
+    select('#historyPrev').disabled = data.offset === 0;
+    select('#historyNext').disabled = data.offset + data.limit >= data.total;
+  } catch (error: any) {
+    if (request === historyState.listRequest) select('#historyStatus').textContent = `加载失败：${error.message}`;
+  }
+}
+
+async function loadAgentSession(id: string, offset = 0) {
+  const request = ++historyState.detailRequest;
+  historyState.selected = id;
+  const panel = select('#historyDetail');
+  if (!offset) {
+    historyState.detail = null;
+    panel.textContent = '正在读取会话…';
+  } else {
+    const button = panel.querySelector('[data-more-messages]');
+    if (button) button.disabled = true;
+  }
+  document.querySelectorAll('[data-session-id]').forEach((button: any) => button.setAttribute('aria-pressed', String(button.dataset.sessionId === id)));
+  try {
+    const data = await api(`/api/agent-sessions/${encodeURIComponent(id)}?offset=${offset}&limit=100`);
+    if (request !== historyState.detailRequest) return;
+    historyState.detail = { ...data, messages: offset ? [...historyState.detail.messages, ...data.messages] : data.messages };
+    const { session, messages, total } = historyState.detail;
+    const duration = Math.max(0, Date.parse(session.updatedAt) - Date.parse(session.createdAt));
+    const durationText = Number.isFinite(duration) ? `${Math.floor(duration / 60000)} 分钟 ${Math.floor(duration / 1000) % 60} 秒` : '未知';
+    panel.innerHTML = `<header class="history-chat-header"><div><h2>${escapeHtml(session.title)}</h2><span>${escapeHtml(session.agentLabel)} · ${escapeHtml(session.cwd?.split('/').filter(Boolean).at(-1) || '未知工作区')}</span></div><span class="history-readonly">只读</span></header>
+      <div class="history-chat-content"><details class="history-session-info"><summary>会话跨度 ${durationText}<span>›</span></summary>
+      <dl class="history-info"><dt>会话 ID</dt><dd>${escapeHtml(session.sessionId || session.id)}</dd><dt>工作目录</dt><dd>${escapeHtml(session.workspaces?.join('、') || session.cwd || '未知')}</dd><dt>模型 / 分支</dt><dd>${escapeHtml(session.model || '未知')} / ${escapeHtml(session.branch || '未知')}</dd><dt>记录状态</dt><dd>${escapeHtml(historyStatusLabel(session.status))}</dd><dt>创建 / 更新</dt><dd>${historyTime(session.createdAt)} / ${historyTime(session.updatedAt)}</dd></dl></details>
+      ${session.partial ? '<p class="history-warning">部分记录损坏、尚未写完或超出读取上限，当前展示部分内容。</p>' : ''}
+      <div class="history-messages">${renderMessages(messages)}</div>
+      <div class="history-chat-footer"><span>已显示 ${messages.length} / ${total} 条记录</span>${messages.length < total ? '<button class="button secondary" type="button" data-more-messages>加载更多记录</button>' : '<span>会话记录结束</span>'}</div></div>`;
+  } catch (error: any) {
+    if (request !== historyState.detailRequest) return;
+    if (!offset) panel.textContent = `加载失败：${error.message}`;
+    else {
+      showToast(error.message);
+      const button = panel.querySelector('[data-more-messages]');
+      if (button) button.disabled = false;
+    }
+  }
 }
 
 function selectedBug() { return state.bugs.find((bug: any) => bug.id === state.selectedBugId) || null; }
@@ -430,7 +519,13 @@ function configurePolling() {
 }
 function currentView() {
   const view = location.hash.replace(/^#/, '') || 'tasks';
-  return ['tasks', 'new-task', 'workbench', 'history', 'assignment', 'config', 'members', 'account'].includes(view) ? view : 'tasks';
+  if (view === 'settings' || view.startsWith('settings/') || ['assignment', 'config', 'members', 'account'].includes(view)) return 'settings';
+  return ['tasks', 'new-task', 'workbench', 'history'].includes(view) ? view : 'tasks';
+}
+function currentSettingsSection() {
+  const route = location.hash.replace(/^#/, '');
+  const section = route.startsWith('settings/') ? route.slice('settings/'.length) : route;
+  return ['assignment', 'config', 'members', 'account'].includes(section) ? section : 'assignment';
 }
 function showToast(message: any) {
   els.toast.textContent = String(message || ''); els.toast.classList.add('show');
