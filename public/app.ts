@@ -107,9 +107,10 @@ function bindEvents() {
 }
 
 async function loadCurrentView() {
-  if (['tasks', 'new-task'].includes(state.view)) {
+  if (['tasks', 'new-task', 'inbox'].includes(state.view)) {
     await taskCenterUI.load();
     if (state.view === 'new-task') await taskCenterUI.openNew();
+    else if (state.view === 'inbox') taskCenterUI.showInbox();
     else taskCenterUI.showTasks();
   }
   if (state.view === 'settings' && state.settingsSection === 'members') await loadMembers();
@@ -150,9 +151,10 @@ function renderPermissions() {
 
 function render() {
   document.body.dataset.view = state.view;
-  document.querySelectorAll('[data-page]').forEach((page: any) => { page.hidden = page.dataset.page !== state.view && !(state.view === 'new-task' && page.dataset.page === 'tasks'); });
+  document.querySelectorAll('[data-page]').forEach((page: any) => { page.hidden = page.dataset.page !== state.view && !(['new-task', 'inbox'].includes(state.view) && page.dataset.page === 'tasks'); });
   document.querySelectorAll('[data-nav]').forEach((link: any) => link.classList.toggle('active', link.dataset.nav === state.view));
   const title: any = {
+    inbox: ['未归属会话', '将历史会话关联到任务'],
     tasks: ['任务中心', '跨设备、跨 Agent 管理工作'],
     'new-task': ['新建任务', '描述目标并选择 Agent'],
     workbench: ['缺陷工作台', '同步缺陷并直接生成任务'],
@@ -520,7 +522,8 @@ function configurePolling() {
 function currentView() {
   const view = location.hash.replace(/^#/, '') || 'tasks';
   if (view === 'settings' || view.startsWith('settings/') || ['assignment', 'config', 'members', 'account'].includes(view)) return 'settings';
-  return ['tasks', 'new-task', 'workbench', 'history'].includes(view) ? view : 'tasks';
+  if (view === 'history') return 'inbox';
+  return ['tasks', 'new-task', 'workbench', 'inbox'].includes(view) ? view : 'tasks';
 }
 function currentSettingsSection() {
   const route = location.hash.replace(/^#/, '');

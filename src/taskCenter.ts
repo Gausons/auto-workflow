@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { hostname } from 'node:os';
 import { httpError } from './rbac.js';
 
-const statuses = ['waiting', 'error', 'running', 'ready', 'completed'];
+const statuses = ['waiting', 'error', 'running', 'ready', 'review', 'completed'];
 const text = (value: any, max = 12000) => {
   if (typeof value !== 'string' || value.length > max) throw httpError(400, `文本格式无效或超过 ${max} 字符`);
   return value.trim();
@@ -65,10 +65,28 @@ export function createTaskCenter({ database, tenantId, history }: any) {
           if (data.handoffs.some((h: any) => h.taskId === task.id && h.mode === 'continue' && ['pending', 'received'].includes(h.status))) throw httpError(409, '请先完成或取消当前交接，再修改任务');
           const context = Object.fromEntries(['goal', 'constraints', 'decisions', 'next', 'files'].map(k => [k, text(input.context?.[k] ?? '')]));
           if (JSON.stringify(context) !== JSON.stringify(task.context)) { task.context = context; task.contextVersion++; }
-          task.status = input.status; task.revision++; event(task, `更新任务 · 上下文 v${task.contextVersion}`); return { taskId: task.id };
+          task.status = input.status; task.revision++; event(task, `${input.status === 'completed' ? '用户标记任务完成' : '更新任务'} · 上下文 v${task.contextVersion}`); return { taskId: task.id };
         }
         case 'link': {
           const task = taskFor(); editable(task); attach(task, input.sessionId); task.revision++; return { taskId: task.id };
+        }
+        case 'unlink':
+        case 'move': {
+          const task = taskFor(); editable(task);
+          if (!task.sessionIds.includes(input.sessionId)) throw httpError(404, '会话不属于此任务');
+          const busy = (id: string) => data.executions?.some((j: any) => j.taskId === id && ['queued', 'launching', 'running', 'waiting', 'unknown'].includes(j.status)) || data.handoffs.some((h: any) => (h.taskId === id || h.destinationTaskId === id) && ['pending', 'received'].includes(h.status));
+          if (busy(task.id)) throw httpError(409, '请先处理当前执行或交接，再调整归属');
+          let target: any;
+          if (input.action === 'move') {
+            target = find(data.tasks, input.targetTaskId);
+            if (target.id === task.id) throw httpError(400, '请选择其他任务');
+            if (target.revision !== input.targetRevision || busy(target.id)) throw httpError(409, '目标任务已更新或正在执行，请刷新后重试');
+          }
+          const session = allSessions.find((s: any) => s.id === input.sessionId);
+          task.sessionIds = task.sessionIds.filter((id: string) => id !== input.sessionId);
+          task.revision++; event(task, `解除会话关联：${session?.title || input.sessionId}`);
+          if (target) { target.sessionIds.push(input.sessionId); target.revision++; event(target, `从任务「${task.title}」移入会话：${session?.title || input.sessionId}`); }
+          return { taskId: target?.id || task.id };
         }
         case 'heartbeat': {
           const id = required(input.deviceId, 80);
@@ -94,6 +112,7 @@ export function createTaskCenter({ database, tenantId, history }: any) {
             if (!device.agents.includes(agent)) throw httpError(400, '会话 Agent 不属于设备');
             const id = sessionKey(device.id, `${agent}:${nativeId}`);
             const item: any = { id, nativeId, deviceId: device.id, agent, agentLabel: agent, title: required(s.title, 120), cwd: text(s.cwd ?? '', 2000),
+              createdAt: Number.isFinite(Date.parse(s.createdAt)) ? new Date(s.createdAt).toISOString() : undefined,
               status: text(s.status ?? 'unknown', 80), updatedAt: Number.isFinite(Date.parse(s.updatedAt)) ? new Date(s.updatedAt).toISOString() : now(),
               excerpt: text(s.excerpt ?? '', 24000), partial: true };
             const old = data.sessions.findIndex((s: any) => s.id === id);

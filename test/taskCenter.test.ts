@@ -163,3 +163,24 @@ test('connector does not acknowledge receipt when writing the packet fails', asy
   await assert.rejects(syncDeviceOnce({ request: (method: any, body: any) => method === 'GET' ? center.snapshot() : cmd(body), history: { catalog: async () => ({ providers: [{ id: 'claude' }], sessions: [] }) }, deviceId: 'remote', name: 'Linux', outputDir: file }));
   assert.equal((await center.snapshot()).handoffs[0].status, 'pending');
 });
+
+test('moving and unlinking sessions preserve history and enforce both task revisions', async t => {
+  const { center, cmd, database } = fixture(t);
+  const first = await cmd({ action: 'create', title: '原任务', sessionId: source.id });
+  const second = await cmd({ action: 'create', title: '目标任务' });
+  const move = { action: 'move', taskId: first.taskId, revision: 1, targetTaskId: second.taskId, targetRevision: 1, sessionId: source.id };
+  await assert.rejects(cmd({ ...move, targetRevision: 0 }), { statusCode: 409 });
+  assert.deepEqual((await center.snapshot()).tasks.find((v: any) => v.id === first.taskId).sessionIds, [source.id]);
+  await cmd(move);
+  let snapshot = await center.snapshot();
+  assert.deepEqual(snapshot.tasks.find((v: any) => v.id === first.taskId).sessionIds, []);
+  assert.deepEqual(snapshot.tasks.find((v: any) => v.id === second.taskId).sessionIds, [source.id]);
+  database.mutateTaskCenter('default', (data: any) => { data.executions = [{ id: 'active', taskId: second.taskId, status: 'running' }]; });
+  await assert.rejects(cmd({ action: 'unlink', taskId: second.taskId, revision: 2, sessionId: source.id }), { statusCode: 409 });
+  database.mutateTaskCenter('default', (data: any) => { data.executions = []; });
+  await cmd({ action: 'unlink', taskId: second.taskId, revision: 2, sessionId: source.id });
+  snapshot = await center.snapshot();
+  assert.equal(snapshot.sessions.length, 1);
+  assert.equal(snapshot.tasks.find((v: any) => v.id === second.taskId).sessionIds.length, 0);
+  assert.ok(snapshot.tasks.find((v: any) => v.id === first.taskId).events.some((e: any) => e.message.includes('解除会话关联')));
+});

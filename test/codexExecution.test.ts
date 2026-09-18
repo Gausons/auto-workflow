@@ -59,13 +59,13 @@ test('passes an explicitly selected model and reasoning effort to Codex', async 
   runner.close();
 })
 test('terminal failures keep their execution result when releasing the desktop subscription fails', async () => {
-  const client = new FakeClient(), updates = [];
+  const client = new FakeClient(), updates: any[] = [];
   const originalCall = client.call.bind(client);
   client.call = async (method, params) => {
     if (method === 'thread/unsubscribe') { client.calls.push({ method, params }); throw new Error('connection lost'); }
     return originalCall(method, params);
   };
-  const runner = new CodexRunner({ clientFactory: () => client, onUpdate: j => updates.push(j), desktopOpener: async () => {} });
+  const runner = new CodexRunner({ clientFactory: () => client, onUpdate: (j: any) => updates.push(j), desktopOpener: async () => {} });
   await runner.start(job());
   await runner.notification({ method: 'turn/completed', params: { threadId: updates.at(-1).threadId, turn: { id: 'turn-1', status: 'failed', error: { message: 'tests failed' } } } });
   assert.equal(updates.at(-1).status, 'failed');
@@ -74,9 +74,9 @@ test('terminal failures keep their execution result when releasing the desktop s
 });
 
 test('reconciliation releases a completed thread subscription', async () => {
-  const client = new FakeClient(), updates = [];
-  const runner = new CodexRunner({ clientFactory: () => client, onUpdate: j => updates.push(j), desktopOpener: async () => {} });
-  const saved = job(); saved.threadId = '12345678-1234-1234-1234-123456789abc'; saved.turnId = 'turn-1'; saved.status = 'unknown';
+  const client = new FakeClient(), updates: any[] = [];
+  const runner = new CodexRunner({ clientFactory: () => client, onUpdate: (j: any) => updates.push(j), desktopOpener: async () => {} });
+  const saved: any = job(); saved.threadId = '12345678-1234-1234-1234-123456789abc'; saved.turnId = 'turn-1'; saved.status = 'unknown';
   await runner.reconcile(saved);
   assert.equal(updates.at(-1).status, 'completed');
   assert.equal(updates.at(-1).subscriptionStatus, 'unsubscribed');
@@ -146,10 +146,13 @@ test('durable execution reservations isolate tenants, reject duplicates, and rec
   assert.equal(snapshot.sessions.length, 1); assert.equal(db.readTaskCenter('other').executions, undefined);
   await assert.rejects(service.action({ executionId: 'other-id', action: 'stop' }), { statusCode: 404 });
   update({ ...db.readTaskCenter('default').executions[0], status: 'completed', message: 'completed', output: 'ok' });
-  assert.equal((await center.snapshot()).tasks[0].status, 'completed');
+  assert.equal((await center.snapshot()).tasks[0].status, 'review');
   const latest = (await center.snapshot()).tasks[0];
-  await service.execute({ ...input, revision: latest.revision, cwd: alternative, model: 'model-1', reasoningEffort: 'high' });
+  await service.execute({ ...input, revision: latest.revision, cwd: alternative, model: 'model-1', reasoningEffort: 'high', sourceSessionId: latest.sessionIds[0], instruction: '补充回归验证' });
   assert.equal(db.readTaskCenter('default').executions.at(-1).cwd, await realpath(alternative), 'an arbitrary accessible cwd is accepted');
+  assert.match(db.readTaskCenter('default').executions.at(-1).prompt, /补充回归验证/);
+  assert.match(db.readTaskCenter('default').executions.at(-1).prompt, /历史参考材料/);
+  assert.equal(db.readTaskCenter('default').executions.at(-1).sourceSessionId, latest.sessionIds[0]);
   assert.equal(db.readTaskCenter('default').executions.at(-1).model, 'model-1');
   assert.equal(db.readTaskCenter('default').executions.at(-1).reasoningEffort, 'high');
   assert.ok((await service.targets()).projects[0].commonDirectories.includes(await realpath(alternative)));
@@ -193,5 +196,5 @@ test('remote device claims once, reports real thread state, and rejects other de
   await service.action({ action: 'respond', executionId, decision: 'decline' }, owner);
   await worker.sync(); assert.equal(db.readTaskCenter('default').executions[0].control, null);
   client.emit('notification', { method: 'turn/completed', params: { threadId: saved.threadId, turn: { id: 'turn-1', status: 'completed' } } });
-  await worker.sync(); assert.equal((await center.snapshot()).tasks[0].status, 'completed'); worker.close();
+  await worker.sync(); assert.equal((await center.snapshot()).tasks[0].status, 'review'); worker.close();
 });

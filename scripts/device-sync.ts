@@ -18,7 +18,7 @@ export async function syncDeviceOnce({ request, history, deviceId, name, outputD
       const result = await history.detail(s.id, new URLSearchParams({ offset: String(Math.max(0, s.messageCount - 30)), limit: '30' }));
       excerpt = result.messages.filter((m: any) => ['user', 'assistant'].includes(m.role)).map((m: any) => `${m.role}: ${m.text || ''}`).join('\n\n').slice(-24000);
     }
-    sessions.push({ nativeId: s.sessionId || s.id, agent: s.agent, title: s.title.slice(0, 120), cwd: s.cwd, status: s.status, updatedAt: s.updatedAt, excerpt });
+    sessions.push({ nativeId: s.sessionId || s.id, agent: s.agent, title: s.title.slice(0, 120), cwd: s.cwd, status: s.status, createdAt: s.createdAt, updatedAt: s.updatedAt, excerpt });
   }
   for (let i = 0; i < Math.max(sessions.length, 1); i += 20) {
     await request('POST', { action: 'heartbeat', deviceId, name, agents, sessions: sessions.slice(i, i + 20), ...(codexProjects !== undefined ? { codexProjects } : {}) });

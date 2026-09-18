@@ -1352,7 +1352,7 @@ body[data-view="tasks"] .topbar, body[data-view="new-task"] .topbar { display: n
 .tc-next { margin: 22px 0; padding: 16px; border-radius: 8px; background: var(--bg); }
 .tc-next p { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tc-timeline { margin-top: 24px; }
-.tc-timeline article { border-left: 2px solid var(--line); padding: 0 0 24px 18px; }
+.tc-timeline > article { border-left: 2px solid var(--line); padding: 0 0 24px 18px; }
 .tc-timeline p { margin: 6px 0 0; overflow-wrap: anywhere; }
 .tc-context p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .tc-session, .tc-handoff { border-bottom: 1px solid var(--line); padding: 18px 0; overflow-wrap: anywhere; }
@@ -1589,3 +1589,21 @@ body[data-can-manage-members="false"] [data-settings-target="members"] { display
   .settings-nav button { min-width: 150px; }
   .settings-content { padding: 20px 16px; }
 }
+
+/* Task-owned conversation timeline. */
+.tc-timeline-item { min-width: 0; padding: 0 0 24px 18px; border-left: 1px solid var(--line); }
+.tc-timeline-item > time { display: block; margin-bottom: 8px; }
+.tc-session-thread { background: var(--surface, #fff); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.tc-session-thread > summary { cursor: pointer; padding: 14px 16px; }
+.tc-session-thread > summary .tc-meta { display: block; margin: 6px 0 0; }
+.tc-thread-content { padding: 16px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.tc-thread-content pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: none; }
+.tc-thread-content .history-messages { margin: 18px 0; }
+.tc-context-disclosure { margin: 16px 0; }
+.tc-context-disclosure > summary { cursor: pointer; }
+.tc-task-footer { border-top: 1px solid var(--line); padding-top: 18px; }
+.tc-task-search { display: grid; gap: 6px; margin: 12px 0; }
+.tc-task-search input { width: 100%; min-width: 0; }
+@media (max-width: 700px) { .tc-timeline-item { padding-left: 8px; } .tc-thread-content { padding: 12px; } }
+
+.tc-session > .tc-session-thread { flex: 1; min-width: 0; }

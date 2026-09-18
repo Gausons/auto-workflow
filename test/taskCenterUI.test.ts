@@ -43,3 +43,29 @@ test('conversation creation preserves drafts, prevents duplicate sends and suppo
   assert.doesNotMatch(root.innerHTML, /暂时无法创建/);
   await submit(); assert.equal(writes, 2);
 });
+
+test('task timeline reads in place and background polling never replaces the reader', async t => {
+  t.mock.method(globalThis, 'setInterval', (() => 0) as any);
+  const handlers: Record<string, any> = {};
+  const panel = { innerHTML: '' }, notice = { hidden: true };
+  const root = { innerHTML: '', addEventListener(name: string, handler: any) { handlers[name] = handler; }, querySelector(selector: string) { if (selector === '#tc-updates') return notice; if (selector.startsWith('[data-session-body=')) return panel; return null; } };
+  const snapshot: any = { tasks: [{ id: 'task', title: '修复登录', status: 'review', context: { goal: '目标' }, contextVersion: 1, revision: 1, sessionIds: ['session'], events: [], updatedAt: '2026-09-18T10:00:00Z' }], sessions: [{ id: 'session', nativeId: 'thread', title: '定位故障', deviceId: 'local', agent: 'codex', updatedAt: '2026-09-18T10:00:00Z' }], devices: [{ id: 'local', name: 'Mac', agents: ['codex'], online: true }], handoffs: [], executions: [] };
+  let reads = 0;
+  const ui = createTaskCenterUI({ root, canEdit: () => true, toast() {}, api: async (url: string) => {
+    if (url.startsWith('/api/agent-sessions/')) { reads++; return { messages: [{ role: 'assistant', text: reads === 1 ? '**第一段**' : '第二段' }], total: 2, session: {} }; }
+    return structuredClone(snapshot);
+  } });
+  const click = (tc: string, id = '') => handlers.click({ target: { closest: () => ({ dataset: { tc, id }, disabled: false }) } });
+  await ui.load();
+  assert.match(root.innerHTML, /任务时间线/);
+  assert.match(root.innerHTML, /待验收/);
+  await click('read-session', 'session');
+  assert.match(panel.innerHTML, /<strong>第一段<\/strong>/);
+  await click('more-session', 'session');
+  assert.match(panel.innerHTML, /第一段/); assert.match(panel.innerHTML, /第二段/);
+  const before = root.innerHTML;
+  snapshot.tasks[0].context.next = '新增下一步';
+  await ui.load({ quiet: true });
+  assert.equal(root.innerHTML, before);
+  assert.equal(notice.hidden, false);
+});
