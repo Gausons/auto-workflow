@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { realpath, stat } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
+import { CodexDesktopBridge, readDesktopTerminal } from './codexDesktopBridge.js';
 import { CodexAppServer } from './codexAppServer.js';
 import { AcpPreferredRunner, AcpTaskRunner, AgentRunnerSet, configuredAcpAgents } from './acpAgent.js';
 import { httpError } from './rbac.js';
@@ -45,12 +46,13 @@ export function executionPrompt(task: any) {
 export class CodexRunner {
   clientFactory: any; onUpdate: any; jobs: any; pendingRequests: any; connecting: any; client: any; desktopOpener: any; modelCatalog: any = undefined;
 
+  desktopBridgeFactory: any;
   jobClients = new Map<string, any>();
   releases = new Map<string, Promise<void>>();
 
-  constructor({ executable = 'codex', environment = process.env, clientFactory = () => new CodexAppServer({ executable, environment }), onUpdate = () => {}, desktopOpener = openCodexThread }: any = {}) {
+  constructor({ executable = 'codex', environment = process.env, clientFactory = () => new CodexAppServer({ executable, environment }), onUpdate = () => {}, desktopBridgeFactory = null, desktopOpener = openCodexThread }: any = {}) {
     this.clientFactory = clientFactory; this.onUpdate = onUpdate; this.jobs = new Map(); this.pendingRequests = new Map(); this.connecting = null; this.client = null;
-    this.desktopOpener = desktopOpener;
+    this.desktopOpener = desktopOpener; this.desktopBridgeFactory = desktopBridgeFactory;
   }
   publish(job: any, patch: any) { Object.assign(job, patch, { updatedAt: timestamp() }); this.onUpdate(structuredClone(job)); }
   async connect() {
@@ -120,12 +122,21 @@ export class CodexRunner {
     this.jobs.set(job.id, { ...job }); job = this.jobs.get(job.id);
     let creating = false, submitting = false;
     try {
-      const client = await this.connectJob(job);
+      let client = await this.connectJob(job);
       this.publish(job, { status: 'launching', message: job.resumeThreadId ? '正在恢复原 Codex 会话' : '正在创建 Codex 会话' });
       if (job.resumeThreadId) {
         const original = await client.call('thread/read', { threadId: job.resumeThreadId, includeTurns: true });
         if (original.thread?.status?.type === 'active' || original.thread?.turns?.some((t: any) => t.status === 'inProgress')) throw httpError(409, '原会话正在执行，请等待客户端本轮完成后再发送');
-        const resumed = await client.call('thread/resume', { threadId: job.resumeThreadId });
+        let resumed;
+        try { resumed = await client.call('thread/resume', { threadId: job.resumeThreadId }); }
+        catch (error: any) {
+          if (!this.desktopBridgeFactory || !/already has an active writer|already has a live local writer/i.test(error.message || '')) throw error;
+          const bridge = await this.desktopBridgeFactory(client, job.resumeThreadId);
+          if (!bridge) throw error;
+          client = bridge; this.jobClients.set(job.id, bridge); this.bindClient(bridge, job.id);
+          this.publish(job, { executionTransport: 'desktop-ipc', desktopMessage: '由客户端执行（实验性 IPC）；审批和问题请在客户端处理。' });
+          resumed = { thread: { id: job.resumeThreadId } };
+        }
         if (resumed.thread?.id !== job.resumeThreadId) throw new Error('恢复返回的会话标识不一致，已停止发送');
         this.publish(job, { threadId: resumed.thread.id, message: '原会话已恢复' });
       } else {
@@ -141,12 +152,12 @@ export class CodexRunner {
       const turn = await client.call('turn/start', { threadId: job.threadId, input: [{ type: 'text', text: job.prompt }], clientUserMessageId: job.id });
       submitting = false;
       this.publish(job, { turnId: turn.turn.id, ...(job.status === 'launching' ? { status: 'running', message: 'Codex 正在执行' } : {}) });
-      try { await this.desktopOpener(job.threadId); this.publish(job, { desktopOpened: true }); }
+      try { if (job.executionTransport !== 'desktop-ipc') await this.desktopOpener(job.threadId); this.publish(job, { desktopOpened: true }); }
       catch { this.publish(job, { desktopOpened: false, desktopMessage: '无法自动打开客户端，请点击“在 Codex 中打开”查看会话。' }); }
     } catch (error: any) {
-      const writerConflict = job.resumeThreadId && !submitting && /already has an active writer/i.test(error.message || '');
+      const writerConflict = job.resumeThreadId && !submitting && /already has an active writer|already has a live local writer/i.test(error.message || '');
       this.publish(job, writerConflict ? { status: 'blocked', errorCode: 'CODEX_THREAD_BUSY', message: writerConflictMessage } : { status: job.resumeThreadId ? (submitting && typeof error.code !== 'number' ? 'unknown' : 'failed') : job.threadId || creating ? 'unknown' : 'failed', message: error.message });
-      if (['failed', 'blocked'].includes(job.status)) await this.release(job);
+      if (['failed', 'blocked'].includes(job.status) || (job.status === 'unknown' && job.executionTransport === 'desktop-ipc')) await this.release(job);
     }
     return job;
   }
@@ -191,6 +202,7 @@ export class CodexRunner {
   async stop(id: any) {
     const job = this.jobs.get(id);
     if (!job?.threadId || !job.turnId) throw httpError(409, '尚未获得执行标识，请稍后重试');
+    if (job.executionTransport === 'desktop-ipc' && !this.jobClients.has(job.id)) throw httpError(409, '网页桥接连接已断开，请在客户端停止或核对本轮结果');
     await (await this.connectJob(job)).call('turn/interrupt', { threadId: job.threadId, turnId: job.turnId });
   }
   async release(job: any) {
@@ -220,11 +232,12 @@ export class CodexRunner {
   async reconcile(job: any) {
     if (!job.threadId) throw httpError(409, '尚无 Codex 会话标识，请检查客户端，确认未创建任务后再处理');
     const result = await (await this.connectJob(job)).call('thread/read', { threadId: job.threadId, includeTurns: true });
-    const turn = job.turnId ? result.thread.turns.find((t: any) => t.id === job.turnId) : result.thread.turns.at(-1);
+    const turn = job.turnId ? result.thread.turns.find((t: any) => t.id === job.turnId) : job.executionTransport === 'desktop-ipc' ? result.thread.turns.find((t: any) => t.items?.some((item: any) => item.type === 'userMessage' && (item.clientUserMessageId === job.id || item.clientId === job.id))) : result.thread.turns.at(-1);
     if (!turn) throw httpError(409, 'Codex 会话尚无执行记录，请在客户端核对');
-    const status: any = ({ completed: 'completed', failed: 'failed', interrupted: 'interrupted' } as Record<string, string>)[turn.status];
+    const desktopTerminal = job.executionTransport === 'desktop-ipc' ? await readDesktopTerminal(result.thread.path, turn.id) : null;
+    const status: any = job.executionTransport === 'desktop-ipc' ? desktopTerminal?.status : ({ completed: 'completed', failed: 'failed', interrupted: 'interrupted' } as Record<string, string>)[turn.status];
     if (!status) throw httpError(409, '该会话尚未结束，请在目标 Codex 中检查');
-    this.publish(job, { status, turnId: turn.id, request: null, output: turn.items?.filter((i: any) => i.type === 'agentMessage').at(-1)?.text || '', message: '已核对 Codex 执行记录' });
+    this.publish(job, { status, turnId: turn.id, request: null, output: desktopTerminal?.text || turn.items?.filter((i: any) => i.type === 'agentMessage').at(-1)?.text || '', message: '已核对 Codex 执行记录' });
     await this.release(job);
   }
   close() { this.client?.close(); for (const client of this.jobClients.values()) client.close(); this.jobClients.clear(); }
@@ -271,7 +284,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, e
   };
   const runnerEnvironment = { ...process.env, ...environment };
   const runner = runnerFactory ? runnerFactory(update) : (() => {
-    const fallback = new CodexRunner({ executable: environment.CODEX_EXECUTABLE || 'codex', environment: runnerEnvironment, onUpdate: update, desktopOpener: async () => {} });
+    const fallback = new CodexRunner({ executable: environment.CODEX_EXECUTABLE || 'codex', environment: runnerEnvironment, onUpdate: update, desktopBridgeFactory: (reader: any, threadId: string) => CodexDesktopBridge.connect(reader, threadId, runnerEnvironment), desktopOpener: async () => {} });
     const codex = new AcpTaskRunner({
       agent: 'codex', environment: runnerEnvironment, onUpdate: update,
       threadNamer: async (threadId: string, name: string) => (await fallback.connect()).call('thread/name/set', { threadId, name })

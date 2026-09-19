@@ -320,3 +320,34 @@ test('release is not reported complete before the owned process actually exits',
   exit(); await finished;
   assert.equal(runner.jobs.get('job-1').releaseStatus, 'released');
 });
+
+test('busy original thread is submitted through its desktop owner without a second resume or direct turn', async () => {
+  const reader = new FakeClient(), bridge = new FakeClient(), updates: any[] = [];
+  const readCall = reader.call.bind(reader);
+  reader.call = async (method: any, params: any) => {
+    if (method === 'thread/resume') { reader.calls.push({ method, params }); throw new Error('already has an active writer'); }
+    return readCall(method, params);
+  };
+  const runner = new CodexRunner({ clientFactory: () => reader, desktopBridgeFactory: async () => bridge, onUpdate: (value: any) => updates.push(value), desktopOpener: async () => assert.fail('must not reopen desktop') });
+  await runner.start({ ...job(), resumeThreadId: 'original' });
+  assert.equal(updates.at(-1).executionTransport, 'desktop-ipc');
+  assert.equal(updates.at(-1).status, 'running');
+  assert.equal(reader.calls.some(c => c.method === 'turn/start'), false);
+  assert.equal(bridge.calls.filter(c => c.method === 'turn/start').length, 1);
+  assert.equal(bridge.calls.find(c => c.method === 'turn/start').params.threadId, 'original');
+  await runner.notification({ method: 'turn/completed', params: { threadId: 'original', turn: { id: 'turn-1', status: 'completed' } } });
+  assert.equal(bridge.closed, true);
+  assert.equal(updates.at(-1).releaseStatus, 'released');
+});
+
+test('desktop submission timeout stays unknown and never falls back to a direct writer', async () => {
+  const reader = new FakeClient(), bridge = new FakeClient(), updates: any[] = [];
+  const readCall = reader.call.bind(reader);
+  reader.call = async (method: any, params: any) => { if (method === 'thread/resume') throw new Error('already has an active writer'); return readCall(method, params); };
+  bridge.call = async () => { throw new Error('timeout'); };
+  const runner = new CodexRunner({ clientFactory: () => reader, desktopBridgeFactory: async () => bridge, onUpdate: (value: any) => updates.push(value) });
+  await runner.start({ ...job(), resumeThreadId: 'original' });
+  assert.equal(updates.at(-1).status, 'unknown');
+  assert.equal(reader.calls.some(c => c.method === 'turn/start' || c.method === 'thread/start'), false);
+  runner.close();
+});

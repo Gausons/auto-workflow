@@ -18,7 +18,7 @@ export function createHistoryComposer({ api, canEdit, refresh }: any) {
     if (submit) submit.disabled = sending || (busy.has(job?.status) || job?.releaseStatus === 'releasing') || !input?.value.trim();
     if (input) input.disabled = sending;
     const status = select('[data-status]');
-    if (status) status.textContent = sending ? '正在发送…' : job ? `${names[job.status] || job.status} · ${job.message || ''}${job.releaseStatus === 'releasing' ? ' · 正在释放会话' : job.releaseStatus === 'released' ? ' · 会话已释放，可在客户端接续' : job.releaseStatus === 'failed' ? ' · 会话释放失败，请检查服务进程' : ''}` : '消息将追加到原会话，沿用其上下文与配置。';
+    if (status) status.textContent = sending ? '正在发送…' : job ? `${names[job.status] || job.status} · ${job.message || ''}${job.executionTransport === 'desktop-ipc' ? ' · 由客户端执行；审批和问题请在客户端处理' : ''}${job.releaseStatus === 'releasing' ? ' · 正在释放网页连接' : job.releaseStatus === 'released' ? ' · 网页连接已释放' : job.releaseStatus === 'failed' ? ' · 会话释放失败，请检查服务进程' : ''}` : '消息将追加到原会话，沿用其上下文与配置。';
     const actions = select('[data-actions]');
     if (actions) actions.innerHTML = job ? `${['queued', 'running', 'waiting'].includes(job.status) ? '<button type="button" data-control="stop">停止</button>' : ''}${job.status === 'waiting' && job.request ? '<button type="button" data-control="respond">处理请求</button>' : ''}${job.status === 'unknown' ? '<button type="button" data-control="reconcile">核对结果</button>' : ''}${!busy.has(job.status) ? '<button type="button" data-refresh>刷新原始记录</button>' : ''}${['failed', 'interrupted', 'blocked'].includes(job.status) ? '<button type="button" data-restore>重新编辑本轮消息</button><button type="button" data-copy>复制本轮消息</button>' : ''}` : '';
     const output = select('[data-output]');
