@@ -265,3 +265,58 @@ test('history continuation is scoped, idempotent, task-owned and retains a singl
   assert.equal(started, 2); assert.equal(db.readTaskCenter('default').tasks.length, 1);
   service.close();
 });
+
+test('active writer conflicts preserve the unsent prompt and do not start, fork or interrupt a turn', async () => {
+  const client = new FakeClient(), updates: any[] = [];
+  client.call = async (method: any, params: any) => {
+    client.calls.push({ method, params });
+    if (method === 'thread/read') return { thread: { turns: [] } };
+    throw Object.assign(new Error('thread original already has an active writer'), { code: -32600 });
+  };
+  const runner = new CodexRunner({ clientFactory: () => client, onUpdate: (j: any) => updates.push(j) });
+  await runner.start({ ...job(), resumeThreadId: 'original', prompt: '保留这条消息' });
+  assert.equal(updates.at(-1).status, 'blocked');
+  assert.equal(updates.at(-1).errorCode, 'CODEX_THREAD_BUSY');
+  assert.equal(updates.at(-1).prompt, '保留这条消息');
+  assert.deepEqual(client.calls.map(c => c.method), ['thread/read', 'thread/resume']);
+  runner.close();
+});
+
+test('terminal runs close their own process even if unsubscribe fails, without interrupting another run', async () => {
+  const clients: FakeClient[] = [], updates: any[] = [];
+  const runner = new CodexRunner({ clientFactory: () => {
+    const client = new FakeClient(), id = `thread-${clients.length}`;
+    const call = client.call.bind(client);
+    client.call = async (method: any, params: any) => {
+      if (method === 'thread/start') return { thread: { id } };
+      if (method === 'thread/unsubscribe') throw new Error('unsubscribe unsupported');
+      return call(method, params);
+    };
+    clients.push(client); return client;
+  }, onUpdate: (j: any) => updates.push(j), desktopOpener: async () => {} });
+  await runner.start({ ...job(), id: 'first' });
+  await runner.start({ ...job(), id: 'second' });
+  await runner.notification({ method: 'turn/completed', params: { threadId: 'thread-0', turn: { id: 'turn-1', status: 'completed' } } });
+  assert.equal(clients[0].closed, true);
+  assert.equal(clients[1].closed, false);
+  assert.equal(runner.jobs.get('second').status, 'running');
+  assert.equal(runner.jobs.get('first').releaseStatus, 'released');
+  assert.equal(runner.jobs.get('first').status, 'completed');
+  assert.equal(runner.jobClients.has('first'), false);
+  await runner.notification({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'interrupted' } } });
+  assert.equal(clients[1].closed, true);
+  assert.equal(runner.jobs.get('second').releaseStatus, 'released'); runner.close();
+});
+
+test('release is not reported complete before the owned process actually exits', async () => {
+  const client = new FakeClient(); let exit: () => void = () => {};
+  const closing = new Promise<void>(resolve => { exit = resolve; });
+  client.close = (() => closing.then(() => { client.closed = true; })) as any;
+  const runner = new CodexRunner({ clientFactory: () => client, desktopOpener: async () => {} });
+  await runner.start(job());
+  const finished = runner.notification({ method: 'turn/completed', params: { threadId: runner.jobs.get('job-1').threadId, turn: { id: 'turn-1', status: 'completed' } } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(runner.jobs.get('job-1').releaseStatus, 'releasing');
+  exit(); await finished;
+  assert.equal(runner.jobs.get('job-1').releaseStatus, 'released');
+});

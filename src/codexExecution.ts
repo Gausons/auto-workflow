@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const timestamp = () => new Date().toISOString();
+const writerConflictMessage = '原会话被另一个 Codex 连接占用，消息尚未发送。客户端即使已结束本轮也可能继续持有连接；请在客户端继续，或由占用端释放连接后重试。';
 const active = new Set(['queued', 'launching', 'running', 'waiting', 'unknown']);
 const inside = (root: any, target: any) => target === root || target.startsWith(root + path.sep);
 export async function openCodexThread(threadId: any) {
@@ -44,6 +45,9 @@ export function executionPrompt(task: any) {
 export class CodexRunner {
   clientFactory: any; onUpdate: any; jobs: any; pendingRequests: any; connecting: any; client: any; desktopOpener: any; modelCatalog: any = undefined;
 
+  jobClients = new Map<string, any>();
+  releases = new Map<string, Promise<void>>();
+
   constructor({ executable = 'codex', environment = process.env, clientFactory = () => new CodexAppServer({ executable, environment }), onUpdate = () => {}, desktopOpener = openCodexThread }: any = {}) {
     this.clientFactory = clientFactory; this.onUpdate = onUpdate; this.jobs = new Map(); this.pendingRequests = new Map(); this.connecting = null; this.client = null;
     this.desktopOpener = desktopOpener;
@@ -53,16 +57,29 @@ export class CodexRunner {
     if (this.client && !this.client.closed) return this.client;
     if (!this.connecting) this.connecting = (async () => {
       const client = this.clientFactory();
-      client.on('notification', (message: any) => this.notification(message));
-      client.on('request', (message: any) => this.request(message));
-      client.on('disconnected', () => {
-        for (const job of this.jobs.values()) if (['launching', 'running', 'waiting'].includes(job.status)) this.publish(job, { status: 'unknown', message: '执行连接中断，请核对 Codex 会话；不会自动重复执行。', request: null });
-        this.pendingRequests.clear();
-      });
+      this.bindClient(client);
       try { await client.initialize(); this.client = client; return client; }
       catch (error: any) { client.close(); throw error; }
     })().finally(() => { this.connecting = null; });
     return this.connecting;
+  }
+  bindClient(client: any, jobId?: string) {
+    client.on('notification', (message: any) => { void this.notification(message); });
+    client.on('request', (message: any) => this.request(message, client));
+    client.on('disconnected', () => {
+      for (const job of this.jobs.values()) if ((jobId ? job.id === jobId : !this.jobClients.has(job.id)) && ['launching', 'running', 'waiting'].includes(job.status)) {
+        this.publish(job, { status: 'unknown', message: '执行连接中断，请核对 Codex 会话；不会自动重复执行。', request: null });
+        this.pendingRequests.delete(job.id);
+      }
+    });
+  }
+  async connectJob(job: any) {
+    const existing = this.jobClients.get(job.id);
+    if (existing && !existing.closed) return existing;
+    const client = this.clientFactory();
+    this.jobClients.set(job.id, client); this.bindClient(client, job.id);
+    try { await client.initialize(); return client; }
+    catch (error) { await client.close(); this.jobClients.delete(job.id); throw error; }
   }
   async models() {
     if (this.modelCatalog !== undefined) return this.modelCatalog;
@@ -103,7 +120,7 @@ export class CodexRunner {
     this.jobs.set(job.id, { ...job }); job = this.jobs.get(job.id);
     let creating = false, submitting = false;
     try {
-      const client = await this.connect();
+      const client = await this.connectJob(job);
       this.publish(job, { status: 'launching', message: job.resumeThreadId ? '正在恢复原 Codex 会话' : '正在创建 Codex 会话' });
       if (job.resumeThreadId) {
         const original = await client.call('thread/read', { threadId: job.resumeThreadId, includeTurns: true });
@@ -127,8 +144,9 @@ export class CodexRunner {
       try { await this.desktopOpener(job.threadId); this.publish(job, { desktopOpened: true }); }
       catch { this.publish(job, { desktopOpened: false, desktopMessage: '无法自动打开客户端，请点击“在 Codex 中打开”查看会话。' }); }
     } catch (error: any) {
-      this.publish(job, { status: job.resumeThreadId ? (submitting && typeof error.code !== 'number' ? 'unknown' : 'failed') : job.threadId || creating ? 'unknown' : 'failed', message: error.message });
-      if (job.resumeThreadId && job.threadId && job.status === 'failed') await this.release(job);
+      const writerConflict = job.resumeThreadId && !submitting && /already has an active writer/i.test(error.message || '');
+      this.publish(job, writerConflict ? { status: 'blocked', errorCode: 'CODEX_THREAD_BUSY', message: writerConflictMessage } : { status: job.resumeThreadId ? (submitting && typeof error.code !== 'number' ? 'unknown' : 'failed') : job.threadId || creating ? 'unknown' : 'failed', message: error.message });
+      if (['failed', 'blocked'].includes(job.status)) await this.release(job);
     }
     return job;
   }
@@ -138,22 +156,22 @@ export class CodexRunner {
     if (method === 'item/completed' && params.item?.type === 'agentMessage') this.publish(job, { output: String(params.item.text || '').slice(-24000) });
     if (method === 'turn/completed') {
       const state: any = ({ completed: 'completed', interrupted: 'interrupted', failed: 'failed' } as Record<string, string>)[params.turn.status] || 'failed';
-      this.publish(job, { status: state, turnId: params.turn.id, request: null, message: params.turn.error?.message || ({ completed: 'Codex 本轮执行完成', interrupted: '执行已停止', failed: 'Codex 执行失败' } as Record<string, string>)[state] });
+      this.publish(job, { status: state, releaseStatus: 'releasing', turnId: params.turn.id, request: null, message: params.turn.error?.message || ({ completed: 'Codex 本轮执行完成', interrupted: '执行已停止', failed: 'Codex 执行失败' } as Record<string, string>)[state] });
       this.pendingRequests.delete(job.id);
       await this.release(job);
     }
   }
-  request(message: any) {
+  request(message: any, client = this.client) {
     const job = [...this.jobs.values()].reverse().find(j => j.threadId === message.params?.threadId && ['launching', 'running', 'waiting'].includes(j.status));
     if (!job || !['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/tool/requestUserInput'].includes(message.method)) {
-      this.client?.send({ id: message.id, error: { code: -32601, message: '工作台暂不支持此交互，请在 Codex 中继续处理' } }); return;
+      client?.send({ id: message.id, error: { code: -32601, message: '工作台暂不支持此交互，请在 Codex 中继续处理' } }); return;
     }
     this.pendingRequests.set(job.id, message);
     this.publish(job, { status: 'waiting', request: { method: message.method, params: message.params }, message: message.method.endsWith('requestUserInput') ? 'Codex 等待你的回答' : 'Codex 等待操作确认' });
   }
   async respond(id: any, input: any) {
-    const job = this.jobs.get(id), pending = this.pendingRequests.get(id);
-    if (!job || !pending || !this.client || this.client.closed) throw httpError(409, '请求已失效，请刷新并查看 Codex 会话');
+    const job = this.jobs.get(id), pending = this.pendingRequests.get(id), client = this.jobClients.get(id) || this.client;
+    if (!job || !pending || !client || client.closed) throw httpError(409, '请求已失效，请刷新并查看 Codex 会话');
     let result;
     if (pending.method === 'item/tool/requestUserInput') {
       const answers: any = {};
@@ -167,21 +185,41 @@ export class CodexRunner {
       if (!['accept', 'decline'].includes(input.decision)) throw httpError(400, '确认结果无效');
       result = { decision: input.decision };
     }
-    this.client.send({ id: pending.id, result }); this.pendingRequests.delete(id);
+    client.send({ id: pending.id, result }); this.pendingRequests.delete(id);
     this.publish(job, { status: 'running', request: null, message: '已回复 Codex，继续执行' });
   }
   async stop(id: any) {
     const job = this.jobs.get(id);
     if (!job?.threadId || !job.turnId) throw httpError(409, '尚未获得执行标识，请稍后重试');
-    await (await this.connect()).call('turn/interrupt', { threadId: job.threadId, turnId: job.turnId });
+    await (await this.connectJob(job)).call('turn/interrupt', { threadId: job.threadId, turnId: job.turnId });
   }
   async release(job: any) {
-    try { await (await this.connect()).call('thread/unsubscribe', { threadId: job.threadId }); this.publish(job, { subscriptionStatus: 'unsubscribed' }); }
-    catch (error: any) { this.publish(job, { releaseError: error.message }); }
+    if (this.releases.has(job.id)) return this.releases.get(job.id);
+    const work = (async () => {
+      const client = this.jobClients.get(job.id);
+      if (!client) return;
+      this.publish(job, { releaseStatus: 'releasing' });
+      try {
+        if (job.threadId && !client.closed) {
+          const result = await client.call('thread/unsubscribe', { threadId: job.threadId }, 5000);
+          this.publish(job, { subscriptionStatus: result?.status || 'unknown' });
+        }
+      } catch (error: any) { this.publish(job, { releaseError: error.message }); }
+      finally {
+        // Only this job uses this process. Closing it also drops any remaining writer lease.
+        try {
+          const exited = await client.close();
+          this.publish(job, { releaseStatus: exited === false ? 'failed' : 'released', ...(exited === false ? { releaseError: '执行已结束，但未能确认会话进程退出' } : {}) });
+        } catch (error: any) { this.publish(job, { releaseStatus: 'failed', releaseError: error.message }); }
+        this.jobClients.delete(job.id); this.pendingRequests.delete(job.id);
+      }
+    })();
+    this.releases.set(job.id, work);
+    try { await work; } finally { this.releases.delete(job.id); }
   }
   async reconcile(job: any) {
     if (!job.threadId) throw httpError(409, '尚无 Codex 会话标识，请检查客户端，确认未创建任务后再处理');
-    const result = await (await this.connect()).call('thread/read', { threadId: job.threadId, includeTurns: true });
+    const result = await (await this.connectJob(job)).call('thread/read', { threadId: job.threadId, includeTurns: true });
     const turn = job.turnId ? result.thread.turns.find((t: any) => t.id === job.turnId) : result.thread.turns.at(-1);
     if (!turn) throw httpError(409, 'Codex 会话尚无执行记录，请在客户端核对');
     const status: any = ({ completed: 'completed', failed: 'failed', interrupted: 'interrupted' } as Record<string, string>)[turn.status];
@@ -189,7 +227,7 @@ export class CodexRunner {
     this.publish(job, { status, turnId: turn.id, request: null, output: turn.items?.filter((i: any) => i.type === 'agentMessage').at(-1)?.text || '', message: '已核对 Codex 执行记录' });
     await this.release(job);
   }
-  close() { this.client?.close(); }
+  close() { this.client?.close(); for (const client of this.jobClients.values()) client.close(); this.jobClients.clear(); }
 }
 
 export function recordExecution(data: any, job: any) {
@@ -209,7 +247,7 @@ export function recordExecution(data: any, job: any) {
       }
       const taskStatus: any = ({ launching: 'running', running: 'running', waiting: 'waiting', completed: 'review', failed: 'error', unknown: 'error', interrupted: 'ready' } as Record<string, string>)[job.status];
       const current = data.executions.filter((j: any) => j.taskId === task.id).at(-1)?.id === job.id;
-      if (current && taskStatus && previous !== job.status) task.status = taskStatus;
+      if (current && previous !== job.status) { if (job.status === 'blocked') task.status = job.previousTaskStatus || 'ready'; else if (taskStatus) task.status = taskStatus; }
       if (previous !== job.status) { task.revision++; task.updatedAt = timestamp(); task.events.unshift({ id: randomUUID(), at: task.updatedAt, message: job.message }); }
 
 }
@@ -322,7 +360,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, e
         const task = data.tasks.find((t: any) => t.id === input.taskId);
         if (!task) throw httpError(404, '任务不存在');
         if (task.revision !== input.revision) throw httpError(409, '任务已更新，请刷新后执行');
-        if (task.status === 'running' || (data.executions || []).some((j: any) => j.taskId === task.id && active.has(j.status))) throw httpError(409, '该任务已有执行，请先等待完成或停止，结果未知时请核对原会话');
+        if (task.status === 'running' || (data.executions || []).some((j: any) => j.taskId === task.id && (active.has(j.status) || j.releaseStatus === 'releasing'))) throw httpError(409, '该任务已有执行，请先等待完成或停止，结果未知时请核对原会话');
         if (data.handoffs.some((h: any) => h.taskId === task.id && h.mode === 'continue' && ['pending', 'received'].includes(h.status))) throw httpError(409, '请先取消原手动接续请求，再直接执行');
         const sourceId = input.sourceSessionId || null;
         if (sourceId && !task.sessionIds.includes(sourceId)) throw httpError(400, '接续来源必须属于当前任务');
@@ -351,15 +389,15 @@ export function createCodexExecution({ database, tenantId, workspace, history, e
           if (repeated.historySessionId !== id || repeated.prompt !== message) throw httpError(409, '发送标识已用于另一条消息');
           return { job: structuredClone(repeated), replay: true };
         }
-        if (data.executions?.some((j: any) => j.deviceId === 'local' && active.has(j.status) && [j.resumeThreadId, j.threadId, j.sessionId].includes(session.sessionId))) throw httpError(409, '该会话已有执行或结果待核对，请先处理当前执行');
+        if (data.executions?.some((j: any) => j.deviceId === 'local' && (active.has(j.status) || j.releaseStatus === 'releasing') && [j.resumeThreadId, j.threadId, j.sessionId].includes(session.sessionId))) throw httpError(409, '该会话已有执行或结果待核对，请先处理当前执行');
         const aliases = [id, ...data.sessions.filter((s: any) => s.deviceId === 'local' && s.agent === 'codex' && s.nativeId === session.sessionId).map((s: any) => s.id)];
         let task = data.tasks.find((t: any) => t.sessionIds.some((sid: string) => aliases.includes(sid)));
-        if (task && (data.executions?.some((j: any) => j.taskId === task.id && active.has(j.status)) || data.handoffs.some((h: any) => h.taskId === task.id && h.mode === 'continue' && ['pending', 'received'].includes(h.status)))) throw httpError(409, '任务已有执行或交接，请先处理');
+        if (task && (data.executions?.some((j: any) => j.taskId === task.id && (active.has(j.status) || j.releaseStatus === 'releasing')) || data.handoffs.some((h: any) => h.taskId === task.id && h.mode === 'continue' && ['pending', 'received'].includes(h.status)))) throw httpError(409, '任务已有执行或交接，请先处理');
         if (!task) {
           task = { id: randomUUID(), title: session.title.slice(0, 120), status: 'ready', revision: 1, contextVersion: 1, context: { goal: session.title, constraints: '', decisions: '', next: '', files: '' }, sessionIds: [id], events: [], createdAt: timestamp(), updatedAt: timestamp() };
           data.tasks.push(task);
         }
-        const job = { id: randomUUID(), requestId: input.requestId, historySessionId: id, resumeThreadId: session.sessionId, taskId: task.id, deviceId: 'local', agent: 'codex', agentLabel: 'Codex', protocol: 'legacy', cwd: session.cwd, title: task.title, prompt: message, contextVersion: task.contextVersion, status: 'queued', createdAt: timestamp(), updatedAt: timestamp(), message: '已排队，准备继续原会话', output: '', threadId: null, turnId: null };
+        const job = { id: randomUUID(), requestId: input.requestId, historySessionId: id, previousTaskStatus: task.status, resumeThreadId: session.sessionId, taskId: task.id, deviceId: 'local', agent: 'codex', agentLabel: 'Codex', protocol: 'legacy', cwd: session.cwd, title: task.title, prompt: message, contextVersion: task.contextVersion, status: 'queued', createdAt: timestamp(), updatedAt: timestamp(), message: '已排队，准备继续原会话', output: '', threadId: null, turnId: null };
         (data.executions ||= []).push(job); task.status = 'running'; task.revision++; task.updatedAt = job.createdAt;
         task.events.unshift({ id: randomUUID(), at: job.createdAt, message: '从网页继续原会话' });
         return { job: structuredClone(job), replay: false };
@@ -371,7 +409,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, e
       if (!history) throw httpError(503, '历史会话服务不可用');
       await history.resolveSource(id);
       const job = database.readTaskCenter(tenantId).executions?.filter((j: any) => j.historySessionId === id).at(-1);
-      return { execution: job || null };
+      return { execution: job?.status === 'failed' && /already has an active writer/i.test(job.message || '') ? { ...job, status: 'blocked', errorCode: 'CODEX_THREAD_BUSY', message: writerConflictMessage } : job || null };
     },
     async action(input: any, actor: any = {}) {
       const job = database.readTaskCenter(tenantId).executions?.find((j: any) => j.id === input.executionId);

@@ -5,21 +5,22 @@ const requestId = () => {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 };
 const busy = new Set(['queued', 'launching', 'running', 'waiting', 'unknown']);
-const names: Record<string, string> = { queued: '等待执行', launching: '恢复原会话中', running: '正在回复', waiting: '等待你处理', completed: '本轮完成', failed: '执行失败', interrupted: '已停止', unknown: '结果待核对' };
+const names: Record<string, string> = { blocked: '会话被占用 · 未发送', queued: '等待执行', launching: '恢复原会话中', running: '正在回复', waiting: '等待你处理', completed: '本轮完成', failed: '执行失败', interrupted: '已停止', unknown: '结果待核对' };
 
 export function createHistoryComposer({ api, canEdit, refresh }: any) {
+  const restoredConflicts = new Set<string>();
   const drafts = new Map<string, { text: string; requestId: string; sentText: string }>();
   let host: HTMLElement | null = null, session: any = null, generation = 0, timer: any, sending = false, polling = false, job: any = null, outputSignature = '';
   const draft = () => { if (!drafts.has(session.id)) drafts.set(session.id, { text: '', requestId: '', sentText: '' }); return drafts.get(session.id)!; };
   const select = (s: string): any => host?.querySelector(s);
   function update() {
     const submit = select('[type="submit"]'), input = select('textarea');
-    if (submit) submit.disabled = sending || busy.has(job?.status) || !input?.value.trim();
+    if (submit) submit.disabled = sending || (busy.has(job?.status) || job?.releaseStatus === 'releasing') || !input?.value.trim();
     if (input) input.disabled = sending;
     const status = select('[data-status]');
-    if (status) status.textContent = sending ? '正在发送…' : job ? `${names[job.status] || job.status} · ${job.message || ''}` : '消息将追加到原会话，沿用其上下文与配置。';
+    if (status) status.textContent = sending ? '正在发送…' : job ? `${names[job.status] || job.status} · ${job.message || ''}${job.releaseStatus === 'releasing' ? ' · 正在释放会话' : job.releaseStatus === 'released' ? ' · 会话已释放，可在客户端接续' : job.releaseStatus === 'failed' ? ' · 会话释放失败，请检查服务进程' : ''}` : '消息将追加到原会话，沿用其上下文与配置。';
     const actions = select('[data-actions]');
-    if (actions) actions.innerHTML = job ? `${['queued', 'running', 'waiting'].includes(job.status) ? '<button type="button" data-control="stop">停止</button>' : ''}${job.status === 'waiting' && job.request ? '<button type="button" data-control="respond">处理请求</button>' : ''}${job.status === 'unknown' ? '<button type="button" data-control="reconcile">核对结果</button>' : ''}${!busy.has(job.status) ? '<button type="button" data-refresh>刷新原始记录</button>' : ''}${job.status === 'failed' || job.status === 'interrupted' ? '<button type="button" data-restore>重新编辑本轮消息</button>' : ''}` : '';
+    if (actions) actions.innerHTML = job ? `${['queued', 'running', 'waiting'].includes(job.status) ? '<button type="button" data-control="stop">停止</button>' : ''}${job.status === 'waiting' && job.request ? '<button type="button" data-control="respond">处理请求</button>' : ''}${job.status === 'unknown' ? '<button type="button" data-control="reconcile">核对结果</button>' : ''}${!busy.has(job.status) ? '<button type="button" data-refresh>刷新原始记录</button>' : ''}${['failed', 'interrupted', 'blocked'].includes(job.status) ? '<button type="button" data-restore>重新编辑本轮消息</button><button type="button" data-copy>复制本轮消息</button>' : ''}` : '';
     const output = select('[data-output]');
     const signature = JSON.stringify([job?.id, job?.prompt, job?.output]);
     if (output && signature !== outputSignature) {
@@ -32,7 +33,12 @@ export function createHistoryComposer({ api, canEdit, refresh }: any) {
   async function poll() {
     if (!host || !session || polling) return;
     const current = generation, id = session.id; polling = true;
-    try { const result = await api(`/api/agent-sessions/${id}/continue`); if (current !== generation) return; job = result.execution; update(); }
+    try { const result = await api(`/api/agent-sessions/${id}/continue`); if (current !== generation) return; job = result.execution;
+      if (job?.status === 'blocked' && !restoredConflicts.has(job.id)) {
+        const state = draft(); if (!state.text.trim()) { state.text = job.prompt; state.requestId = ''; select('textarea').value = state.text; }
+        restoredConflicts.add(job.id);
+      }
+      update(); }
     catch (error: any) { if (current === generation && select('[data-error]')) select('[data-error]').textContent = error.message; }
     finally { if (current === generation) { polling = false; timer = setTimeout(poll, 2500); } }
   }
@@ -47,7 +53,7 @@ export function createHistoryComposer({ api, canEdit, refresh }: any) {
     select('textarea').oninput = (e: any) => { state.text = e.target.value; if (state.text.trim() !== state.sentText) state.requestId = ''; update(); };
     select('textarea').onkeydown = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && !e.isComposing) { e.preventDefault(); if (!select('[type="submit"]').disabled) select('form').requestSubmit(); } };
     select('form').onsubmit = async (e: Event) => {
-      e.preventDefault(); if (sending || busy.has(job?.status) || !state.text.trim()) return;
+      e.preventDefault(); if (sending || (busy.has(job?.status) || job?.releaseStatus === 'releasing') || !state.text.trim()) return;
       const current = generation, id = session.id, message = state.text.trim();
       state.requestId ||= requestId(); state.sentText = message;
       sending = true; select('[data-error]').textContent = ''; update();
@@ -60,6 +66,7 @@ export function createHistoryComposer({ api, canEdit, refresh }: any) {
     };
     host.onclick = async (event: MouseEvent) => {
       const target = (event.target as HTMLElement).closest('button'); if (!target) return;
+      if (target.hasAttribute('data-copy')) { try { await navigator.clipboard.writeText(job.prompt); } catch { select('[data-error]').textContent = '无法自动复制，请使用输入框中的文本。'; } return; }
       if (target.hasAttribute('data-refresh')) { refresh(session.id); return; }
       if (target.hasAttribute('data-restore')) { state.text = job.prompt; state.requestId = ''; select('textarea').value = state.text; update(); select('textarea').focus(); return; }
       const action = target.dataset.control; if (!action || !job?.id) return;

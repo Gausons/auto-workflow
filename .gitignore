@@ -3,6 +3,9 @@
 !/.gitignore
 !/.env.example
 !/README.md
+!/docs/
+/docs/*
+!/docs/desktop-continuation-validation.md
 !/LICENSE
 !/package.json
 !/pnpm-lock.yaml

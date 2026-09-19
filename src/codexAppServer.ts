@@ -46,5 +46,15 @@ export class CodexAppServer extends EventEmitter {
     this.send({ method: 'initialized', params: {} });
     return this;
   }
-  close() { this.child.kill('SIGTERM'); }
+  close(): Promise<boolean> {
+    if (!this.child.pid || this.child.exitCode !== null || this.child.signalCode !== null) return Promise.resolve(true);
+    return new Promise(resolve => {
+      const forced = setTimeout(() => this.child.kill('SIGKILL'), 2000);
+      const timeout = setTimeout(() => finish(false), 5000);
+      const finish = (exited: boolean) => { clearTimeout(forced); clearTimeout(timeout); this.child.removeListener('exit', onExit); resolve(exited); };
+      const onExit = () => finish(true);
+      this.child.once('exit', onExit);
+      this.child.kill('SIGTERM');
+    });
+  }
 }
