@@ -11,7 +11,7 @@ import { openDatabase } from '../src/database.js';
 class FakeClient extends EventEmitter {
   calls: any[] = []; closed = false;
   async initialize() { return this; }
-  async call(method: any, params: any) {
+  async call(method: any, params: any): Promise<any> {
     this.calls.push({ method, params });
     if (method === 'thread/start') return { thread: { id: '12345678-1234-1234-1234-123456789abc' } };
     if (method === 'turn/start') return { turn: { id: 'turn-1' } };
@@ -197,4 +197,71 @@ test('remote device claims once, reports real thread state, and rejects other de
   await worker.sync(); assert.equal(db.readTaskCenter('default').executions[0].control, null);
   client.emit('notification', { method: 'turn/completed', params: { threadId: saved.threadId, turn: { id: 'turn-1', status: 'completed' } } });
   await worker.sync(); assert.equal((await center.snapshot()).tasks[0].status, 'review'); worker.close();
+});
+
+test('resumes the original thread without creating or renaming it, and routes consecutive turns correctly', async () => {
+  const client = new FakeClient(), updates: any[] = [], opened: string[] = [];
+  const call = client.call.bind(client); let turnNumber = 0;
+  client.call = async (method: any, params: any) => {
+    if (method === 'thread/resume') { client.calls.push({ method, params }); return { thread: { id: params.threadId } }; }
+    if (method === 'turn/start') { client.calls.push({ method, params }); return { turn: { id: `new-${++turnNumber}` } }; }
+    return call(method, params);
+  };
+  const threadId = '12345678-1234-1234-1234-123456789abc';
+  const runner = new CodexRunner({ clientFactory: () => client, onUpdate: (j: any) => updates.push(j), desktopOpener: async (id: string) => { opened.push(id); } });
+  await runner.start({ ...job(), resumeThreadId: threadId, prompt: '第一轮续聊' });
+  assert.deepEqual(client.calls.find(c => c.method === 'thread/resume').params, { threadId });
+  assert.ok(!client.calls.some(c => ['thread/start', 'thread/name/set'].includes(c.method)));
+  assert.equal(client.calls.find(c => c.method === 'turn/start').params.threadId, threadId);
+  await runner.notification({ method: 'turn/completed', params: { threadId, turn: { id: 'new-1', status: 'completed' } } });
+  await runner.start({ ...job(), id: 'job-2', resumeThreadId: threadId, prompt: '第二轮续聊' });
+  const before = updates.length;
+  await runner.notification({ method: 'turn/completed', params: { threadId, turn: { id: 'new-1', status: 'completed' } } });
+  assert.equal(updates.length, before, 'late completion from old turn is ignored');
+  await runner.notification({ method: 'item/agentMessage/delta', params: { threadId, turnId: 'new-2', delta: '第二轮回复' } });
+  assert.equal(updates.at(-1).id, 'job-2'); assert.equal(updates.at(-1).output, '第二轮回复');
+  await runner.notification({ method: 'turn/completed', params: { threadId, turn: { id: 'new-2', status: 'completed' } } });
+  assert.deepEqual(opened, [threadId, threadId]); runner.close();
+});
+
+test('busy or unavailable original threads never fall back to a new thread', async () => {
+  for (const busy of [true, false]) {
+    const client = new FakeClient(), updates: any[] = [];
+    client.call = async (method: any, params: any) => {
+      client.calls.push({ method, params });
+      if (method === 'thread/read') return { thread: { turns: busy ? [{ status: 'inProgress' }] : [] } };
+      throw Object.assign(new Error('resume unavailable'), { code: -32601 });
+    };
+    const runner = new CodexRunner({ clientFactory: () => client, onUpdate: (j: any) => updates.push(j) });
+    await runner.start({ ...job(), resumeThreadId: 'original' });
+    assert.equal(updates.at(-1).status, 'failed');
+    assert.ok(!client.calls.some(c => ['thread/start', 'turn/start'].includes(c.method))); runner.close();
+  }
+});
+
+test('history continuation is scoped, idempotent, task-owned and retains a single session', async t => {
+  const db = openDatabase(':memory:'); db.createTenant({ id: 'default', token: 'x'.repeat(32) }); t.after(() => db.close());
+  const id = 'a'.repeat(64), nativeId = '12345678-1234-1234-1234-123456789abc';
+  let agent = 'codex';
+  const history: any = { catalog: async () => ({ providers: [{ id: 'codex' }], sessions: [{ id, sessionId: nativeId, agent, title: '历史任务', cwd: '/repo' }] }), resolveSource: async (sid: string) => { if (sid !== id) throw Object.assign(new Error('not found'), { statusCode: 404 }); }, detail: async (sid: string) => { await history.resolveSource(sid); return { session: { id, sessionId: nativeId, agent, title: '历史任务', cwd: '/repo' } }; } };
+  let started = 0, update: any;
+  const service = createCodexExecution({ database: db, tenantId: 'default', workspace: () => '/repo', history, runnerFactory: (notify: any) => { update = notify; return { start(j: any) { started++; notify({ ...j, threadId: nativeId, status: 'running' }); }, close() {} }; } });
+  const requestId = '11111111-1111-1111-1111-111111111111';
+  const input = { requestId, message: '继续原会话' };
+  await assert.rejects(service.continueHistory('b'.repeat(64), input), { statusCode: 404 });
+  agent = 'claude'; await assert.rejects(service.continueHistory(id, input), { statusCode: 422 }); agent = 'codex';
+  const first = await service.continueHistory(id, input);
+  assert.deepEqual(await service.continueHistory(id, input), first); assert.equal(started, 1);
+  await assert.rejects(service.continueHistory(id, { ...input, message: 'changed' }), { statusCode: 409 });
+  await assert.rejects(service.continueHistory(id, { ...input, requestId: '22222222-2222-2222-2222-222222222222' }), { statusCode: 409 });
+  const center = createTaskCenter({ database: db, tenantId: 'default', history });
+  assert.equal((await center.snapshot()).sessions.length, 1);
+  assert.deepEqual((await center.snapshot()).tasks[0].sessionIds, [id]);
+  const saved = db.readTaskCenter('default').executions[0];
+  update({ ...saved, status: 'completed', output: '回复' });
+  assert.equal((await service.historyExecution(id)).execution.output, '回复');
+  assert.equal((await center.snapshot()).tasks[0].status, 'review');
+  await service.continueHistory(id, { ...input, requestId: '33333333-3333-3333-3333-333333333333' });
+  assert.equal(started, 2); assert.equal(db.readTaskCenter('default').tasks.length, 1);
+  service.close();
 });

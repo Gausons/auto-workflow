@@ -86,6 +86,9 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     if (req.method === 'GET' && url.pathname === '/api/sessions') { sendJson(res, 200, await sessionDelivery.list(url.searchParams)); return; }
     const delivery = /^\/api\/sessions\/([a-f0-9]{64})(?:\/(events|records))?$/.exec(url.pathname);
     if (req.method === 'GET' && delivery) { const operation = delivery[2] === 'records' ? 'record' : delivery[2] || 'detail'; sendJson(res, 200, await sessionDelivery[operation](delivery[1], url.searchParams)); return; }
+    const continuation = /^\/api\/agent-sessions\/([a-f0-9]{64})\/continue$/.exec(url.pathname);
+    if (continuation && req.method === 'POST') { sendJson(res, 202, await codexExecution.continueHistory(continuation[1], await readJson(req))); return; }
+    if (continuation && req.method === 'GET') { sendJson(res, 200, await codexExecution.historyExecution(continuation[1])); return; }
     if (req.method === 'GET' && url.pathname === '/api/agent-sessions') { sendJson(res, 200, await agentHistory.list(url.searchParams)); return; }
     const history = /^\/api\/agent-sessions\/([a-f0-9]{64})$/.exec(url.pathname);
     if (req.method === 'GET' && history) { sendJson(res, 200, await agentHistory.detail(history[1], url.searchParams)); return; }
@@ -555,7 +558,7 @@ async function ensureBugAttachmentsLoaded(bug: any) {
   const agentHistory = createAgentHistory({ environment, tenantId: tenant.id, rootDir, workspace: () => state.config.codexWorkspaceDir });
   const sessionDelivery: any = createSessionDelivery({ history: agentHistory, environment });
   const taskCenter = createTaskCenter({ database, tenantId: tenant.id, history: agentHistory });
-  const codexExecution = createCodexExecution({ database, tenantId: tenant.id, workspace: () => state.config.codexWorkspaceDir, environment });
+  const codexExecution = createCodexExecution({ database, tenantId: tenant.id, workspace: () => state.config.codexWorkspaceDir, history: agentHistory, environment });
   return {
     workspace: () => state.config.codexWorkspaceDir,
     async handleApi(req: any, res: any, url: any, principal: any) {

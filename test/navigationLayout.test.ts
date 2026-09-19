@@ -8,7 +8,7 @@ test('primary navigation keeps four work tabs and moves administration into sett
   const primaryNavigation = html.match(/<nav class="nav-list"[\s\S]*?<\/nav>/)?.[0] || '';
 
   assert.equal((primaryNavigation.match(/data-nav=/g) || []).length, 4);
-  for (const route of ['new-task', 'tasks', 'workbench', 'inbox']) {
+  for (const route of ['new-task', 'tasks', 'workbench', 'history']) {
     assert.match(primaryNavigation, new RegExp(`data-nav="${route}"`));
   }
   assert.doesNotMatch(primaryNavigation, /data-nav="(?:assignment|config|members|account)"/);

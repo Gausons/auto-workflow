@@ -1,3 +1,4 @@
+import { resolveCodexExecutable } from './codexExecutable.js';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { EventEmitter } from 'node:events';
@@ -10,7 +11,8 @@ export class CodexAppServer extends EventEmitter {
   constructor({ executable = 'codex', spawnProcess = spawn, environment = process.env }: any = {}) {
     super();
     this.sequence = 0; this.pending = new Map(); this.closed = false;
-    this.child = spawnProcess(executable, ['app-server'], { env: environment, stdio: ['pipe', 'pipe', 'pipe'] });
+    const command = resolveCodexExecutable({ executable, environment });
+    this.child = spawnProcess(command, ['app-server'], { env: environment, stdio: ['pipe', 'pipe', 'pipe'] });
     this.child.stderr.on('data', () => {}); // Never relay configuration or credentials in diagnostics.
     const lines = createInterface({ input: this.child.stdout });
     lines.on('line', line => {
@@ -26,7 +28,7 @@ export class CodexAppServer extends EventEmitter {
       for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(error); }
       this.pending.clear(); this.emit('disconnected', error);
     };
-    this.child.on('error', () => ended(new Error('无法启动 Codex，请检查客户端和 codex 命令是否已安装')));
+    this.child.on('error', (error: NodeJS.ErrnoException) => ended(Object.assign(new Error(`无法启动 Codex（${error.code || 'spawn error'}）：${command}。${error.code === 'EACCES' ? '请检查文件执行权限。' : '请检查 CODEX_EXECUTABLE 或客户端安装路径。'}`), { code: error.code })));
     this.child.on('exit', () => ended(new Error('Codex 执行连接已关闭')));
     this.child.stdin.on('error', () => ended(new Error('Codex 执行连接已中断')));
   }

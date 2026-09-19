@@ -101,31 +101,40 @@ export class CodexRunner {
   async start(job: any) {
     if (this.jobs.has(job.id)) return this.jobs.get(job.id);
     this.jobs.set(job.id, { ...job }); job = this.jobs.get(job.id);
-    let creating = false;
+    let creating = false, submitting = false;
     try {
       const client = await this.connect();
-      this.publish(job, { status: 'launching', message: '正在创建 Codex 会话' });
-      creating = true;
-      const appServerProjectId = job.appServerProjectId !== undefined ? job.appServerProjectId : String(job.projectId || '').startsWith('workspace:') ? null : job.projectId;
-      const result = await client.call('thread/start', { cwd: job.cwd, ...(appServerProjectId ? { projectId: appServerProjectId } : {}), ...(job.model ? { model: job.model } : {}), ...(job.reasoningEffort ? { config: { model_reasoning_effort: job.reasoningEffort } } : {}), ephemeral: false, serviceName: 'bugflow_workbench' });
-      this.publish(job, { threadId: result.thread.id, message: 'Codex 会话已创建' });
-      creating = false;
-      // Older Codex stores can create persistent threads but do not implement
-      // metadata updates. A missing custom title must not block the turn or the
-      // desktop deep-link.
-      try { await client.call('thread/name/set', { threadId: job.threadId, name: job.title }); }
-      catch { /* Keep the generated Codex title. */ }
+      this.publish(job, { status: 'launching', message: job.resumeThreadId ? '正在恢复原 Codex 会话' : '正在创建 Codex 会话' });
+      if (job.resumeThreadId) {
+        const original = await client.call('thread/read', { threadId: job.resumeThreadId, includeTurns: true });
+        if (original.thread?.status?.type === 'active' || original.thread?.turns?.some((t: any) => t.status === 'inProgress')) throw httpError(409, '原会话正在执行，请等待客户端本轮完成后再发送');
+        const resumed = await client.call('thread/resume', { threadId: job.resumeThreadId });
+        if (resumed.thread?.id !== job.resumeThreadId) throw new Error('恢复返回的会话标识不一致，已停止发送');
+        this.publish(job, { threadId: resumed.thread.id, message: '原会话已恢复' });
+      } else {
+        creating = true;
+        const appServerProjectId = job.appServerProjectId !== undefined ? job.appServerProjectId : String(job.projectId || '').startsWith('workspace:') ? null : job.projectId;
+        const result = await client.call('thread/start', { cwd: job.cwd, ...(appServerProjectId ? { projectId: appServerProjectId } : {}), ...(job.model ? { model: job.model } : {}), ...(job.reasoningEffort ? { config: { model_reasoning_effort: job.reasoningEffort } } : {}), ephemeral: false, serviceName: 'bugflow_workbench' });
+        this.publish(job, { threadId: result.thread.id, message: 'Codex 会话已创建' });
+        creating = false;
+        try { await client.call('thread/name/set', { threadId: job.threadId, name: job.title }); }
+        catch { /* Keep the generated Codex title. */ }
+      }
+      submitting = true;
       const turn = await client.call('turn/start', { threadId: job.threadId, input: [{ type: 'text', text: job.prompt }], clientUserMessageId: job.id });
+      submitting = false;
       this.publish(job, { turnId: turn.turn.id, ...(job.status === 'launching' ? { status: 'running', message: 'Codex 正在执行' } : {}) });
       try { await this.desktopOpener(job.threadId); this.publish(job, { desktopOpened: true }); }
       catch { this.publish(job, { desktopOpened: false, desktopMessage: '无法自动打开客户端，请点击“在 Codex 中打开”查看会话。' }); }
     } catch (error: any) {
-      this.publish(job, { status: job.threadId || creating ? 'unknown' : 'failed', message: error.message });
+      this.publish(job, { status: job.resumeThreadId ? (submitting && typeof error.code !== 'number' ? 'unknown' : 'failed') : job.threadId || creating ? 'unknown' : 'failed', message: error.message });
+      if (job.resumeThreadId && job.threadId && job.status === 'failed') await this.release(job);
     }
     return job;
   }
   async notification({ method, params }: any) {
-    const job = [...this.jobs.values()].find(j => j.threadId === params?.threadId); if (!job) return;
+    const job = [...this.jobs.values()].reverse().find(j => j.threadId === params?.threadId && ['launching', 'running', 'waiting'].includes(j.status) && (!j.turnId || !(params.turnId || params.turn?.id) || j.turnId === (params.turnId || params.turn?.id))); if (!job) return;
+    if (method === 'item/agentMessage/delta') this.publish(job, { output: `${job.output || ''}${params.delta || ''}`.slice(-24000) });
     if (method === 'item/completed' && params.item?.type === 'agentMessage') this.publish(job, { output: String(params.item.text || '').slice(-24000) });
     if (method === 'turn/completed') {
       const state: any = ({ completed: 'completed', interrupted: 'interrupted', failed: 'failed' } as Record<string, string>)[params.turn.status] || 'failed';
@@ -135,7 +144,7 @@ export class CodexRunner {
     }
   }
   request(message: any) {
-    const job = [...this.jobs.values()].find(j => j.threadId === message.params?.threadId);
+    const job = [...this.jobs.values()].reverse().find(j => j.threadId === message.params?.threadId && ['launching', 'running', 'waiting'].includes(j.status));
     if (!job || !['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/tool/requestUserInput'].includes(message.method)) {
       this.client?.send({ id: message.id, error: { code: -32601, message: '工作台暂不支持此交互，请在 Codex 中继续处理' } }); return;
     }
@@ -189,7 +198,7 @@ export function recordExecution(data: any, job: any) {
       Object.assign(saved, job);
       const task = data.tasks.find((t: any) => t.id === saved.taskId); if (!task) return;
       const nativeSessionId = job.sessionId || job.threadId;
-      if (nativeSessionId) {
+      if (nativeSessionId && !job.historySessionId) {
         const agent = job.agent || 'codex';
         const id = createHash('sha256').update(`agent-execution:${agent}:${nativeSessionId}`).digest('hex');
         let session = data.sessions.find((s: any) => s.id === id);
@@ -217,7 +226,7 @@ function frequentDirectories(data: any, deviceId: string, fallback = '') {
   return sorted.slice(0, 50);
 }
 
-export function createCodexExecution({ database, tenantId, workspace, environment = {}, runnerFactory, directoryPicker = pickNativeDirectory }: any = {}) {
+export function createCodexExecution({ database, tenantId, workspace, history, environment = {}, runnerFactory, directoryPicker = pickNativeDirectory }: any = {}) {
   let closing = false;
   const update = (job: any) => {
     if (!closing) database.mutateTaskCenter(tenantId, (data: any) => recordExecution(data, job));
@@ -326,6 +335,43 @@ export function createCodexExecution({ database, tenantId, workspace, environmen
         return structuredClone(job);
       });
       if (job.deviceId === 'local') void runner.start(job); return { executionId: job.id };
+    },
+    async continueHistory(id: string, input: any) {
+      if (!history) throw httpError(503, '历史会话服务不可用');
+      if (typeof input?.message !== 'string' || !input.message.trim() || input.message.length > 12000) throw httpError(400, '请输入 1–12000 字符的消息');
+      if (typeof input.requestId !== 'string' || !/^[a-f0-9-]{36}$/.test(input.requestId)) throw httpError(400, '发送标识无效');
+      const { session } = await history.detail(id, new URLSearchParams({ limit: '1' }));
+      if (session.agent !== 'codex' || !session.sessionId) throw httpError(422, '此会话暂不支持网页原会话续聊，请在对应 Agent 中继续');
+      if (session.archived) throw httpError(409, '请先在 Codex 客户端取消归档，再继续此会话');
+      // Resolve the session through the tenant history reader; never accept a native thread ID or cwd from the browser.
+      const message = input.message.trim();
+      const result = database.mutateTaskCenter(tenantId, (data: any) => {
+        const repeated = data.executions?.find((j: any) => j.requestId === input.requestId);
+        if (repeated) {
+          if (repeated.historySessionId !== id || repeated.prompt !== message) throw httpError(409, '发送标识已用于另一条消息');
+          return { job: structuredClone(repeated), replay: true };
+        }
+        if (data.executions?.some((j: any) => j.deviceId === 'local' && active.has(j.status) && [j.resumeThreadId, j.threadId, j.sessionId].includes(session.sessionId))) throw httpError(409, '该会话已有执行或结果待核对，请先处理当前执行');
+        const aliases = [id, ...data.sessions.filter((s: any) => s.deviceId === 'local' && s.agent === 'codex' && s.nativeId === session.sessionId).map((s: any) => s.id)];
+        let task = data.tasks.find((t: any) => t.sessionIds.some((sid: string) => aliases.includes(sid)));
+        if (task && (data.executions?.some((j: any) => j.taskId === task.id && active.has(j.status)) || data.handoffs.some((h: any) => h.taskId === task.id && h.mode === 'continue' && ['pending', 'received'].includes(h.status)))) throw httpError(409, '任务已有执行或交接，请先处理');
+        if (!task) {
+          task = { id: randomUUID(), title: session.title.slice(0, 120), status: 'ready', revision: 1, contextVersion: 1, context: { goal: session.title, constraints: '', decisions: '', next: '', files: '' }, sessionIds: [id], events: [], createdAt: timestamp(), updatedAt: timestamp() };
+          data.tasks.push(task);
+        }
+        const job = { id: randomUUID(), requestId: input.requestId, historySessionId: id, resumeThreadId: session.sessionId, taskId: task.id, deviceId: 'local', agent: 'codex', agentLabel: 'Codex', protocol: 'legacy', cwd: session.cwd, title: task.title, prompt: message, contextVersion: task.contextVersion, status: 'queued', createdAt: timestamp(), updatedAt: timestamp(), message: '已排队，准备继续原会话', output: '', threadId: null, turnId: null };
+        (data.executions ||= []).push(job); task.status = 'running'; task.revision++; task.updatedAt = job.createdAt;
+        task.events.unshift({ id: randomUUID(), at: job.createdAt, message: '从网页继续原会话' });
+        return { job: structuredClone(job), replay: false };
+      });
+      if (!result.replay) void runner.start(result.job);
+      return { executionId: result.job.id, taskId: result.job.taskId };
+    },
+    async historyExecution(id: string) {
+      if (!history) throw httpError(503, '历史会话服务不可用');
+      await history.resolveSource(id);
+      const job = database.readTaskCenter(tenantId).executions?.filter((j: any) => j.historySessionId === id).at(-1);
+      return { execution: job || null };
     },
     async action(input: any, actor: any = {}) {
       const job = database.readTaskCenter(tenantId).executions?.find((j: any) => j.id === input.executionId);

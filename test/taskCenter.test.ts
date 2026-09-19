@@ -129,6 +129,10 @@ test('HTTP auth, viewer write rejection, and task UI assets', async t => {
   const viewer = (await req('/api/auth/login', 'POST', { tenantId: 'default', username: 'viewer', password })).data;
   assert.equal((await req('/api/task-center', 'GET', null, viewer.token)).data.tasks.length, 1);
   assert.equal((await req('/api/task-center', 'POST', { action: 'create', title: 'forbidden' }, viewer.token)).status, 403);
+  const continuation = '/api/agent-sessions/' + 'a'.repeat(64) + '/continue';
+  assert.equal((await req(continuation, 'POST', { message: 'test' })).status, 401);
+  assert.equal((await req(continuation, 'POST', { message: 'test' }, viewer.token)).status, 403);
+  assert.equal((await req(continuation, 'GET', null, viewer.token)).status, 404);
   const taskCenterAsset = await fetch(base + '/taskCenter.js');
   assert.equal(taskCenterAsset.status, 200);
   const taskCenterScript = await taskCenterAsset.text();
