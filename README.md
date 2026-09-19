@@ -354,7 +354,7 @@ pnpm tenant -- reset-password team-a username
 .env
 ```
 
-“客户端执行、网页转发”尚未接通：2026-09-19 已通过 Codex 对话内工具完成原线程连续两轮接续，但未找到当前桌面客户端供自建网页调用的受支持入口。详见[接入验证记录](docs/desktop-continuation-validation.md)。
+“客户端执行、网页转发”已完成独立 Node.js 进程的 IPC 两轮发送验证：通过本地路由器发现会话拥有端，再转发消息，无需退出客户端。该入口为内部协议；网页正式入口尚未接入，状态订阅、停止与异常恢复仍待验收。详见[接入验证记录](docs/desktop-continuation-validation.md)及默认只读的 `scripts/codex-ipc-probe.mjs`。
 
 ## API 概览
 
