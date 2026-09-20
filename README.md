@@ -1,76 +1,38 @@
 # Agent 任务工作台
 
-一个面向多设备、多 Agent 的本地任务与会话工作台。它把任务、上下文版本、设备、Agent 会话和执行记录统一到同一套界面中，并支持从网页直接启动 Codex 客户端可见的任务。
+面向研发团队的缺陷与 Agent 任务工作台：从 Jira 同步问题、生成分配建议，把缺陷转换成可维护的任务上下文，再交给本机或远端的 Codex、Claude Code 等 ACP Agent 执行。
 
-项目同时保留 Jira 问题接入、AI 分诊、IDE Agent 执行和复核能力，可用于自动化 Bug 修复流水线。
+> 当前版本不再使用“执行流水线”。缺陷会直接生成任务中心任务，不会创建中间流水线、节点或任务包。
 
-## 当前能力
+## 功能概览
 
-- **统一任务中心**：创建任务、维护上下文、查看执行状态，并按组织隔离数据。
-- **多设备管理**：登记设备在线状态、能力、工作区与可执行项目。
-- **多 Agent 会话索引**：汇总 Codex 和 Claude Code 的本地历史会话。
-- **跨设备交接**：支持继续、分支和引用三种交接方式，保留上下文版本与来源关系。
-- **Codex 客户端直连执行**：通过 Codex App Server 创建持久线程并启动 turn；执行中的任务会出现在 Codex 客户端。
-- **远端 Codex 执行**：设备连接器可领取工作台任务，在目标设备上调用本机 Codex，再持续回报状态和输出。
-- **Jira Bug 流水线**：抓取问题、AI 分诊、人员分配、自动执行、评审与操作日志。
-- **组织与权限**：支持多租户、成员管理、角色权限和恢复流程。
+- **缺陷工作台**：手动或定时同步 Jira，查看缺陷详情与附件。
+- **智能分配**：根据候选人员和职责生成 AI 经办人建议，可选择人工确认或自动分配。
+- **任务中心**：维护目标、约束、结论、下一步、文件与版本；同一缺陷只生成一个任务。
+- **Agent 执行**：从任务直接启动 ACP Agent，处理确认与提问，停止或核对执行状态。
+- **会话交付**：汇总 Codex、Claude Code 的本地或远端会话，支持接续、分支和引用。
+- **团队协作**：提供组织、成员、角色、审计和多租户数据隔离。
 
-## 架构
+## 工作流程
 
 ```mermaid
 flowchart LR
-    U[用户] --> UI[Web 工作台]
-    UI --> API[Node.js 服务]
-
-    API --> TC[任务中心]
-    API --> WF[Jira / Bug 流水线]
-    API --> AH[Agent 历史索引]
-    API --> DB[(SQLite)]
-
-    TC --> CAS[Codex App Server]
-    CAS --> CC[本机 Codex 客户端]
-
-    TC --> RC[设备连接器]
-    RC --> RW[远端执行 Worker]
-    RW --> RCC[远端 Codex 客户端]
-
-    WF --> JIRA[Jira]
-    WF --> CLI[Codex CLI / Claude Code]
+  Jira[Jira 缺陷] --> Sync[同步与分配建议]
+  Sync --> Bugs[缺陷工作台]
+  Bugs -->|生成任务| Tasks[任务中心]
+  Tasks --> Agent[本机或远端 Agent]
+  Agent --> Sessions[会话与执行状态]
+  Sessions --> Tasks
 ```
 
-服务端入口是 `server.mjs`，静态前端位于 `public/`。主要模块如下：
+从缺陷详情生成任务时，服务端会：
 
-| 模块 | 作用 |
-| --- | --- |
-| `src/taskCenter.mjs` | 任务、上下文版本、设备、会话和交接记录 |
-| `src/codexExecution.mjs` | 本机 Codex 项目发现、线程启动、审批与执行状态管理 |
-| `src/codexAppServer.mjs` | 管理 `codex app-server` 子进程和 JSONL 协议 |
-| `src/remoteCodexWorker.mjs` | 远端任务领取、执行日志、控制指令与结果回传 |
-| `scripts/device-sync.mjs` | 设备心跳、会话同步、交接接收和远端执行循环 |
-| `src/agentHistory/index.mjs` | Codex / Claude Code 历史会话索引 |
-| `src/sessionDelivery/index.ts` | 会话增量同步 API |
-| `src/tenantRuntime.mjs` | 租户级运行时、配置、执行器与恢复 |
-| `src/database.mjs` | SQLite 初始化、迁移、备份与恢复 |
+1. 读取缺陷字段和附件元数据。
+2. 将缺陷编码、标题、状态、优先级、描述、复现步骤、预期及实际结果写入任务上下文。
+3. 将附件名称和链接写入“文件与版本”。
+4. 保存缺陷来源；重复生成时直接打开已有任务。
 
-### 两条 Codex 执行路径
-
-**工作台所在设备执行**
-
-1. 前端调用任务执行 API。
-2. 服务端通过 `codex app-server` 查询本机项目。
-3. 服务端创建持久 Codex thread，并启动 turn。
-4. 工作台持续接收状态、输出、审批和用户输入请求。
-5. 同一 thread 会出现在 Codex 客户端，可从工作台直接打开。
-
-**其他设备执行**
-
-1. 目标设备运行 `pnpm device:sync` 并开启执行能力。
-2. 连接器发布该设备的 Codex 项目和在线状态。
-3. 工作台把执行请求写入设备队列。
-4. 目标设备领取任务，通过本机 `codex app-server` 执行。
-5. 状态、输出和控制结果同步回工作台，线程也会出现在目标设备的 Codex 客户端。
-
-执行记录使用租约和幂等键防止重复领取。服务或连接器异常重启后，未确认结束的本地执行会标记为状态未知，不会自动重跑。
+任务生成后不会自动执行。执行目标、Agent、模型、思考强度和工作目录均在任务中心选择。
 
 ## 快速开始
 
@@ -78,323 +40,256 @@ flowchart LR
 
 - Node.js 22.16 或更高版本
 - pnpm
-- 本机已安装并登录 Codex CLI；需要 Claude Code 能力时再安装 Claude CLI
-- 使用 Jira 流水线时，需要可访问的 Jira 实例和 API Token
+- Jira Cloud 凭据（同步 Jira 时需要）
+- Codex 或 Claude Code 对应的 ACP 适配器（执行 Agent 时需要）
 
-### 启动服务
+### 1. 安装并启动
 
 ```bash
-pnpm install
 cp .env.example .env
-pnpm start
-```
-
-默认访问地址：
-
-- 工作台：`http://127.0.0.1:4173`
-- 健康检查：`http://127.0.0.1:4173/api/health`
-
-开发模式：
-
-```bash
+pnpm install
 pnpm dev
 ```
 
-如果端口被旧进程占用：
+默认监听 [http://127.0.0.1:4173](http://127.0.0.1:4173)。端口被占用时，启动脚本会先结束占用 `4173` 端口的旧进程。
+
+### 2. 初始化组织所有者
+
+首次启动会自动创建 ID 为 `default` 的组织。打开登录页，展开“首次使用？初始化组织所有者”，使用初始化令牌创建首位所有者。
+
+令牌来源：
+
+- `.env` 中设置了 `DEFAULT_TENANT_TOKEN`：使用该值；
+- 未设置：服务启动后从 `.workflow-data/default-token` 读取自动生成的令牌。
 
 ```bash
-pnpm kill:port
-pnpm start
+cat .workflow-data/default-token
 ```
 
-### 从工作台执行 Codex
+初始化完成后，所有成员都使用各自的用户名和密码登录，初始化令牌不能再次用于登录。
 
-1. 在“任务”页新建或打开任务。
-2. 点击“执行”，选择在线设备和该设备发布的 Codex 项目。
-3. 确认任务指令与工作目录后提交。
-4. 在任务详情中查看启动、运行、等待输入、完成或失败状态。
-5. 本机执行可点击链接打开 Codex 客户端线程；远端执行会在目标设备打开客户端，并在工作台显示线程 ID。
+### 3. 配置 Jira
 
-本机执行依赖：
+编辑 `.env`，至少填写：
 
-```bash
-codex --version
+```dotenv
+ISSUE_PROVIDER=jira
+JIRA_BASE_URL=https://your-team.atlassian.net
+JIRA_EMAIL=you@example.com
+JIRA_API_TOKEN=your-api-token
+JIRA_JQL=project = DEMO
+CODEX_WORKSPACE_DIR=/absolute/path/to/your/repository
 ```
 
-服务端默认查找 PATH 中的 `codex`。如需指定可执行文件：
+重启服务后，在“缺陷工作台”点击“立即拉取”。JQL 只填写过滤条件，排序由适配器统一添加。
 
-```bash
-CODEX_EXECUTABLE=/absolute/path/to/codex
-```
+也可以用 `JIRA_ACCESS_TOKEN` 进行 Bearer 认证；设置后它会优先于邮箱和 API Token。服务端凭据不会发送到浏览器。
 
-可执行项目限制在 `CODEX_WORKSPACE_DIR` 下。默认值是当前仓库目录；需要开放多个项目时，应把它设为这些项目的共同父目录。
+## 配置说明
 
-## 多设备接入
+完整示例见 [`.env.example`](./.env.example)。根目录 `.env` 是默认组织的配置，修改环境文件后需要重启服务。
 
-其他设备通过设备连接器与同一工作台同步。先确保工作台监听局域网地址：
-
-```bash
-HOST=0.0.0.0 PORT=4173 pnpm start
-```
-
-再在目标设备配置工作台地址和成员凭据。设备 ID 会在首次运行时生成并保存到设备目录。
-
-### 只同步设备与会话
-
-```bash
-WORKBENCH_URL=http://192.168.1.20:4173 \
-WORKBENCH_TENANT=default \
-WORKBENCH_USERNAME=operator \
-WORKBENCH_PASSWORD='your-password' \
-WORKBENCH_DEVICE_NAME="Office MacBook" \
-pnpm device:sync
-```
-
-只执行一次同步：
-
-```bash
-pnpm device:sync -- --once
-```
-
-### 允许工作台在远端直接执行 Codex
-
-```bash
-WORKBENCH_URL=http://192.168.1.20:4173 \
-WORKBENCH_TENANT=default \
-WORKBENCH_USERNAME=operator \
-WORKBENCH_PASSWORD='your-password' \
-WORKBENCH_DEVICE_NAME="Office MacBook" \
-WORKBENCH_EXECUTE_CODEX=true \
-CODEX_WORKSPACE_DIR=/Users/me/Work \
-pnpm device:sync
-```
-
-执行模式需要连接器持续运行，不能与 `--once` 同时使用。建议把它配置为系统登录项或后台服务。
-
-### 设备环境变量
+### 服务与存储
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `WORKBENCH_URL` | 无，必须设置 | 工作台服务地址 |
-| `WORKBENCH_TENANT` | `default` | 登录组织 ID |
-| `WORKBENCH_USERNAME` / `WORKBENCH_PASSWORD` | 无 | 操作员或更高权限的成员凭据 |
-| `WORKBENCH_TOKEN` | 无 | 可代替用户名和密码的有效成员会话令牌 |
-| `WORKBENCH_DEVICE_NAME` | 当前主机名 | 工作台显示名称 |
-| `WORKBENCH_DEVICE_DIR` | `.workflow-data/device` | 设备 ID、游标、收件箱与执行日志目录 |
-| `WORKBENCH_EXECUTE_CODEX` | `false` | 是否允许该设备领取 Codex 执行 |
-| `WORKBENCH_SYNC_EXCERPTS` | `false` | 是否同步每个会话的近期文本摘要 |
-| `CODEX_WORKSPACE_DIR` | 当前目录 | 可发布、可执行项目的根目录 |
-| `CODEX_EXECUTABLE` | `codex` | Codex 可执行文件路径 |
-| `IDE_HISTORY_SCOPE` | `all` | 会话同步范围：`all` 或 `workspace` |
-| `IDE_HISTORY_CODEX_DIR` | 自动发现 | Codex 会话目录 |
-| `IDE_HISTORY_CLAUDE_DIR` | 自动发现 | Claude Code 会话目录 |
+| `HOST` | `127.0.0.1` | HTTP 监听地址 |
+| `PORT` | `4173` | HTTP 监听端口 |
+| `DATABASE_PATH` | `.workflow-data/workflow.sqlite` | SQLite 数据库路径 |
+| `TENANT_ENV_DIR` | `.workflow-data/tenants` | 各组织独立环境文件目录 |
+| `DEFAULT_TENANT_TOKEN` | 自动生成 | 默认组织的首次初始化令牌，至少 32 个字符 |
+| `CODEX_WORKSPACE_DIR` | 项目根目录 | 默认 Agent 工作目录 |
 
-设备本地状态写入 `.workflow-data/device/`，包含设备 ID、游标、执行日志和交接收件箱。每台设备应独立维护该目录，不要在设备间复制。
+如需通过局域网或反向代理访问，可设置 `HOST=0.0.0.0`。请在可信网络中部署，并在对外开放时配置 HTTPS、访问控制和备份策略。
 
-成员会话有有效期。长期运行的连接器建议配置成员用户名和密码，让连接器启动时登录；直接配置 `WORKBENCH_TOKEN` 时，需要在令牌过期后更新。
+### Jira
 
-## 任务、会话与交接模型
-
-任务中心围绕五类数据组织：
-
-| 数据 | 说明 |
+| 变量 | 说明 |
 | --- | --- |
-| Task | 用户要完成的工作、状态、负责人和标签 |
-| Context revision | 任务上下文的不可变版本，便于追踪交接时使用了哪份信息 |
-| Device | 设备在线状态、能力、项目和最后心跳 |
-| Session | Codex、Claude Code 等 Agent 会话的索引与摘要 |
-| Handoff | 会话在设备或 Agent 之间的继续、分支或引用关系 |
+| `JIRA_BASE_URL` | Jira Cloud 地址 |
+| `JIRA_SITE_URL` | 可选；OAuth 网关地址与站点地址不同时，用于生成问题链接 |
+| `JIRA_EMAIL` / `JIRA_API_TOKEN` | Basic 认证凭据 |
+| `JIRA_ACCESS_TOKEN` | 可选；Bearer Token，优先使用 |
+| `JIRA_JQL` | 缺陷筛选条件 |
+| `JIRA_PAGE_SIZE` | 单页数量，默认 `100` |
+| `JIRA_MAX_PAGES` | 最大拉取页数，默认 `50` |
+| `JIRA_TIMEOUT_MS` | 请求超时，默认 `30000` 毫秒 |
+| `JIRA_PRIORITY_MAP` | 可选的 JSON 优先级映射，如 `{"Critical":"P0","Normal":"P2"}` |
 
-三种交接方式：
+### AI 分配建议
 
-- **继续**：目标接手当前上下文，适合把未完成任务迁移到另一设备或 Agent。
-- **分支**：从当前上下文创建独立方向，保留来源关系。
-- **引用**：只把现有会话作为背景材料，不继承其执行状态。
+```dotenv
+ENABLE_AI_ASSIGNMENT=true
+ENABLE_AUTO_ASSIGNMENT=false
+AI_ASSIGNMENT_MODEL=gpt-5.4-mini
+OPENAI_API_KEY=
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_TIMEOUT_MS=30000
+```
 
-任务上下文使用版本号和校验值管理，更新时要求提交期望版本，避免多个设备静默覆盖彼此的修改。
+在“设置 → 分配规则”中维护候选人员及职责。`ENABLE_AI_ASSIGNMENT` 只生成建议；只有开启 `ENABLE_AUTO_ASSIGNMENT` 后，系统才会调用问题数据源自动修改经办人。
 
-### 任务时间线与会话归属
+同步间隔和定时同步开关可在“设置 → 对接配置”中管理。定时开关属于当前运行状态，服务重启后默认关闭。
+
+### Agent 与历史会话
+
+任务中心默认探测 Codex 和 Claude Code 的 ACP 适配器：
+
+```dotenv
+ACP_ENABLED=true
+ACP_CODEX_EXECUTABLE=
+ACP_CODEX_ARGS=[]
+ACP_CLAUDE_EXECUTABLE=
+ACP_CLAUDE_ARGS=[]
+# ACP_AGENTS=codex,claude,my-agent
+```
+
+可执行文件留空时，系统会从 `PATH` 查找 `codex-acp` 和 `claude-agent-acp`。将 `ACP_ENABLED` 设为 `false` 后，Codex 会回退到原生 CLI / App Server 执行方式。
+
+历史会话默认读取 `CODEX_HOME/sessions`、`CODEX_HOME/archived_sessions` 和 `~/.claude/projects`。可覆盖为指定目录：
+
+```dotenv
+IDE_HISTORY_CODEX_DIR=
+IDE_HISTORY_CLAUDE_DIR=
+IDE_HISTORY_SCOPE=all
+```
+
+`IDE_HISTORY_SCOPE=workspace` 时，只显示 `CODEX_WORKSPACE_DIR` 及其子目录中的记录。原始记录只作为参考，不能作为新的系统指令直接执行；符合条件的本机 Codex 历史会话可从网页继续，其他历史数据保持只读。
+
+## 多设备执行
+
+在另一台设备上运行连接器，可将其 Agent 和历史会话注册到工作台：
+
+```bash
+WORKBENCH_URL=https://workbench.example.com \
+WORKBENCH_TOKEN='<成员登录会话令牌>' \
+WORKBENCH_DEVICE_NAME='开发机 MacBook' \
+CODEX_WORKSPACE_DIR=/absolute/path/to/repository \
+pnpm device:sync
+```
+
+也可以让连接器使用成员账号登录：
+
+```bash
+WORKBENCH_URL=https://workbench.example.com \
+WORKBENCH_TENANT=default \
+WORKBENCH_USERNAME=developer \
+WORKBENCH_PASSWORD='<password>' \
+pnpm device:sync
+```
+
+连接器默认只同步设备、会话和交接包，不会启动 Agent。需要让该设备承接远端任务时，增加 `WORKBENCH_EXECUTE_CODEX=true`，并保持连接器持续运行；执行模式不能和 `--once` 同时使用。
+
+常用可选变量：
+
+| 变量 | 说明 |
+| --- | --- |
+| `WORKBENCH_DEVICE_NAME` | 工作台中显示的设备名；默认使用主机名 |
+| `WORKBENCH_DEVICE_DIR` | 连接器状态与交接包目录；默认 `.workflow-data/device` |
+| `WORKBENCH_SYNC_EXCERPTS=true` | 同步会话摘要正文；默认不上传 |
+| `WORKBENCH_EXECUTE_CODEX=true` | 启用远端 Agent 执行 |
+
+## 任务时间线与会话归属
 
 任务详情把会话、执行、交接和任务变更按发生时间展示；会话可以原位展开并分页读取，工具记录默认折叠。搜索任务列表也会匹配关联会话的标题、Agent 和工作目录。后台更新通过“有新进展”提示，避免打断正在阅读的记录。
 
 导航中的“Agent 历史会话”（`#history`）保留独立的会话列表、筛选和阅读界面。任务中心内的“未归属会话”用于预览历史、关联已有任务或从会话创建任务。历史会话关联后按原始时间回填，关联操作本身保留在当前时间。解除或移动关联保留原始记录，并检查任务版本及未结束的执行、交接。
 
-执行完成后任务进入“待验收”，用户确认后才标记完成。“继续任务”当前通过已有执行通道创建新会话，携带任务上下文、所选来源的已同步片段（若可用）和补充指令；它不会恢复原会话的 Agent 内部状态。新会话自动归属原任务并保留接续来源。远端会话仍以连接器同步的片段为准，界面明确标示部分记录。
+执行完成后任务进入“待验收”，用户确认后才标记完成。“继续任务”通过已有执行通道创建新会话，携带任务上下文、所选来源的已同步片段（若可用）和补充指令；它不会恢复原会话的 Agent 内部状态。新会话自动归属原任务并保留接续来源。远端会话仍以连接器同步的片段为准，界面明确标示部分记录。
 
 ### 在网页继续原历史会话
 
 打开“Agent 历史会话”，选择本机 Codex 会话，在底部输入框发送消息（支持 ⌘ / Ctrl + Enter）。服务使用 `thread/resume` 恢复原线程，再通过 `turn/start` 追加一轮；不创建替代线程，不覆盖原模型或权限配置。可通过“在 Codex 中打开”查看同一线程的持久记录。
 
-网页显示本轮回复和状态，支持停止、处理审批或问题、核对未知结果，并可刷新原始记录。每次 Codex 执行使用独立 App Server 连接；完成、失败或停止后退订并关闭该执行的进程，确认退出后显示“会话已释放”，表示网页执行进程已退出，不保证其他客户端已释放或重新加载该线程，其他执行不受影响。重复提交同一个发送标识不会重复执行；会话忙碌或恢复失败时不会回退新建。未归属的会话首次续聊会自动创建关联任务，已有任务归属继续保留。
+网页显示本轮回复和状态，支持停止、处理审批或问题、核对未知结果，并可刷新原始记录。每次 Codex 执行使用独立 App Server 连接；完成、失败或停止后退订并关闭该执行的进程。重复提交同一个发送标识不会重复执行；会话忙碌或恢复失败时不会回退新建。未归属的会话首次续聊会自动创建关联任务，已有任务归属继续保留。
 
 此入口支持工作台所在设备的 Codex 历史；Claude Code、远端片段暂不支持原会话恢复。已归档会话需先在客户端取消归档。恢复遇到写入占用时，服务会尝试通过本地客户端 IPC 发现拥有端并转发本轮消息（实验性内部协议，当前支持 macOS/Linux 的安全 Unix socket）。发现失败则保留未发送状态；提交后结果不确定时不自动重发，也不回退到另一执行通道。客户端桥接的审批和问题在客户端处理，网页读取本轮持久输出并以明确结束事件确认完成。“网页连接已释放”只表示工作台连接清理完毕，不会释放客户端持有的原会话。
 
-## Agent 历史与会话 API
+真实执行器已经验证拥有端转发、回复读取、完成确认及网页连接释放；尚未完成浏览器点击与客户端界面同步的端到端验收。内部 IPC 协议可能随版本变化，详见[接入验证记录](docs/desktop-continuation-validation.md)。
 
-默认组织会自动读取常见本地目录：
+## 多租户管理
 
-- Codex：`$CODEX_HOME/sessions`、`$CODEX_HOME/archived_sessions`
-- Claude Code：`~/.claude/projects`
-
-非默认组织不会自动继承宿主机历史目录，需要显式配置 `IDE_HISTORY_CODEX_DIR` 和 `IDE_HISTORY_CLAUDE_DIR`。
-
-会话接口支持游标、增量事件和内容摘要：
-
-```text
-GET /api/agent-sessions
-GET /api/agent-sessions/:id
-GET /api/sessions
-GET /api/sessions/:id
-GET /api/sessions/:id/events
-GET /api/sessions/:id/records
-```
-
-## Jira 与 Bug 修复流水线
-
-任务中心之外，项目仍保留原有自动 Bug 流水线：
-
-1. 从 Jira 拉取问题和附件。
-2. AI 判断优先级、标签、负责人与处理建议。
-3. 将问题分配给人员，或生成 IDE Agent 任务包。
-4. 通过 Codex CLI 或 Claude Code 在隔离分支中修改代码。
-5. 运行测试、生成评审意见，并记录操作日志。
-
-启用 Jira 时，至少配置：
+使用内置命令管理组织：
 
 ```bash
-ISSUE_PROVIDER=jira
-JIRA_BASE_URL=https://your-domain.atlassian.net
-JIRA_EMAIL=you@example.com
-JIRA_API_TOKEN=your-token
-JIRA_JQL=project = PROJ
-```
-
-IDE 执行器：
-
-```bash
-IDE_EXECUTOR=codex
-CODEX_WORKSPACE_DIR=/absolute/path/to/repository
-CODEX_BASE_BRANCH=main
-```
-
-或：
-
-```bash
-IDE_EXECUTOR=claude
-CLAUDE_MODEL=your-model
-```
-
-是否允许自动执行由功能开关控制：
-
-```bash
-ENABLE_AI_ROUTING=true
-ENABLE_AI_ASSIGNMENT=true
-REQUIRE_HUMAN_REVIEW=true
-```
-
-实际默认值与其他可选项见 `.env.example`。
-
-## 用户、权限与组织管理
-
-首次使用：
-
-1. 启动服务并打开登录页。
-2. 选择“初始化组织”。
-3. 输入 `DEFAULT_TENANT_TOKEN`、所有者邮箱和密码。
-
-内置角色：
-
-| 角色 | 能力 |
-| --- | --- |
-| `owner` | 全部权限，可管理组织、成员、角色、配置和恢复 |
-| `admin` | 管理成员、角色、配置和任务 |
-| `operator` | 创建、修改和执行任务 |
-| `viewer` | 只读访问 |
-
-常用管理命令：
-
-```bash
-pnpm tenant -- add team-a "Team Name"
 pnpm tenant -- list
-pnpm tenant -- users team-a
-pnpm tenant -- rotate team-a
+pnpm tenant -- add <组织ID> [组织名称]
+pnpm tenant -- users <组织ID>
+pnpm tenant -- reset-password <组织ID> <用户名>
+pnpm tenant -- rotate <组织ID>
+pnpm tenant -- migrate [组织ID]
 ```
 
-在服务器本地恢复成员密码：
-
-```bash
-pnpm tenant -- reset-password team-a username
-```
-
-建议使用至少 12 位的随机密码，并把初始化令牌和密码放在进程环境或密钥管理系统中。
-
-## 数据与恢复
-
-默认数据库路径：
+新增组织后，将该组织的 Jira、Agent 和历史目录等配置写入：
 
 ```text
-.workflow-data/workflow.sqlite
+.workflow-data/tenants/<组织ID>.env
 ```
 
-当前数据库版本是 **3**：
+每个组织必须使用独立且互不嵌套的 `CODEX_WORKSPACE_DIR`。组织环境文件只接受 Jira、Issue Source、Agent、AI 和历史会话等受控变量，不会继承其他组织的凭据。
 
-| 迁移 | 内容 |
+## 角色与权限
+
+| 角色 | 查看数据 | 同步 / 分配 / 执行任务 | 配置与分配规则 | 成员管理 |
+| --- | --- | --- | --- | --- |
+| 组织所有者 | ✓ | ✓ | ✓ | 全部角色 |
+| 管理员 | ✓ | ✓ | ✓ | 操作员、只读成员 |
+| 操作员 | ✓ | ✓ | — | — |
+| 只读成员 | ✓ | — | — | — |
+
+停用成员或重置密码会撤销该成员的现有登录会话。组织所有者和管理员可以查看审计记录。
+
+## 会话接口
+
+所有接口都需要成员登录会话：
+
+| 接口 | 说明 |
 | --- | --- |
-| `001_initial.sql` | 基础工作台数据 |
-| `002_rbac.sql` | 用户、角色、会话与安全审计 |
-| `003_task_center.sql` | 任务中心、设备、会话和交接数据 |
+| `GET /api/sessions` | 稳定的会话交付列表 |
+| `GET /api/sessions/:id` | 会话元数据 |
+| `GET /api/sessions/:id/events` | 标准化事件 |
+| `GET /api/sessions/:id/records` | 原始记录 |
+| `GET /api/agent-sessions` | 工作台历史会话列表 |
+| `GET /api/agent-sessions/:id` | 工作台历史会话详情 |
 
-启动时会检查结构并在事务中执行迁移。备份时先停止服务，再复制 SQLite 文件及对应的 `-wal`、`-shm` 文件；也要备份 `.workflow-data/tenants/` 和默认组织令牌。恢复时停止服务，把同一组文件放回原位置后再启动。
+## 数据、升级与备份
 
-以下目录属于运行数据，不应提交到 Git：
+业务数据保存在 SQLite。数据库迁移会在启动时自动执行；第 4 版迁移保留缺陷与任务中心数据，并移除旧流水线运行和执行记录。
 
-```text
-.workflow-data/
-.workflow-data/tenants/
-.env
-```
+备份建议：
 
-“客户端执行、网页转发”已接入历史会话恢复冲突分支。真实执行器验证了拥有端转发、回复读取、完成确认及网页连接释放；未做浏览器点击与客户端界面同步的端到端验收。内部 IPC 协议可能随版本变化。详见[接入验证记录](docs/desktop-continuation-validation.md)。
+1. 停止服务，避免复制到不一致的 SQLite 状态。
+2. 复制 `DATABASE_PATH` 对应的数据库文件。
+3. 复制 `TENANT_ENV_DIR`、需要保留的 Agent 历史目录和远端连接器状态目录。
 
-## API 概览
+不要让多个服务进程同时使用同一个 SQLite 文件。真实凭据、业务数据库、附件、日志和 Agent 历史不得提交到版本控制。
 
-主要接口按领域划分：
-
-| 前缀 | 用途 |
-| --- | --- |
-| `/api/task-center` | 任务、上下文、设备、会话和交接；使用 `action` 区分写操作 |
-| `/api/task-center/codex` | 本机及远端 Codex 执行目标 |
-| `/api/task-center/execute` | 创建 Codex 执行 |
-| `/api/task-center/execution-action` | 领取、上报、停止、回复和结果核对 |
-| `/api/agent-sessions` | Agent 历史会话 |
-| `/api/sessions` | 可分页、可增量读取的会话交付接口 |
-| `/api/issues/diagnostics` | Jira 数据源诊断 |
-| `/api/sync`、`/api/bugs` | 问题同步、附件和分配 |
-| `/api/workflows` | Bug 修复流水线、执行和评审 |
-| `/api/config` | 组织配置 |
-| `/api/organization/members`、`/api/organization/roles` | 成员与权限 |
-
-所有业务数据按租户隔离。浏览器把成员会话令牌保存在当前标签页的 `sessionStorage`，请求时使用 Bearer 认证；设备连接器使用成员账号登录或直接使用有效的成员会话令牌。
-
-## 开发与验证
+## 开发
 
 ```bash
+# 开发模式（监听源码变化）
+pnpm dev
+
+# 构建浏览器端并执行 TypeScript 检查
+pnpm build
+
+# 运行测试
 pnpm test
-pnpm typecheck
+
+# 生产方式启动（启动前自动构建浏览器端）
+pnpm start
 ```
 
-测试覆盖任务中心、Codex 执行状态、RBAC、数据库、租户运行时、会话同步和 Jira 数据源。
+主要目录：
 
-## 当前边界
+```text
+public/       浏览器端页面、样式和交互
+src/          服务端领域逻辑与集成
+scripts/      租户管理、多设备连接器等命令
+migrations/   SQLite 数据库迁移
+test/         Node.js 测试
+```
 
-- 服务端采用单 Node.js 进程和 SQLite，适合个人、团队内网和单实例部署。
-- 多实例部署需要共享数据库、分布式租约和跨实例事件总线。
-- 远端设备必须持续运行连接器，工作台无法直接唤醒离线设备。
-- Codex 线程可见性依赖目标设备的 Codex 安装与登录状态。
-- App Server 协议可能随 Codex 版本变化；升级 Codex 后应先运行测试并验证一次客户端可见执行。
+## License
 
-Codex App Server 的协议与集成方式可参考 [OpenAI Codex App Server 文档](https://developers.openai.com/codex/app-server/)。
-
-## 许可证
-
-本项目采用 MIT 许可证，见 [LICENSE](LICENSE)。
+[MIT](./LICENSE)
