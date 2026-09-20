@@ -21,7 +21,7 @@ const taskCenterUI = createTaskCenterUI({
   canEdit: () => state.permissions.includes('work.execute'),
   toast: showToast
 });
-const historyComposer = createHistoryComposer({ api, canEdit: () => state.permissions.includes('work.execute'), refresh: (id: string) => loadAgentSession(id) });
+const historyComposer = createHistoryComposer({ api, canEdit: () => state.permissions.includes('work.execute'), refresh: (id: string) => loadAgentSession(id), syncHistory: syncAgentSession });
 let pollTimer: any = null;
 let configFormDirty = false;
 
@@ -482,6 +482,30 @@ async function loadAgentHistory(offset = historyState.offset) {
   }
 }
 
+// Refresh only the transcript; keep the composer, focus and unsent draft mounted.
+async function syncAgentSession(id: string) {
+  const request = historyState.detailRequest;
+  const messages: any[] = [];
+  let data: any;
+  do {
+    data = await api(`/api/agent-sessions/${encodeURIComponent(id)}?offset=${messages.length}&limit=200`);
+    messages.push(...data.messages);
+  } while (messages.length < data.total && data.messages.length);
+  if (request !== historyState.detailRequest || historyState.selected !== id) return null;
+  historyState.detail = { ...data, messages };
+  const transcript = select('#historyDetail [data-history-transcript]');
+  const scroll = transcript?.closest('.history-chat-scroll');
+  const follow = scroll && scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 100;
+  if (transcript) {
+    const html = renderMessages(messages);
+    if (transcript.innerHTML !== html) transcript.innerHTML = html;
+  }
+  const footer = select('#historyDetail .history-chat-footer');
+  if (footer) footer.innerHTML = `<span>已显示 ${messages.length} / ${data.total} 条记录</span>${messages.length < data.total ? '<button class="button secondary" type="button" data-more-messages>加载更多记录</button>' : ''}`;
+  if (follow) scroll.scrollTop = scroll.scrollHeight;
+  return messages;
+}
+
 async function loadAgentSession(id: string, offset = 0) {
   historyComposer.unmount();
   const request = ++historyState.detailRequest;
@@ -503,12 +527,12 @@ async function loadAgentSession(id: string, offset = 0) {
     const duration = Math.max(0, Date.parse(session.updatedAt) - Date.parse(session.createdAt));
     const durationText = Number.isFinite(duration) ? `${Math.floor(duration / 60000)} 分钟 ${Math.floor(duration / 1000) % 60} 秒` : '未知';
     panel.innerHTML = `<header class="history-chat-header"><div><h2>${escapeHtml(session.title)}</h2><span>${escapeHtml(session.agentLabel)} · ${escapeHtml(session.cwd?.split('/').filter(Boolean).at(-1) || '未知工作区')}</span></div><span class="history-readonly">${session.agent === 'codex' && state.permissions.includes('work.execute') && !session.archived ? '可续聊' : '只读'}</span></header>
-      <div class="history-chat-content"><details class="history-session-info"><summary>会话跨度 ${durationText}<span>›</span></summary>
+      <div class="history-chat-scroll"><div class="history-chat-content"><details class="history-session-info"><summary>会话跨度 ${durationText}<span>›</span></summary>
       <dl class="history-info"><dt>会话 ID</dt><dd>${escapeHtml(session.sessionId || session.id)}</dd><dt>工作目录</dt><dd>${escapeHtml(session.workspaces?.join('、') || session.cwd || '未知')}</dd><dt>模型 / 分支</dt><dd>${escapeHtml(session.model || '未知')} / ${escapeHtml(session.branch || '未知')}</dd><dt>记录状态</dt><dd>${escapeHtml(historyStatusLabel(session.status))}</dd><dt>创建 / 更新</dt><dd>${historyTime(session.createdAt)} / ${historyTime(session.updatedAt)}</dd></dl></details>
       ${session.partial ? '<p class="history-warning">部分记录损坏、尚未写完或超出读取上限，当前展示部分内容。</p>' : ''}
-      <div class="history-messages">${renderMessages(messages)}</div>
-      <div class="history-chat-footer"><span>已显示 ${messages.length} / ${total} 条记录</span>${messages.length < total ? '<button class="button secondary" type="button" data-more-messages>加载更多记录</button>' : '<span>会话记录结束</span>'}</div><section class="history-composer" id="historyComposer" aria-label="会话输入框"></section></div>`;
-    historyComposer.mount(select('#historyComposer'), session);
+      <div class="history-messages" data-history-transcript>${renderMessages(messages)}</div>
+      <div class="history-chat-footer"><span>已显示 ${messages.length} / ${total} 条记录</span>${messages.length < total ? '<button class="button secondary" type="button" data-more-messages>加载更多记录</button>' : ''}</div><div id="historyLiveOutput" class="history-messages" role="log" aria-live="polite"></div></div></div><section class="history-composer" id="historyComposer" aria-label="会话输入框"></section>`;
+    historyComposer.mount(select('#historyComposer'), session, select('#historyLiveOutput'), messages);
   } catch (error: any) {
     if (request !== historyState.detailRequest) return;
     if (!offset) panel.textContent = `加载失败：${error.message}`;

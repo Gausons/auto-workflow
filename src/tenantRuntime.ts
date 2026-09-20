@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import path from 'node:path';
+import { taskContent } from '../public/taskContent.js';
+import { createHash } from 'node:crypto';
 import { publicIdentity } from './rbac.js';
 import { createSessionDelivery } from './sessionDelivery/index.ts';
 import { createAgentHistory } from './agentHistory/index.js';
@@ -72,13 +74,14 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
   }
 
   async function handleApi(req: any, res: any, url: any) {
+    if (url.pathname === '/api/task-center/git' && req.method === 'POST') { sendJson(res, 200, await codexExecution.git(await readJson(req))); return; }
     if (url.pathname === '/api/task-center/directory-picker') {
       const actor = requestIdentity.getStore().user;
       sendJson(res, 200, req.method === 'GET' ? codexExecution.directoryStatus({ requestId: url.searchParams.get('requestId') }, actor) : await codexExecution.pickDirectory(await readJson(req), actor)); return;
     }
     if (url.pathname === '/api/task-center/directory-action') { sendJson(res, 200, codexExecution.directoryAction(await readJson(req), requestIdentity.getStore().user)); return; }
     if (url.pathname === '/api/task-center/codex') { sendJson(res, 200, await codexExecution.targets()); return; }
-    if (url.pathname === '/api/task-center/execute') { sendJson(res, 202, await codexExecution.execute(await readJson(req))); return; }
+    if (url.pathname === '/api/task-center/execute') { sendJson(res, 202, await codexExecution.execute(await readJson(req, 15_000_000))); return; }
     if (url.pathname === '/api/task-center/execution-action') { sendJson(res, 200, await codexExecution.action(await readJson(req), requestIdentity.getStore().user)); return; }
     if (url.pathname === '/api/task-center') {
       sendJson(res, 200, req.method === 'GET' ? await taskCenter.snapshot() : await taskCenter.command(await readJson(req), requestIdentity.getStore().user)); return;
@@ -126,7 +129,7 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
       const existing = (await taskCenter.snapshot()).tasks.find((task: any) => task.source?.type === 'defect' && task.source.id === bug.id);
       if (existing) return sendJson(res, 200, { taskId: existing.id, revision: existing.revision, existing: true });
       await ensureBugAttachmentsLoaded(bug);
-      const result = await taskCenter.command({ action: 'create', title: `[${bug.code || bug.id}] ${bug.title}`.slice(0, 120), source: { type: 'defect', id: bug.id, code: bug.code || '' }, context: defectTaskContext(bug) }, requestIdentity.getStore().user);
+      const result = await taskCenter.command({ action: 'create', title: `[${bug.code || bug.id}] ${bug.title}`.slice(0, 120), source: { type: 'defect', id: bug.id, code: bug.code || '' }, content: taskContent({ context: defectTaskContext(bug) }) }, requestIdentity.getStore().user);
       sendJson(res, 201, { ...result, existing: false }); return;
     }
     if (req.method === 'POST' && url.pathname === '/api/assignments/apply-all') {
@@ -536,9 +539,9 @@ async function ensureBugAttachmentsLoaded(bug: any) {
     const byId = new Map<any, any>(current.map((bug: any) => [bug.id, bug])); for (const bug of updates) byId.set(bug.id, { ...byId.get(bug.id), ...bug });
     return [...byId.values()].sort((a: any, b: any) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
   }
-  function readJson(req: any): Promise<any> {
+  function readJson(req: any, limit = 1_000_000): Promise<any> {
     return new Promise((resolve, reject) => {
-      let data = ''; req.on('data', (chunk: any) => { data += chunk; if (data.length > 1_000_000) reject(Object.assign(new Error('请求体过大'), { statusCode: 413 })); });
+      let data = '', size = 0; req.on('data', (chunk: any) => { size += chunk.length; if (size > limit) { reject(Object.assign(new Error('请求体过大'), { statusCode: 413 })); return; } data += chunk; });
       req.on('end', () => { if (!data) return resolve({}); try { const parsed = JSON.parse(data); if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('请求体必须是 JSON 对象'); resolve(parsed); } catch (error: any) { reject(Object.assign(error, { statusCode: 400 })); } }); req.on('error', reject);
     });
   }
@@ -558,7 +561,7 @@ async function ensureBugAttachmentsLoaded(bug: any) {
   const agentHistory = createAgentHistory({ environment, tenantId: tenant.id, rootDir, workspace: () => state.config.codexWorkspaceDir });
   const sessionDelivery: any = createSessionDelivery({ history: agentHistory, environment });
   const taskCenter = createTaskCenter({ database, tenantId: tenant.id, history: agentHistory });
-  const codexExecution = createCodexExecution({ database, tenantId: tenant.id, workspace: () => state.config.codexWorkspaceDir, history: agentHistory, environment });
+  const codexExecution = createCodexExecution({ database, attachmentRoot: path.join(rootDir, '.workflow-data', 'attachments', createHash('sha256').update(tenant.id).digest('hex')), tenantId: tenant.id, workspace: () => state.config.codexWorkspaceDir, history: agentHistory, environment });
   return {
     workspace: () => state.config.codexWorkspaceDir,
     async handleApi(req: any, res: any, url: any, principal: any) {

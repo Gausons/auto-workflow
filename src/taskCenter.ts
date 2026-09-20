@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { taskContent, taskTitle } from '../public/taskContent.js';
 import { hostname } from 'node:os';
 import { httpError } from './rbac.js';
 
@@ -27,7 +28,7 @@ export function createTaskCenter({ database, tenantId, history }: any) {
     const synthetic = new Set(data.sessions.filter((s: any) => ['codexExecution', 'agentExecution'].includes(s.source)).map((s: any) => `${s.deviceId}:${s.nativeId}`));
     const sessions = [...local.sessions.filter((s: any) => !synthetic.has(`local:${s.nativeId}`)), ...data.sessions.filter((s: any) => ['codexExecution', 'agentExecution'].includes(s.source) || !synthetic.has(`${s.deviceId}:${s.nativeId}`)).map((s: any) => ['codexExecution', 'agentExecution'].includes(s.source) && s.deviceId === 'local' ? { ...s, historyId: local.sessions.find((l: any) => l.nativeId === s.nativeId)?.historyId } : s)];
     return { ...data, devices: [local.device, ...data.devices].map(d => ({ ...d, online: online(d) })),
-      sessions, tasks: data.tasks.sort((a: any, b: any) => statuses.indexOf(a.status) - statuses.indexOf(b.status) || b.updatedAt.localeCompare(a.updatedAt)) };
+      sessions, tasks: data.tasks.map((task: any) => ({ ...task, content: taskContent(task) })).sort((a: any, b: any) => statuses.indexOf(a.status) - statuses.indexOf(b.status) || b.updatedAt.localeCompare(a.updatedAt)) };
   }
   async function command(input: any, actor: any) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw httpError(400, '请求必须是对象');
@@ -38,10 +39,12 @@ export function createTaskCenter({ database, tenantId, history }: any) {
       const allDevices = [local.device, ...data.devices];
       const taskFor = () => find(data.tasks, input.taskId);
       const editable = (task: any) => { if (input.revision !== task.revision) throw httpError(409, '任务已在其他位置更新，请刷新后重试'); };
-      const saveTask = (title: any, context: any = {}) => {
+      const saveTask = (title: any, context: any = {}, content?: string) => {
+        if (content !== undefined) { content = required(content, 64000); title = taskTitle(content); }
         const task: any = { id: randomUUID(), title: required(title, 120), status: 'ready', revision: 1, contextVersion: 1,
           context: Object.fromEntries(['goal', 'constraints', 'decisions', 'next', 'files'].map(k => [k, text(context[k] ?? (k === 'goal' ? title : ''))])),
           sessionIds: [], events: [], createdAt: now(), updatedAt: now() };
+        if (content !== undefined) { task.content = content; delete task.context; }
         if (input.source?.type === 'defect') task.source = { type: 'defect', id: required(input.source.id, 250), code: text(input.source.code ?? '', 120) };
         event(task, '创建任务'); data.tasks.push(task); return task;
       };
@@ -53,18 +56,25 @@ export function createTaskCenter({ database, tenantId, history }: any) {
       };
       switch (input.action) {
         case 'create': {
-          const task = saveTask(input.title, input.context);
+          const task = saveTask(input.title, input.context, input.content);
           if (input.sessionId) attach(task, input.sessionId);
           return { taskId: task.id, revision: task.revision };
         }
         case 'update': {
           const task = taskFor(); editable(task);
           if (data.executions?.some((j: any) => j.taskId === task.id && ['queued', 'launching', 'running', 'waiting', 'unknown'].includes(j.status))) throw httpError(409, 'Agent 正在执行或结果待核对，请先处理执行记录');
-          task.title = required(input.title, 120);
+          const previousContent = taskContent(task);
+          const content = input.content !== undefined ? required(input.content, 64000) : undefined;
+          task.title = content !== undefined ? taskTitle(content) : required(input.title ?? task.title, 120);
           if (!statuses.includes(input.status)) throw httpError(400, '任务状态无效');
           if (data.handoffs.some((h: any) => h.taskId === task.id && h.mode === 'continue' && ['pending', 'received'].includes(h.status))) throw httpError(409, '请先完成或取消当前交接，再修改任务');
-          const context = Object.fromEntries(['goal', 'constraints', 'decisions', 'next', 'files'].map(k => [k, text(input.context?.[k] ?? '')]));
-          if (JSON.stringify(context) !== JSON.stringify(task.context)) { task.context = context; task.contextVersion++; }
+          if (content !== undefined) {
+            if (content !== previousContent) task.contextVersion++;
+            task.content = content; delete task.context;
+          } else if (input.context !== undefined) {
+            const context = Object.fromEntries(['goal', 'constraints', 'decisions', 'next', 'files'].map(k => [k, text(input.context?.[k] ?? '')]));
+            if (JSON.stringify(context) !== JSON.stringify(task.context)) { task.context = context; delete task.content; task.contextVersion++; }
+          }
           task.status = input.status; task.revision++; event(task, `${input.status === 'completed' ? '用户标记任务完成' : '更新任务'} · 上下文 v${task.contextVersion}`); return { taskId: task.id };
         }
         case 'link': {
@@ -135,12 +145,12 @@ export function createTaskCenter({ database, tenantId, history }: any) {
           }
           const instruction = required(input.instruction);
           let destination = task;
-          if (input.mode === 'branch') { destination = saveTask(`${task.title.slice(0, 110)} · 分支`, task.context); destination.parentTaskId = task.id; }
+          if (input.mode === 'branch') { destination = saveTask(`${task.title.slice(0, 110)} · 分支`, task.context, typeof task.content === 'string' ? task.content : undefined); destination.parentTaskId = task.id; }
           const context: any = { ...task.context };
           if (!input.includeFiles) context.files = '';
           const h: any = { id: randomUUID(), taskId: task.id, destinationTaskId: destination.id, mode: input.mode, deviceId: device.id, agent,
             targetSessionId, sourceSessionId: task.sessionIds.at(-1) || null, status: 'pending', createdAt: now(), updatedAt: now(), sourceRevision: task.revision,
-            packet: { title: task.title, contextVersion: task.contextVersion, context, instruction,
+            packet: { title: task.title, contextVersion: task.contextVersion, content: typeof task.content === 'string' ? task.content : taskContent({ ...task, context }), context, instruction,
               sources: input.includeSources ? task.sessionIds.map((id: any) => allSessions.find(s => s.id === id)).filter(Boolean).map((s: any) => ({ id: s.id, title: s.title, deviceId: s.deviceId, agent: s.agent, nativeId: s.nativeId, cwd: s.cwd, excerpt: s.excerpt, updatedAt: s.updatedAt })) : [],
               limitations: '传递任务摘要和已同步片段；不自动复制文件、不恢复 Agent 内部状态、不自动执行指令。请核对工作目录、文件版本及权限。' } };
           data.handoffs.push(h); task.revision++; event(task, `准备${({ continue: '接续', branch: '分支', reference: '引用' } as Record<string, string>)[h.mode]} → ${device.name} / ${agent}`);

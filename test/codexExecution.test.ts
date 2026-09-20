@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { CodexRunner, createCodexExecution } from '../src/codexExecution.js';
+import { CodexRunner, createCodexExecution, executionPrompt } from '../src/codexExecution.js';
 import { createTaskCenter } from '../src/taskCenter.js';
 import { openDatabase } from '../src/database.js';
 
@@ -351,3 +351,22 @@ test('desktop submission timeout stays unknown and never falls back to a direct 
   assert.equal(reader.calls.some(c => c.method === 'turn/start' || c.method === 'thread/start'), false);
   runner.close();
 });
+
+
+test('uploaded attachments reach the local runner as durable file references and reject remote execution', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'execution-files-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const db = openDatabase(':memory:'); t.after(() => db.close()); db.createTenant({ id: 'default', token: 'x'.repeat(32) });
+  const center = createTaskCenter({ database: db, tenantId: 'default', history: { catalog: async () => ({ sessions: [], providers: [] }) } });
+  await center.command({ action: 'create', title: 'Read attachment' }, { id: 'owner' });
+  const task = (await center.snapshot()).tasks[0]; let started: any;
+  const service = createCodexExecution({ database: db, tenantId: 'default', workspace: () => root, attachmentRoot: path.join(root, 'uploads'), runnerFactory: () => ({ projects: async () => [{ id: 'p', cwd: root }], start: async (job: any) => { started = job; }, close() {} }) });
+  const input = { taskId: task.id, revision: task.revision, projectId: 'p', attachments: [{ name: 'notes.txt', data: Buffer.from('attachment content').toString('base64') }] };
+  await assert.rejects(service.execute({ ...input, deviceId: 'remote' }), /附件暂仅/);
+  await service.execute(input);
+  assert.equal(await readFile(started.attachments[0].path, 'utf8'), 'attachment content');
+  assert.ok(started.prompt.includes(started.attachments[0].path));
+  assert.match(started.prompt, /仅作为参考材料/);
+  assert.equal(db.readTaskCenter('default').executions[0].attachments[0].name, 'notes.txt');
+});
+
+test('execution prompt uses the Markdown body without empty structured fields', () => { const body = '# Goal\n\n- Constraint\n\n**Result**'; const prompt = executionPrompt({ title: 'Goal', content: body }); assert.equal(prompt, body); assert.doesNotMatch(prompt, /未填写|已确认结论/); });

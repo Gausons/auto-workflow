@@ -1,4 +1,5 @@
 import { escape, renderMessages } from './historyView.js';
+import { pendingHistoryMessages } from './historyTimeline.js';
 const requestId = () => {
   const bytes = crypto.getRandomValues(new Uint8Array(16)); bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
   const hex = [...bytes].map(b => b.toString(16).padStart(2, '0')).join('');
@@ -7,9 +8,12 @@ const requestId = () => {
 const busy = new Set(['queued', 'launching', 'running', 'waiting', 'unknown']);
 const names: Record<string, string> = { blocked: '会话被占用 · 未发送', queued: '等待执行', launching: '恢复原会话中', running: '正在回复', waiting: '等待你处理', completed: '本轮完成', failed: '执行失败', interrupted: '已停止', unknown: '结果待核对' };
 
-export function createHistoryComposer({ api, canEdit, refresh }: any) {
+export function createHistoryComposer({ api, canEdit, refresh, syncHistory }: any) {
   const restoredConflicts = new Set<string>();
   const drafts = new Map<string, { text: string; requestId: string; sentText: string }>();
+  let liveOutput: HTMLElement | null = null;
+  let historyMessages: any[] = [], executions: any[] = [];
+  let submission = 0, synchronizedSignature = '';
   let host: HTMLElement | null = null, session: any = null, generation = 0, timer: any, sending = false, polling = false, job: any = null, outputSignature = '';
   const draft = () => { if (!drafts.has(session.id)) drafts.set(session.id, { text: '', requestId: '', sentText: '' }); return drafts.get(session.id)!; };
   const select = (s: string): any => host?.querySelector(s);
@@ -21,19 +25,28 @@ export function createHistoryComposer({ api, canEdit, refresh }: any) {
     if (status) status.textContent = sending ? '正在发送…' : job ? `${names[job.status] || job.status} · ${job.message || ''}${job.executionTransport === 'desktop-ipc' ? ' · 由客户端执行；审批和问题请在客户端处理' : ''}${job.releaseStatus === 'releasing' ? ' · 正在释放网页连接' : job.releaseStatus === 'released' ? ' · 网页连接已释放' : job.releaseStatus === 'failed' ? ' · 会话释放失败，请检查服务进程' : ''}` : '消息将追加到原会话，沿用其上下文与配置。';
     const actions = select('[data-actions]');
     if (actions) actions.innerHTML = job ? `${['queued', 'running', 'waiting'].includes(job.status) ? '<button type="button" data-control="stop">停止</button>' : ''}${job.status === 'waiting' && job.request ? '<button type="button" data-control="respond">处理请求</button>' : ''}${job.status === 'unknown' ? '<button type="button" data-control="reconcile">核对结果</button>' : ''}${!busy.has(job.status) ? '<button type="button" data-refresh>刷新原始记录</button>' : ''}${['failed', 'interrupted', 'blocked'].includes(job.status) ? '<button type="button" data-restore>重新编辑本轮消息</button><button type="button" data-copy>复制本轮消息</button>' : ''}` : '';
-    const output = select('[data-output]');
-    const signature = JSON.stringify([job?.id, job?.prompt, job?.output]);
+    const output = liveOutput;
+    const messages = pendingHistoryMessages(historyMessages, executions);
+    const signature = JSON.stringify(messages);
     if (output && signature !== outputSignature) {
-      const previous = output.querySelector('details');
-      const open = previous ? previous.open : true;
-      output.innerHTML = job ? `<details ${open ? 'open' : ''}><summary>本轮续聊${job.output ? ' · 查看回复' : ''}</summary>${renderMessages([{ role: 'user', text: job.prompt }, ...(job.output ? [{ role: 'assistant', text: job.output }] : [])])}</details>` : '';
+      const scroll = output.closest('.history-chat-scroll');
+      const follow = scroll && scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 100;
+      output.innerHTML = messages.length ? renderMessages(messages) : '';
+      if (follow && scroll) scroll.scrollTop = scroll.scrollHeight;
       outputSignature = signature;
     }
   }
   async function poll() {
     if (!host || !session || polling) return;
-    const current = generation, id = session.id; polling = true;
-    try { const result = await api(`/api/agent-sessions/${id}/continue`); if (current !== generation) return; job = result.execution;
+    const current = generation, id = session.id, revision = submission; polling = true;
+    try { const result = await api(`/api/agent-sessions/${id}/continue`); if (current !== generation || revision !== submission || sending) return;
+      const resultExecutions = result.executions || (result.execution ? [result.execution] : []);
+      const signature = JSON.stringify(resultExecutions);
+      const snapshot = syncHistory && signature !== synchronizedSignature ? await syncHistory(id) : null;
+      if (current !== generation || revision !== submission || sending) return;
+      if (snapshot) historyMessages = snapshot;
+      job = result.execution; executions = resultExecutions;
+      if (!executions.some(item => busy.has(item.status)) && !pendingHistoryMessages(historyMessages, executions).length) synchronizedSignature = signature;
       if (job?.status === 'blocked' && !restoredConflicts.has(job.id)) {
         const state = draft(); if (!state.text.trim()) { state.text = job.prompt; state.requestId = ''; select('textarea').value = state.text; }
         restoredConflicts.add(job.id);
@@ -42,25 +55,25 @@ export function createHistoryComposer({ api, canEdit, refresh }: any) {
     catch (error: any) { if (current === generation && select('[data-error]')) select('[data-error]').textContent = error.message; }
     finally { if (current === generation) { polling = false; timer = setTimeout(poll, 2500); } }
   }
-  function unmount() { generation++; clearTimeout(timer); host = null; session = null; polling = false; sending = false; job = null; outputSignature = ''; }
-  function mount(element: HTMLElement, value: any) {
-    unmount(); host = element; session = value;
+  function unmount() { generation++; clearTimeout(timer); host = null; liveOutput = null; session = null; polling = false; sending = false; job = null; historyMessages = []; executions = []; synchronizedSignature = ''; outputSignature = ''; }
+  function mount(element: HTMLElement, value: any, output?: HTMLElement, messages: any[] = []) {
+    unmount(); host = element; liveOutput = output || null; session = value; historyMessages = messages;
     if (!canEdit() || value.agent !== 'codex' || !value.sessionId || value.archived) {
       host.innerHTML = `<p class="history-meta">${!canEdit() ? '只读成员无法发送消息。' : value.archived ? '请先在 Codex 客户端取消归档，再继续此会话。' : '此 Agent 暂不支持网页原会话续聊，请在对应客户端继续。'}</p>`; return;
     }
     const state = draft();
-    host.innerHTML = `<div class="history-compose-heading"><strong>继续此会话</strong><a href="codex://threads/${encodeURIComponent(value.sessionId)}">在 Codex 中打开 ↗</a></div><div data-output></div><form><label for="historyReply">发送消息</label><textarea id="historyReply" rows="3" maxlength="12000" placeholder="继续讨论，或描述下一步需要完成的工作…" required>${escape(state.text)}</textarea><div class="history-compose-footer"><span class="history-meta">⌘ / Ctrl + Enter 发送</span><button type="submit">发送</button></div></form><p class="history-meta" data-status role="status"></p><p data-error role="alert"></p><div data-actions></div>`;
+    host.innerHTML = `<form class="conversation-composer"><label class="history-sr-only" for="historyReply">发送消息</label><textarea id="historyReply" rows="3" maxlength="12000" placeholder="继续讨论，或描述下一步需要完成的工作…" required>${escape(state.text)}</textarea><div class="history-compose-footer"><a class="conversation-context" href="codex://threads/${encodeURIComponent(value.sessionId)}" title="在 Codex 中打开">↗ ${escape(value.agentLabel || 'Codex')} · ${escape(value.model || '沿用会话配置')}</a><span class="conversation-send"><span class="history-meta">⌘ / Ctrl + Enter</span><button type="submit" aria-label="发送消息" title="发送消息">↑</button></span></div></form><p class="history-meta" data-status role="status"></p><p data-error role="alert"></p><div data-actions></div>`;
     select('textarea').oninput = (e: any) => { state.text = e.target.value; if (state.text.trim() !== state.sentText) state.requestId = ''; update(); };
     select('textarea').onkeydown = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && !e.isComposing) { e.preventDefault(); if (!select('[type="submit"]').disabled) select('form').requestSubmit(); } };
     select('form').onsubmit = async (e: Event) => {
       e.preventDefault(); if (sending || (busy.has(job?.status) || job?.releaseStatus === 'releasing') || !state.text.trim()) return;
-      const current = generation, id = session.id, message = state.text.trim();
+      const current = generation, id = session.id, message = state.text.trim(), createdAt = new Date().toISOString();
       state.requestId ||= requestId(); state.sentText = message;
-      sending = true; select('[data-error]').textContent = ''; update();
+      submission++; sending = true; select('[data-error]').textContent = ''; update();
       try {
-        await api(`/api/agent-sessions/${id}/continue`, { method: 'POST', body: JSON.stringify({ message, requestId: state.requestId }) });
+        const result = await api(`/api/agent-sessions/${id}/continue`, { method: 'POST', body: JSON.stringify({ message, requestId: state.requestId }) });
         if (state.text.trim() === message) state.text = ''; state.requestId = '';
-        if (current === generation) { select('textarea').value = state.text; job = { status: 'queued', prompt: message, message: '已提交到原会话' }; }
+        if (current === generation) { select('textarea').value = state.text; job = { id: result.executionId, createdAt, status: 'queued', prompt: message, message: '已提交到原会话' }; executions = [...executions.filter(item => item.id !== job.id), job]; }
       } catch (error: any) { if (current === generation) select('[data-error]').textContent = `${error.message}。输入已保留；再次发送相同内容不会重复提交。`; }
       finally { if (current === generation) { sending = false; update(); } }
     };

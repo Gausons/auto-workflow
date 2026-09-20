@@ -133,6 +133,9 @@ test('HTTP auth, viewer write rejection, and task UI assets', async t => {
   assert.equal((await req(continuation, 'POST', { message: 'test' })).status, 401);
   assert.equal((await req(continuation, 'POST', { message: 'test' }, viewer.token)).status, 403);
   assert.equal((await req(continuation, 'GET', null, viewer.token)).status, 404);
+  const contentAsset = await fetch(base + '/taskContent.js');
+  assert.equal(contentAsset.status, 200);
+  assert.match(contentAsset.headers.get('content-type') || '', /javascript/);
   const taskCenterAsset = await fetch(base + '/taskCenter.js');
   assert.equal(taskCenterAsset.status, 200);
   const taskCenterScript = await taskCenterAsset.text();
@@ -187,4 +190,30 @@ test('moving and unlinking sessions preserve history and enforce both task revis
   assert.equal(snapshot.sessions.length, 1);
   assert.equal(snapshot.tasks.find((v: any) => v.id === second.taskId).sessionIds.length, 0);
   assert.ok(snapshot.tasks.find((v: any) => v.id === first.taskId).events.some((e: any) => e.message.includes('解除会话关联')));
+});
+
+
+test('single Markdown body supports creation, editing, legacy conversion and handoff without field loss', async t => {
+  const { database, center, cmd } = fixture(t);
+  const content = '# 修复登录\n\n- 保留兼容性\n\n```ts\nconst done = true;\n```';
+  const created = await cmd({ action: 'create', content });
+  let task = (await center.snapshot()).tasks.find((task: any) => task.id === created.taskId);
+  assert.equal(task.title, '修复登录'); assert.equal(task.content, content);
+  assert.equal(database.readTaskCenter('default').tasks[0].context, undefined);
+  await cmd({ action: 'update', taskId: task.id, revision: task.revision, content: '# 更新目标\n\n**完整说明**', status: task.status });
+  task = (await center.snapshot()).tasks.find((task: any) => task.id === created.taskId);
+  assert.equal(task.title, '更新目标'); assert.equal(task.contextVersion, 2);
+  await assert.rejects(cmd({ action: 'create', content: '  ' }), { statusCode: 400 });
+  await assert.rejects(cmd({ action: 'create', content: 'x'.repeat(64001) }), { statusCode: 400 });
+  await cmd(heartbeat());
+  const branched = await cmd(handoff(task, { mode: 'branch' }));
+  const snapshot = await center.snapshot();
+  assert.equal(snapshot.tasks.find((item: any) => item.id === branched.taskId).content, task.content);
+  assert.equal(snapshot.handoffs[0].packet.content, task.content);
+  const legacy = await cmd({ action: 'create', title: '旧任务', context: { goal: '目标', constraints: '约束内容', decisions: '结论', next: '下一步内容', files: 'file.ts' } });
+  const oldTask = (await center.snapshot()).tasks.find((item: any) => item.id === legacy.taskId);
+  for (const text of ['目标', '约束内容', '结论', '下一步内容', 'file.ts']) assert.ok(oldTask.content.includes(text));
+  await cmd({ action: 'update', taskId: oldTask.id, revision: oldTask.revision, content: oldTask.content, status: oldTask.status });
+  const migrated = database.readTaskCenter('default').tasks.find((item: any) => item.id === oldTask.id);
+  assert.equal(migrated.content, oldTask.content); assert.equal(migrated.context, undefined);
 });

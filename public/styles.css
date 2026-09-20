@@ -1623,3 +1623,119 @@ body[data-can-manage-members="false"] [data-settings-target="members"] { display
 .history-composer [data-output] details > summary { cursor: pointer; margin-bottom: 12px; }
 .history-composer [role=alert] { color: #b42318; font-size: 13px; }
 @media (pointer: coarse) { .history-composer button { min-height: 44px; } .history-composer textarea { font-size: 16px; } }
+
+/* New and resumed conversations share a viewport and a docked composer. */
+.history-detail { display: flex; flex-direction: column; overflow: hidden; }
+.history-chat-header { flex: 0 0 auto; padding: 16px 28px; }
+.history-chat-scroll { flex: 1; min-height: 0; overflow-y: auto; scroll-behavior: smooth; }
+.history-chat-content { width: 100%; max-width: 900px; padding: 32px 32px 24px; }
+.history-composer { flex: 0 0 auto; width: 100%; max-width: 900px; margin: 0 auto; padding: 12px 32px 20px; border: 0; background: #fff; max-height: 50%; overflow-y: auto; }
+.history-composer .conversation-composer, .tc-composer.conversation-composer { display: block; border: 1px solid #e5e5e5; border-radius: 24px; padding: 16px; background: #fff; box-shadow: 0 4px 20px #00000006; }
+.conversation-composer:focus-within { border-color: #b8b8b8; box-shadow: 0 4px 20px #00000008; }
+.history-composer textarea, .tc-composer.conversation-composer textarea { display: block; width: 100%; min-height: 76px; max-height: 180px; padding: 0 2px; border: 0; border-radius: 0; outline: none; resize: vertical; background: transparent; font-size: 15px; line-height: 1.7; }
+.history-compose-footer { margin-top: 12px; }
+.conversation-context { color: #777; font-size: 12px; text-decoration: none; overflow-wrap: anywhere; }
+.conversation-context:hover { color: #222; }
+.conversation-send { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+.history-composer button[type=submit] { width: 34px; height: 34px; padding: 0; border-radius: 50%; font-size: 23px; }
+.history-composer [data-status], .history-composer [data-error] { margin: 8px 4px 0; font-size: 11px; }
+.history-composer [data-status]:empty, .history-composer [data-error]:empty, .history-composer [data-actions]:empty { display: none; }
+.history-composer [data-actions]:not(:empty) { margin-top: 8px; }
+#historyLiveOutput:not(:empty) { margin-top: 28px; }
+.history-message.user > div, .tc-create-message { background: #edf4fc; border-radius: 20px; }
+body[data-view="new-task"] .main { padding: 0; }
+body[data-view="new-task"] .task-center { height: 100dvh; display: flex; flex-direction: column; }
+body[data-view="new-task"] .tc-heading { flex: 0 0 auto; min-height: 72px; align-items: center; padding: 14px 28px; margin: 0; border-bottom: 1px solid #eee; }
+body[data-view="new-task"] .tc-heading .eyebrow { display: none; }
+body[data-view="new-task"] .tc-heading h1 { font-size: 18px; font-weight: 600; }
+body[data-view="new-task"] .tc-create { flex: 1; width: 100%; max-width: 900px; height: auto; min-height: 0; padding: 0 32px 20px; }
+.tc-create-log .tc-empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; }
+.tc-composer.conversation-composer { flex: 0 0 auto; max-height: 60%; overflow-y: auto; }
+.conversation-settings { margin-top: 12px; font-size: 12px; color: #777; }
+.conversation-settings > summary { cursor: pointer; width: fit-content; padding: 4px 0; }
+.tc-composer.conversation-composer footer { margin-top: 8px; }
+@media (max-width: 860px) {
+  .history-detail { height: 85dvh; min-height: 480px; }
+  body[data-view="new-task"] .task-center { height: calc(100dvh - 64px); min-height: 480px; }
+}
+@media (max-width: 600px) {
+  .history-chat-content { padding: 24px 16px; }
+  .history-composer { padding: 8px 12px 12px; }
+  body[data-view="new-task"] .tc-create { padding: 0 12px 12px; }
+  .conversation-send > .history-meta { display: none; }
+  .tc-create-directory { flex-wrap: wrap; }
+}
+.tc-composer.conversation-composer button[type=submit] { width: 34px; height: 34px; min-height: 34px; padding: 0; border-radius: 50%; font-size: 23px; }
+
+/* New task: environment above the composer, generation settings in the footer. */
+.tc-create-shell { flex: 0 0 auto; min-width: 0; position: relative; }
+.tc-create-context { display: flex; align-items: center; gap: 12px; margin: 0 12px -12px; padding: 10px 12px 22px; min-height: 58px; border-radius: 18px 18px 0 0; background: #f5f5f5; }
+.tc-create-shell .tc-composer { position: relative; max-height: none; overflow: visible; }
+.tc-create-shell textarea { min-height: 110px; }
+.tc-config-menu { position: relative; min-width: 0; font-size: 14px; color: var(--text); }
+.tc-config-menu > summary { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 8px; cursor: pointer; list-style: none; }
+.tc-config-menu > summary::-webkit-details-marker { display: none; }
+.tc-config-menu > summary:hover, .tc-config-menu[open] > summary { background: #eaeaea; }
+.tc-config-menu > summary:focus-visible, .tc-target-control select:focus-visible, .tc-directory-options button:focus-visible { outline: 2px solid #3478eb; outline-offset: 2px; }
+.tc-config-menu > summary > span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-config-menu svg, .tc-target-control svg { flex-shrink: 0; }
+.tc-config-chevron, .tc-effort-label { color: var(--muted); flex-shrink: 0; }
+.tc-directory-menu { max-width: 45%; }
+.tc-target-control { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 55%; }
+.tc-target-control select { width: 100%; min-width: 0; border: 0; border-radius: 8px; padding: 7px 4px; color: var(--text); background: transparent; font: inherit; font-size: 14px; text-overflow: ellipsis; cursor: pointer; }
+.tc-config-panel { position: absolute; bottom: calc(100% + 10px); left: 0; width: 340px; max-width: calc(100vw - 64px); max-height: min(380px, 50dvh); overflow-y: auto; z-index: 20; padding: 16px; border: 1px solid #e5e5e5; border-radius: 14px; background: #fff; box-shadow: 0 8px 32px #00000014; }
+.tc-config-panel > .tc-create-setting { display: block; margin-bottom: 12px; }
+.tc-config-panel > input { width: 100%; min-width: 0; padding: 10px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+.tc-config-panel > input:focus-visible { outline: 2px solid #3478eb; outline-offset: 1px; }
+.tc-config-panel .tc-actions { gap: 6px; margin-bottom: 14px; }
+.tc-config-panel .button { padding: 7px 10px; font-size: 13px; }
+.tc-directory-options { display: grid; gap: 4px; margin-top: 6px; }
+.tc-directory-options button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px; border: 0; border-radius: 8px; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.tc-directory-options button:hover, .tc-directory-options button[aria-pressed="true"] { background: #f3f5f7; }
+.tc-directory-options span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tc-directory-options small { display: block; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
+.tc-create-send { display: flex; align-items: center; justify-content: flex-end; gap: 12px; min-width: 0; }
+.tc-create-send button[type=submit] { flex-shrink: 0; }
+.tc-model-menu { min-width: 0; }
+.tc-model-menu .tc-config-panel { left: auto; right: 0; }
+.tc-create-shortcut { color: #999; font-size: 12px; white-space: nowrap; }
+.tc-create-shell .tc-form-error:empty { display: none; }
+@media (max-width: 600px) {
+  .tc-create-context { gap: 6px; margin-left: 6px; margin-right: 6px; padding-left: 6px; padding-right: 6px; }
+  .tc-create-shortcut { display: none; }
+  .tc-create-send { width: 100%; }
+  .tc-create-context .tc-config-menu > summary { padding-left: 4px; padding-right: 4px; }
+  .tc-target-control { gap: 4px; }
+  .tc-target-control select, .tc-config-menu { font-size: 13px; }
+  .tc-model-menu .tc-config-panel { right: -46px; }
+  .tc-config-panel { max-width: calc(100vw - 60px); }
+}
+.tc-create-context { flex-wrap: wrap; gap: 8px; }
+.tc-create-context .tc-target-control { max-width: 50%; }
+.tc-branch-menu { max-width: 40%; }
+.tc-branch-options { display: grid; gap: 3px; max-height: 180px; overflow-y: auto; margin: 10px 0; }
+.tc-branch-options button { border: 0; background: transparent; text-align: left; padding: 9px; border-radius: 7px; overflow-wrap: anywhere; cursor: pointer; }
+.tc-branch-options button:hover, .tc-branch-options button[aria-pressed=true] { background: #f2f4f7; }
+.tc-branch-menu .tc-create-setting input { display: block; width: 100%; margin-top: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
+.tc-create-tools { display: flex; gap: 8px; align-items: center; }
+.tc-attach-button { font-size: 24px; background: transparent; border: 0; border-radius: 50%; width: 34px; height: 34px; cursor: pointer; }
+.tc-attach-button:hover { background: #f3f3f3; }
+.tc-attach-button:disabled { opacity: .4; cursor: default; }
+.tc-attachment-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.tc-attachment { display: flex; align-items: center; gap: 7px; max-width: 100%; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
+.tc-attachment > span { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-attachment small { color: var(--muted); white-space: nowrap; }
+.tc-attachment button { background: transparent; border: 0; cursor: pointer; }
+@media (max-width: 600px) {
+  .tc-branch-menu .tc-config-panel { left: 0; }
+  .tc-create-send { width: auto; flex: 1; }
+  .tc-branch-menu { max-width: 100%; }
+  .tc-create-context { position: relative; }
+  .tc-branch-menu { position: static; }
+}
+.tc-branch-menu .tc-config-panel { left: auto; right: 0; }
+@media (max-width: 600px) { .tc-branch-menu .tc-config-panel { left: 0; right: auto; } }
+.tc-task-content { padding: 8px 0 20px; overflow-wrap: anywhere; }
+.tc-task-content > :first-child { margin-top: 0; }
+.tc-task-content pre { max-width: 100%; overflow-x: auto; }
+.tc-dialog textarea.tc-markdown-editor { min-height: 300px; max-height: 65dvh; line-height: 1.7; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; resize: vertical; }

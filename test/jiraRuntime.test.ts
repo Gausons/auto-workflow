@@ -71,8 +71,8 @@ test('Jira runtime sync, attachment/assignment dispatch, auth, failure atomicity
     assert.equal(createdTask.status, 201);
     const taskSnapshot = await request(owner, '/api/task-center');
     assert.equal(taskSnapshot.body.tasks[0].source.id, 'jira:100');
-    assert.match(taskSnapshot.body.tasks[0].context.goal, /DEMO-1/);
-    assert.match(taskSnapshot.body.tasks[0].context.files, /demo\.txt/);
+    assert.match(taskSnapshot.body.tasks[0].content, /DEMO-1/);
+    assert.match(taskSnapshot.body.tasks[0].content, /demo\.txt/);
     const existingTask = await request(owner, '/api/bugs/jira%3A100/task', 'POST', {});
     assert.equal(existingTask.body.taskId, createdTask.body.taskId);
     assert.equal(existingTask.body.existing, true);

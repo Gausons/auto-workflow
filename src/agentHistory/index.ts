@@ -32,6 +32,7 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
       createdAt: null, updatedAt: null, messageCount: 0, partial: info.size > MAX_BYTES };
     const entries: any[] = [], fallback = [];
     let count = 0, fallbackCount = 0, firstPrompt = '', fallbackPrompt = '', malformed = 0, conversationCount = 0;
+    let turnId: string | undefined;
     const checkedCwds = new Map();
     const stream = createReadStream(file, { encoding: 'utf8', start: 0, end: MAX_BYTES - 1 });
     const lines = createInterface({ input: stream, crlfDelay: Infinity });
@@ -42,6 +43,7 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
         try { row = JSON.parse(line); } catch { malformed++; continue; }
         if (!row || typeof row !== 'object') continue;
         const decoded = adapter.decode(row);
+        if (adapter.id === 'codex' && (row.type === 'turn_context' || (row.type === 'event_msg' && row.payload?.type === 'task_started'))) turnId = row.payload?.turn_id || turnId;
         if (decoded.cwd) {
           if (!checkedCwds.has(decoded.cwd)) checkedCwds.set(decoded.cwd, authorized(decoded.cwd, allowed) ? canonicalWorkspace(decoded.cwd) : null);
           if (!checkedCwds.get(decoded.cwd)) return null;
@@ -56,6 +58,7 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
         if (date(decoded.createdAt)) session.createdAt = date(decoded.createdAt);
         for (const item of decoded.entries || []) {
           if (!item.text && !item.images?.length) continue;
+          if (turnId) item.turnId = turnId;
           if (decoded.fallback) {
             fallbackCount++;
             if (item.role === 'user') fallbackPrompt ||= item.text || (item.images?.length ? '图片会话' : '');

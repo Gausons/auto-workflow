@@ -208,3 +208,16 @@ test('preserves image-only messages from Codex and Claude', async (t) => {
     assert.equal(detail.messages[0].images[0].dataUrl, 'data:image/png;base64,aGVsbG8=');
   }
 });
+
+test('Codex transcript preserves turn identity across repeated messages', async t => {
+  const f = await fixture(t);
+  const rows: any[] = [{ type: 'session_meta', timestamp, payload: { id: 'turn-test', cwd: f.workspace } }];
+  for (const turnId of ['first-turn', 'second-turn']) {
+    rows.push({ type: 'event_msg', timestamp, payload: { type: 'task_started', turn_id: turnId } });
+    rows.push(...codex(f.workspace).slice(1));
+  }
+  await f.save(path.join(f.codexDir, 'turns.jsonl'), rows);
+  const list = await f.history.list();
+  const detail = await f.history.detail(list.sessions[0].id);
+  assert.deepEqual(detail.messages.filter((m: any) => m.role === 'user').map((m: any) => m.turnId), ['first-turn', 'second-turn']);
+});

@@ -37,7 +37,7 @@ test('conversation creation preserves drafts, prevents duplicate sends and suppo
   fail = false;
   await Promise.all([submit(), submit()]);
   assert.equal(writes, 2);
-  assert.deepEqual(bodies[1], { action: 'create', title: '修复登录', context: { goal: '修复登录\n保留 <完整需求>' }, sessionId: null });
+  assert.deepEqual(bodies[1], { action: 'create', content: '修复登录\n保留 <完整需求>', sessionId: null });
   assert.match(root.innerHTML, /任务已创建/);
   assert.match(root.innerHTML, /data-id="created-task"/);
   assert.doesNotMatch(root.innerHTML, /暂时无法创建/);
