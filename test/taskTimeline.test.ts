@@ -12,3 +12,14 @@ test('backfilled history uses original time, executions nest once and missing so
   assert.equal(entries.find(e => e.id === 'gone')?.value.missing, true);
   assert.equal(taskActivity(task, data), Date.parse('2026-09-18T16:00:00Z'));
 });
+
+
+test('audit transitions do not become timeline nodes while actionable execution and handoff records remain', () => {
+  const task = { id: 'task', sessionIds: [], events: ['创建任务', '已提交 Codex 执行（ACP）', '正在创建会话', '正在执行', '本轮执行完成'].map((message, index) => ({ id: `event-${index}`, message })) };
+  const data = { sessions: [], executions: ['failed', 'waiting', 'completed'].map(status => ({ id: status, taskId: 'task', status, output: status === 'completed' ? '完成结果' : '' })), handoffs: [{ id: 'handoff', taskId: 'task', status: 'pending' }] };
+  const timeline = taskTimeline(task, data);
+  assert.equal(timeline.length, 4);
+  assert.ok(timeline.every(item => item.kind === 'execution' || item.kind === 'handoff'));
+  assert.equal(timeline.find(item => item.id === 'completed')?.value.output, '完成结果');
+  assert.equal(task.events.length, 5, 'audit data is preserved without appearing in the reading timeline');
+});

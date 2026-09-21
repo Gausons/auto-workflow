@@ -9,6 +9,6 @@ export function taskTimeline(task: any, data: any) {
   const linkedJobs = new Set(items.flatMap(i => i.jobs.map((j: any) => j.id)));
   items.push(...jobs.filter((j: any) => !linkedJobs.has(j.id)).map((j: any) => ({ kind: 'execution', id: j.id, at: j.createdAt, value: j })));
   items.push(...data.handoffs.filter((h: any) => h.taskId === task.id || h.destinationTaskId === task.id).map((h: any) => ({ kind: 'handoff', id: h.id, at: h.createdAt, value: h })));
-  items.push(...task.events.map((e: any) => ({ kind: 'event', id: e.id, at: e.at, value: e })));
+  // Audit events are stored separately; the reading timeline focuses on conversations and outcomes.
   return items.sort((a, b) => stamp(a.at) - stamp(b.at) || a.id.localeCompare(b.id));
 }

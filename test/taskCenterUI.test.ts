@@ -49,7 +49,7 @@ test('task timeline reads in place and background polling never replaces the rea
   const handlers: Record<string, any> = {};
   const panel = { innerHTML: '' }, notice = { hidden: true };
   const root = { innerHTML: '', addEventListener(name: string, handler: any) { handlers[name] = handler; }, querySelector(selector: string) { if (selector === '#tc-updates') return notice; if (selector.startsWith('[data-session-body=')) return panel; return null; } };
-  const snapshot: any = { tasks: [{ id: 'task', title: '修复登录', status: 'review', context: { goal: '目标' }, contextVersion: 1, revision: 1, sessionIds: ['session'], events: [], updatedAt: '2026-09-18T10:00:00Z' }], sessions: [{ id: 'session', nativeId: 'thread', title: '定位故障', deviceId: 'local', agent: 'codex', updatedAt: '2026-09-18T10:00:00Z' }], devices: [{ id: 'local', name: 'Mac', agents: ['codex'], online: true }], handoffs: [], executions: [] };
+  const snapshot: any = { tasks: [{ id: 'task', title: '修复登录', status: 'review', context: { goal: '目标' }, contextVersion: 1, revision: 1, sessionIds: ['session'], events: [], updatedAt: '2026-09-18T10:00:00Z' }], sessions: [{ id: 'session', nativeId: 'thread', title: '定位故障', deviceId: 'local', agent: 'codex', updatedAt: '2026-09-18T10:00:00Z' }], devices: [{ id: 'local', name: 'Mac', agents: ['codex'], online: true }], handoffs: [], executions: [{ id: 'completed', taskId: 'task', deviceId: 'local', agent: 'codex', sessionId: 'thread', status: 'completed', output: '不应重复显示的执行回复', createdAt: '2026-09-18T10:00:00Z' }] };
   let reads = 0;
   const ui = createTaskCenterUI({ root, canEdit: () => true, toast() {}, api: async (url: string) => {
     if (url.startsWith('/api/agent-sessions/')) { reads++; return { messages: [{ role: 'assistant', text: reads === 1 ? '**第一段**' : '第二段' }], total: 2, session: {} }; }
@@ -59,6 +59,7 @@ test('task timeline reads in place and background polling never replaces the rea
   await ui.load();
   assert.match(root.innerHTML, /任务时间线/);
   assert.match(root.innerHTML, /待验收/);
+  assert.doesNotMatch(root.innerHTML, /本轮已完成|执行详情|不应重复显示的执行回复/);
   await click('read-session', 'session');
   assert.match(panel.innerHTML, /<strong>第一段<\/strong>/);
   await click('more-session', 'session');
