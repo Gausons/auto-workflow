@@ -11,6 +11,11 @@ export function cleanUserContext(value: any) {
   if (/^# AGENTS\.md instructions for [^\n]+\n/.test(result.trim()) && /<INSTRUCTIONS>[\s\S]*<\/INSTRUCTIONS>/.test(result)) {
     result = result.replace(/^\s*# AGENTS\.md instructions for [^\n]+\n\s*<INSTRUCTIONS>[\s\S]*?<\/INSTRUCTIONS>/, '');
   }
+  const attachments = result.match(/^\s*# Files mentioned by the user:\s*[\s\S]*?^## My request:\s*\n/m);
+  if (attachments?.index === 0) result = result.slice(attachments[0].length);
+  result = result
+    .replace(/^\s*<image name=\[Image #\d+\] path="[^"\r\n]+">\s*$/gm, '')
+    .replace(/^\s*<\/image>\s*$/gm, '');
   return result.trim();
 }
 const blocksText = (content: any) => typeof content === 'string' ? content : (Array.isArray(content) ? content : [])
