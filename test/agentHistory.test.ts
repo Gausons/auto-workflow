@@ -51,7 +51,7 @@ test('normalizes both agents, deduplicates Codex events, filters and paginates',
   assert.deepEqual(detail.messages.map((m: any) => m.role), ['tool_call', 'tool_result']);
   assert.equal(detail.total, 4);
   const claudeDetail = await f.history.detail(list.sessions[0].id);
-  assert.equal(claudeDetail.messages.at(-1).text, 'ok');
+  assert.equal(claudeDetail.messages.at(-1)?.text, 'ok');
   await assert.rejects(f.history.list(new URLSearchParams({ agent: 'missing' })), { statusCode: 400 });
   await assert.rejects(f.history.list(new URLSearchParams({ limit: 'NaN' })), { statusCode: 400 });
 });
