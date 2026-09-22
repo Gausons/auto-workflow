@@ -149,18 +149,18 @@ test('durable execution reservations isolate tenants, reject duplicates, and rec
   assert.equal((await center.snapshot()).tasks[0].status, 'review');
   const latest = (await center.snapshot()).tasks[0];
   await service.execute({ ...input, revision: latest.revision, cwd: alternative, model: 'model-1', reasoningEffort: 'high', sourceSessionId: latest.sessionIds[0], instruction: '补充回归验证' });
-  assert.equal(db.readTaskCenter('default').executions.at(-1).cwd, await realpath(alternative), 'an arbitrary accessible cwd is accepted');
-  assert.match(db.readTaskCenter('default').executions.at(-1).prompt, /补充回归验证/);
-  assert.match(db.readTaskCenter('default').executions.at(-1).prompt, /历史参考材料/);
-  assert.equal(db.readTaskCenter('default').executions.at(-1).sourceSessionId, latest.sessionIds[0]);
-  assert.equal(db.readTaskCenter('default').executions.at(-1).model, 'model-1');
-  assert.equal(db.readTaskCenter('default').executions.at(-1).reasoningEffort, 'high');
+  assert.equal(db.readTaskCenter('default').executions.at(-1)!.cwd, await realpath(alternative), 'an arbitrary accessible cwd is accepted');
+  assert.match(db.readTaskCenter('default').executions.at(-1)!.prompt, /补充回归验证/);
+  assert.match(db.readTaskCenter('default').executions.at(-1)!.prompt, /历史参考材料/);
+  assert.equal(db.readTaskCenter('default').executions.at(-1)!.sourceSessionId, latest.sessionIds[0]);
+  assert.equal(db.readTaskCenter('default').executions.at(-1)!.model, 'model-1');
+  assert.equal(db.readTaskCenter('default').executions.at(-1)!.reasoningEffort, 'high');
   assert.ok((await service.targets()).projects[0].commonDirectories.includes(await realpath(alternative)));
   update({ ...db.readTaskCenter('default').executions[0], status: 'completed', desktopOpened: true });
   assert.equal((await center.snapshot()).tasks[0].status, 'running', 'late updates from an old run must not overwrite the newer run');
   service.close();
   const restarted = createCodexExecution({ database: db, tenantId: 'default', workspace: () => root, runnerFactory: factory });
-  assert.equal(db.readTaskCenter('default').executions.at(-1).status, 'unknown');
+  assert.equal(db.readTaskCenter('default').executions.at(-1)!.status, 'unknown');
   await assert.rejects(restarted.execute({ ...input, revision: (await center.snapshot()).tasks[0].revision }), { statusCode: 409 });
   assert.equal(started, 2); assert.ok(result.executionId); restarted.close();
 });
@@ -366,7 +366,7 @@ test('uploaded attachments reach the local runner as durable file references and
   assert.equal(await readFile(started.attachments[0].path, 'utf8'), 'attachment content');
   assert.ok(started.prompt.includes(started.attachments[0].path));
   assert.match(started.prompt, /仅作为参考材料/);
-  assert.equal(db.readTaskCenter('default').executions[0].attachments[0].name, 'notes.txt');
+  assert.equal(db.readTaskCenter('default').executions[0]!.attachments?.[0]?.name, 'notes.txt');
 });
 
 test('execution prompt uses the Markdown body without empty structured fields', () => { const body = '# Goal\n\n- Constraint\n\n**Result**'; const prompt = executionPrompt({ title: 'Goal', content: body }); assert.equal(prompt, body); assert.doesNotMatch(prompt, /未填写|已确认结论/); });
