@@ -165,8 +165,9 @@ export class CodexRunner {
   }
   async notification({ method, params }: any) {
     const job = [...this.jobs.values()].reverse().find(j => j.threadId === params?.threadId && ['launching', 'running', 'waiting'].includes(j.status) && (!j.turnId || !(params.turnId || params.turn?.id) || j.turnId === (params.turnId || params.turn?.id))); if (!job) return;
-    if (method === 'item/agentMessage/delta') this.publish(job, { output: `${job.output || ''}${params.delta || ''}`.slice(-24000) });
-    if (method === 'item/completed' && params.item?.type === 'agentMessage') this.publish(job, { output: String(params.item.text || '').slice(-24000) });
+    if (method === 'item/agentMessage/delta') this.publish(job, { output: job.conversationId ? `${job.output || ''}${params.delta || ''}` : `${job.output || ''}${params.delta || ''}`.slice(-24000) });
+    if (method === 'item/completed' && params.item?.type === 'agentMessage') this.publish(job, { output: job.conversationId ? String(params.item.text || '') : String(params.item.text || '').slice(-24000) });
+    if (job.conversationId && method === 'item/completed' && ['commandExecution', 'fileChange', 'mcpToolCall', 'webSearch'].includes(params.item?.type)) this.publish(job, { contextEvents: [...(job.contextEvents || []), params.item] });
     if (method === 'turn/completed') {
       const state: any = ({ completed: 'completed', interrupted: 'interrupted', failed: 'failed' } as Record<string, string>)[params.turn.status] || 'failed';
       this.publish(job, { status: state, releaseStatus: 'releasing', turnId: params.turn.id, request: null, message: params.turn.error?.message || ({ completed: 'Codex 本轮执行完成', interrupted: '执行已停止', failed: 'Codex 执行失败' } as Record<string, string>)[state] });
@@ -251,7 +252,11 @@ export function recordExecution(data: any, job: any) {
       Object.assign(saved, job);
       const task = data.tasks.find((t: any) => t.id === saved.taskId); if (!task) return;
       const nativeSessionId = job.sessionId || job.threadId;
-      if (nativeSessionId && !job.historySessionId) {
+      if (job.conversationId) {
+        const session = data.sessions.find((s: any) => s.id === job.conversationId);
+        if (session) Object.assign(session, { ...(nativeSessionId ? { nativeId: nativeSessionId } : {}), protocol: job.protocol, status: job.status, updatedAt: job.updatedAt, excerpt: `${job.userMessage || ''}\n\n${job.output || ''}` });
+      }
+      if (nativeSessionId && !job.historySessionId && !job.conversationId) {
         const agent = job.agent || 'codex';
         const id = createHash('sha256').update(`agent-execution:${agent}:${nativeSessionId}`).digest('hex');
         let session = data.sessions.find((s: any) => s.id === id);
@@ -305,6 +310,9 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
     }
   });
   return {
+    launch(job: any) {
+      if (job.deviceId === 'local') void Promise.resolve().then(() => runner.start(job)).catch((error: any) => update({ ...(database.readTaskCenter(tenantId).executions.find((j: any) => j.id === job.id) || job), status: 'unknown', message: `启动结果待核对：${error.message}`, updatedAt: timestamp() }));
+    },
     async targets() {
       let localError: any = null, projects = [];
       try { projects = (await runner.projects(workspace())).map((p: any) => ({ ...p, deviceId: 'local', deviceName: '工作台所在设备', online: true })); }
@@ -481,8 +489,12 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
             if (['completed', 'failed', 'interrupted'].includes(saved.status) && report.status !== saved.status) throw httpError(409, '执行已经结束');
             const patch: any = {};
             for (const key of ['threadId', 'sessionId', 'turnId', 'message', 'output', 'desktopMessage', 'protocol', 'agent', 'agentLabel']) if (report[key] !== undefined) {
-              if (report[key] !== null && (typeof report[key] !== 'string' || report[key].length > (key === 'output' ? 24000 : 2000))) throw httpError(400, '回报字段无效');
+              if (report[key] !== null && (typeof report[key] !== 'string' || report[key].length > (key === 'output' ? (saved.conversationId ? 2 * 1024 * 1024 : 24000) : 2000))) throw httpError(400, '回报字段无效');
               patch[key] = report[key];
+            }
+            if (saved.conversationId && report.contextEvents !== undefined) {
+              if (!Array.isArray(report.contextEvents) || JSON.stringify(report.contextEvents).length > 4 * 1024 * 1024) throw httpError(400, '工具记录过大');
+              patch.contextEvents = report.contextEvents;
             }
             if (JSON.stringify(report.request || null).length > 64000) throw httpError(400, '交互请求过大');
             recordExecution(data, { ...saved, ...patch, status: report.status, request: report.request || null, desktopOpened: Boolean(report.desktopOpened), updatedAt: timestamp() });

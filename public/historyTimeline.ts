@@ -5,8 +5,9 @@ export function pendingHistoryMessages(messages: any[], executions: any[]) {
     // A rejected submission is not a conversation message. Its error and retry
     // controls remain in the composer status.
     if (['failed', 'blocked', 'interrupted'].includes(job.status) && !job.turnId && !job.output) return [];
+    const turnId = job.conversationId ? job.id : job.turnId;
     const start = messages.findIndex(m => m.role === 'user' && m.text === job.prompt &&
-      (job.turnId && m.turnId ? m.turnId === job.turnId :
+      (turnId && m.turnId ? m.turnId === turnId :
         Number.isFinite(Date.parse(job.createdAt)) && Date.parse(m.timestamp) >= Date.parse(job.createdAt)));
     const end = start < 0 ? -1 : messages.findIndex((m, i) => i > start && m.role === 'user');
     const turn = start < 0 ? [] : messages.slice(start, end < 0 ? undefined : end);

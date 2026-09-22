@@ -25,8 +25,8 @@ export function createTaskCenter({ database, tenantId, history }: any) {
   }
   function snapshot(local: any) {
     const data = database.readTaskCenter(tenantId);
-    const synthetic = new Set(data.sessions.filter((s: any) => ['codexExecution', 'agentExecution'].includes(s.source)).map((s: any) => `${s.deviceId}:${s.nativeId}`));
-    const sessions = [...local.sessions.filter((s: any) => !synthetic.has(`local:${s.nativeId}`)), ...data.sessions.filter((s: any) => ['codexExecution', 'agentExecution'].includes(s.source) || !synthetic.has(`${s.deviceId}:${s.nativeId}`)).map((s: any) => ['codexExecution', 'agentExecution'].includes(s.source) && s.deviceId === 'local' ? { ...s, historyId: local.sessions.find((l: any) => l.nativeId === s.nativeId)?.historyId } : s)];
+    const synthetic = new Set(data.sessions.filter((s: any) => ['codexExecution', 'agentExecution', 'conversation'].includes(s.source)).map((s: any) => `${s.deviceId}:${s.nativeId}`));
+    const sessions = [...local.sessions.filter((s: any) => !synthetic.has(`local:${s.nativeId}`)), ...data.sessions.filter((s: any) => ['codexExecution', 'agentExecution', 'conversation'].includes(s.source) || !synthetic.has(`${s.deviceId}:${s.nativeId}`)).map((s: any) => ['codexExecution', 'agentExecution', 'conversation'].includes(s.source) && s.source !== 'conversation' && s.deviceId === 'local' ? { ...s, historyId: local.sessions.find((l: any) => l.nativeId === s.nativeId)?.historyId } : s)];
     return { ...data, devices: [local.device, ...data.devices].map(d => ({ ...d, online: online(d) })),
       sessions, tasks: data.tasks.map((task: any) => ({ ...task, content: taskContent(task) })).sort((a: any, b: any) => statuses.indexOf(a.status) - statuses.indexOf(b.status) || b.updatedAt.localeCompare(a.updatedAt)) };
   }
@@ -93,6 +93,11 @@ export function createTaskCenter({ database, tenantId, history }: any) {
             if (target.revision !== input.targetRevision || busy(target.id)) throw httpError(409, '目标任务已更新或正在执行，请刷新后重试');
           }
           const session = allSessions.find((s: any) => s.id === input.sessionId);
+          if (session?.source === 'conversation') {
+            if (!target) throw httpError(409, '工作台新会话需要保留任务归属，请移动到其他任务');
+            session.taskId = target.id;
+            for (const job of data.executions || []) if (job.conversationId === session.id) job.taskId = target.id;
+          }
           task.sessionIds = task.sessionIds.filter((id: string) => id !== input.sessionId);
           task.revision++; event(task, `解除会话关联：${session?.title || input.sessionId}`);
           if (target) { target.sessionIds.push(input.sessionId); target.revision++; event(target, `从任务「${task.title}」移入会话：${session?.title || input.sessionId}`); }

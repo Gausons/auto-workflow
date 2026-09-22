@@ -144,7 +144,7 @@ test('version 1 migration preserves tenant data; salted passwords, session expir
     assert.notEqual(hashes[0]!.password_hash, hashes[1]!.password_hash);
     raw.prepare('UPDATE user_sessions SET expires_at = ?').run(Date.now() - 1);
     assert.equal(db.authenticateSession(session.token), null);
-    assert.equal(raw.prepare('PRAGMA user_version').get()?.user_version, 4);
+    assert.equal(raw.prepare('PRAGMA user_version').get()?.user_version, 5);
     assert.equal(raw.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workflow_items'").get(), undefined);
     assert.equal(raw.prepare('SELECT count(*) AS count FROM issue_items').get()?.count, 1);
     raw.close();

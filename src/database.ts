@@ -12,7 +12,7 @@ export function openDatabase(filename: any) {
   const db = new DatabaseSync(filename);
   db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
   const version = Number(db.prepare('PRAGMA user_version').get()?.user_version || 0);
-  if (version > 4) { db.close(); throw new Error('数据库版本高于当前程序支持的版本'); }
+  if (version > 5) { db.close(); throw new Error('数据库版本高于当前程序支持的版本'); }
   if (version === 0) {
     transaction(() => {
       db.exec(readFileSync(new URL('../migrations/001_initial.sql', import.meta.url), 'utf8'));
@@ -36,6 +36,13 @@ export function openDatabase(filename: any) {
     transaction(() => {
       db.exec(readFileSync(new URL('../migrations/004_remove_workflows.sql', import.meta.url), 'utf8'));
       db.exec('PRAGMA user_version = 4');
+    });
+  }
+
+  if (version < 5) {
+    transaction(() => {
+      db.exec(readFileSync(new URL('../migrations/005_session_context.sql', import.meta.url), 'utf8'));
+      db.exec('PRAGMA user_version = 5');
     });
   }
 
@@ -129,6 +136,13 @@ export function openDatabase(filename: any) {
   }
   return {
     ...createIdentityStore(db, transaction),
+    readSessionContext: (tenantId: string, id: string) => {
+      const row = db.prepare('SELECT payload FROM session_contexts WHERE tenant_id = ? AND id = ?').get(tenantId, id);
+      return row ? JSON.parse(String(row.payload)) : null;
+    },
+    saveSessionContext: (tenantId: string, snapshot: any) => {
+      db.prepare('INSERT INTO session_contexts VALUES (?, ?, ?) ON CONFLICT(tenant_id, id) DO NOTHING').run(tenantId, snapshot.id, JSON.stringify(snapshot));
+    },
     readTaskCenter: (tenantId: any) => JSON.parse(String(db.prepare('SELECT payload FROM task_centers WHERE tenant_id = ?').get(tenantId)?.payload || '{"tasks":[],"devices":[],"sessions":[],"handoffs":[]}')),
     mutateTaskCenter: (tenantId: any, update: any) => transaction(() => {
       const data = JSON.parse(String(db.prepare('SELECT payload FROM task_centers WHERE tenant_id = ?').get(tenantId)?.payload || '{"tasks":[],"devices":[],"sessions":[],"handoffs":[]}'));
