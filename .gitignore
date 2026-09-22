@@ -1,6 +1,7 @@
 # Only reviewed source, schema, tests and documentation may be published.
 /*
 !/.gitignore
+!/AGENTS.md
 !/.env.example
 !/README.md
 !/docs/
