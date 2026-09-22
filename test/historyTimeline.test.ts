@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { pendingHistoryMessages } from '../public/historyTimeline.js';
 import { createHistoryComposer } from '../public/historyComposer.js';
+import type { HistoryMessage } from '../public/taskTypes.js';
 
 const job = { id: 'job-1', turnId: 'turn-1', prompt: '查金价', output: '金价回复', status: 'completed', createdAt: '2026-09-20T01:00:00Z' };
 const saved = [{ role: 'user', text: job.prompt, turnId: job.turnId }, { role: 'assistant', text: job.output, turnId: job.turnId }];
@@ -27,15 +28,15 @@ test('legacy records use submission time instead of collapsing repeated text', (
 
 test('composer keeps every pending turn and removes persisted copies without remounting the input', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const nodes = new Map<string, any>();
+  const nodes = new Map<string, { value: string; innerHTML: string; textContent: string; disabled: boolean }>();
   const node = (selector: string) => {
     if (!nodes.has(selector)) nodes.set(selector, { value: '', innerHTML: '', textContent: '', disabled: false });
-    return nodes.get(selector);
+    return nodes.get(selector)!;
   };
-  const host: any = { innerHTML: '', querySelector: node };
-  const output: any = { innerHTML: '', closest: () => null };
+  const host = { innerHTML: '', querySelector: node } as unknown as HTMLElement;
+  const output = { innerHTML: '', closest: () => null } as unknown as HTMLElement;
   const second = { ...job, id: 'job-2', turnId: 'turn-2', prompt: '第二轮', output: '第二轮回复' };
-  let records: any[] = [], executions = [job];
+  let records: HistoryMessage[] = [], executions = [job];
   const composer = createHistoryComposer({ api: async () => ({ execution: executions.at(-1), executions }), canEdit: () => true,
     syncHistory: async () => records, refresh: () => {} });
   t.after(() => composer.unmount());

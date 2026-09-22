@@ -1,9 +1,9 @@
 // Restricted Markdown renderer; attachments are validated separately from message text.
-type HistoryImage = { dataUrl?: string; alt?: string };
-type HistoryMessage = { role: string; text?: string; name?: string; callId?: string; images?: HistoryImage[] };
+import type { HistoryMessage } from './taskTypes.js';
+type HistoryImage = NonNullable<HistoryMessage['images']>[number];
 const entities: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 export const escape = (text: unknown) => String(text ?? '').replace(/[&<>"']/g, (c) => entities[c] || c);
-function inline(text: any) {
+function inline(text: string) {
   const pattern = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g;
   let output = '', offset = 0;
   for (const match of text.matchAll(pattern)) {
@@ -13,10 +13,10 @@ function inline(text: any) {
   }
   return output + escape(text.slice(offset));
 }
-export function renderMarkdown(text: any) {
+export function renderMarkdown(text: unknown) {
   const lines = String(text).split('\n');
-  let html = '', paragraph: any = [], list: any = null, fence = null, code = [];
-  const flush: any = () => { if (paragraph.length) { html += `<p>${paragraph.map(inline).join('<br>')}</p>`; paragraph = []; } if (list) { html += `</${list}>`; list = null; } };
+  let html = '', paragraph: string[] = [], list: 'ul' | 'ol' | null = null, fence: string | null = null, code: string[] = [];
+  const flush = () => { if (paragraph.length) { html += `<p>${paragraph.map(inline).join('<br>')}</p>`; paragraph = []; } if (list) { html += `</${list}>`; list = null; } };
   for (const line of lines) {
     if (/^\s*```/.test(line)) {
       if (fence !== null) { html += `<div class="history-code"><span>${escape(fence || '代码')}</span><pre><code>${escape(code.join('\n'))}</code></pre></div>`; fence = null; code = []; }
@@ -50,10 +50,10 @@ export function renderImages(images: HistoryImage[] = []) {
   }).join('')}</div>`;
 }
 export function renderMessages(messages: HistoryMessage[]) {
-  let html = '', tools: any = [];
+  let html = '', tools: HistoryMessage[] = [];
   function flushTools() {
     if (!tools.length) return;
-    const calls: any = tools.filter((m: any) => m.role === 'tool_call');
+    const calls = tools.filter(m => m.role === 'tool_call');
     html += `<details class="history-work"><summary><span class="history-work-icon">⌘</span><span><strong>${calls.length ? `使用了 ${calls.length} 次工具` : '工具输出'}</strong><small>查看工作过程</small></span><span class="history-chevron">›</span></summary><div class="history-work-body">`;
     for (const m of tools) html += `<details class="history-tool"><summary>${escape(m.role === 'tool_call' ? m.name || '工具调用' : '工具结果')}<span>${escape(m.callId || '')}</span></summary><pre>${escape(m.text)}</pre></details>`;
     html += '</div></details>'; tools = [];

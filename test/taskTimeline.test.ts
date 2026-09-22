@@ -8,9 +8,13 @@ test('backfilled history uses original time, executions nest once and missing so
   const entries = taskTimeline(task, data);
   assert.ok(entries.findIndex(e => e.id === 'old') < entries.findIndex(e => e.id === 'new'));
   assert.ok(!entries.some(e => e.id === 'linked'), 'audit events stay outside the reading timeline');
-  assert.equal(entries.find(e => e.id === 'new')?.jobs[0].id, 'job');
+  const newSession = entries.find(e => e.kind === 'session' && e.id === 'new');
+  assert.ok(newSession?.kind === 'session');
+  assert.equal(newSession.jobs[0].id, 'job');
   assert.ok(!entries.some(e => e.kind === 'execution' && e.id === 'job'));
-  assert.equal(entries.find(e => e.id === 'gone')?.value.missing, true);
+  const missingSession = entries.find(e => e.kind === 'session' && e.id === 'gone');
+  assert.ok(missingSession?.kind === 'session');
+  assert.equal(missingSession.value.missing, true);
   assert.equal(taskActivity(task, data), Date.parse('2026-09-18T16:00:00Z'));
 });
 
@@ -21,7 +25,9 @@ test('audit transitions do not become timeline nodes while actionable execution 
   const timeline = taskTimeline(task, data);
   assert.equal(timeline.length, 4);
   assert.ok(timeline.every(item => item.kind === 'execution' || item.kind === 'handoff'));
-  assert.equal(timeline.find(item => item.id === 'completed')?.value.output, '完成结果');
+  const completed = timeline.find(item => item.kind === 'execution' && item.id === 'completed');
+  assert.ok(completed?.kind === 'execution');
+  assert.equal(completed.value.output, '完成结果');
   assert.equal(task.events.length, 5, 'audit data is preserved without appearing in the reading timeline');
 });
 
@@ -29,6 +35,9 @@ test('queued managed turns belong only to their own conversation before a native
   const task = { id: 't', sessionIds: ['a', 'b'], events: [] };
   const data = { sessions: ['a', 'b'].map(id => ({ id, deviceId: 'local', agent: 'claude', nativeId: null })), executions: [{ id: 'job', taskId: 't', conversationId: 'b', deviceId: 'local', agent: 'claude', sessionId: null, threadId: null }], handoffs: [] };
   const timeline = taskTimeline(task, data);
-  assert.equal(timeline.find(item => item.id === 'a')?.jobs.length, 0);
-  assert.equal(timeline.find(item => item.id === 'b')?.jobs[0].id, 'job');
+  const first = timeline.find(item => item.kind === 'session' && item.id === 'a');
+  const second = timeline.find(item => item.kind === 'session' && item.id === 'b');
+  assert.ok(first?.kind === 'session' && second?.kind === 'session');
+  assert.equal(first.jobs.length, 0);
+  assert.equal(second.jobs[0].id, 'job');
 });

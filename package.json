@@ -16,7 +16,8 @@
     "pretest": "npm run build:client",
     "test": "node --import tsx --test test/*.test.ts",
     "tenant": "node --import tsx --import ./src/issueSources/preload.ts scripts/tenant.ts",
-    "typecheck": "tsc --noEmit"
+    "check:type-debt": "node --import tsx scripts/check-type-debt.ts",
+    "typecheck": "pnpm check:type-debt && tsc --noEmit"
   },
   "engines": {
     "node": ">=22.16.0"
