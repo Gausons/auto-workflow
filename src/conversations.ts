@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { taskContent } from '../public/taskContent.js';
 import type { AgentProject, Execution, HistoryMessage, Session, TaskCenterData } from '../public/taskTypes.js';
-import { contextPrompt, freezeContext, readContext, type ContextDelivery, type ContextEntry } from './contextCompiler.js';
+import { cleanContextEntries, contextPrompt, freezeContext, readContext, type ContextDelivery, type ContextEntry } from './contextCompiler.js';
 import type { Environment } from './issueSources/types.js';
 import { deliverRecord } from './sessionDelivery/records.js';
 import { httpError } from './rbac.js';
@@ -148,8 +148,9 @@ export function createConversations({ database, tenantId, history, delivery, exe
       const offset = Number(params.get('offset') || 0), limit = Number(params.get('limit') || 100);
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw httpError(400, '分页参数无效');
       const messages = currentMessages(data, id), context = database.readSessionContext(tenantId, session.contextId);
+      const inheritedCount = context ? cleanContextEntries(context.entries).length : 0;
       return { session: { ...session, managed: true, sessionId: session.nativeId }, messages: messages.slice(offset, offset + limit), total: messages.length, offset, limit,
-        inherited: { sourceSessionId: session.sourceSessionId, count: context?.entries.length || 0, partial: context?.partial || false, digest: context?.digest } };
+        inherited: { sourceSessionId: session.sourceSessionId, count: inheritedCount, partial: context?.partial || false, digest: context?.digest } };
     },
     inherited(id: string, params = new URLSearchParams()) {
       const session = managed(id);
@@ -158,7 +159,8 @@ export function createConversations({ database, tenantId, history, delivery, exe
       if (!context) throw httpError(409, '继承上下文不可用');
       const offset = Number(params.get('offset') || 0);
       if (!Number.isSafeInteger(offset) || offset < 0) throw httpError(400, '分页参数无效');
-      return { messages: context.entries.slice(offset, offset + 100).map(entry => ({ ...entry, role: ['user', 'assistant', 'tool_call', 'tool_result'].includes(entry.role) ? entry.role : 'tool_result' })), total: context.entries.length, offset };
+      const entries = cleanContextEntries(context.entries);
+      return { messages: entries.slice(offset, offset + 100).map(entry => ({ ...entry, role: ['user', 'assistant', 'tool_call', 'tool_result'].includes(entry.role) ? entry.role : 'tool_result' })), total: entries.length, offset };
     },
     status(id: string) {
       if (!managed(id)) throw httpError(404, '会话不存在');

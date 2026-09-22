@@ -123,6 +123,29 @@ test('delivery reads all pages and avoids duplicate Codex event messages', async
   assert.equal(result.entries.length, 222); assert.equal(result.entries.filter(e => e.text.includes('turn-219')).length, 1);
 });
 
+test('inherited context removes runtime envelopes while retaining user text and images', async t => {
+  const f = await fixture(t), image = 'data:image/png;base64,aGVsbG8=';
+  await appendFile(f.file,
+    line({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '<recommended_plugins>internal plugin catalog</recommended_plugins><environment_context>private runtime context</environment_context>' }] } }) +
+    line({ type: 'response_item', payload: { type: 'message', role: 'user', content: [
+      { type: 'input_text', text: '<skills_instructions>internal skills</skills_instructions>保留真实请求' },
+      { type: 'input_image', image_url: image }
+    ] } })
+  );
+  const result = await readContext(f.delivery, f.source), json = JSON.stringify(result.entries);
+  assert.doesNotMatch(json, /recommended_plugins|environment_context|skills_instructions|internal plugin catalog|private runtime context|internal skills/);
+  assert.match(json, /保留真实请求/); assert.match(json, /data:image\/png/);
+  assert.equal(result.entries.length, 3);
+
+  const legacy = freezeContext([{ role: 'user', source: f.source, text: JSON.stringify([
+    { type: 'input_text', text: '<recommended_plugins>legacy catalog</recommended_plugins>旧快照中的真实请求' },
+    { type: 'input_image', image_url: image }
+  ]) }], [f.source]);
+  const compiled = await contextPrompt({ ...legacy, entries: [{ ...legacy.entries[0]!, text: legacy.entries[0]!.text.replace('旧快照中的真实请求', '<environment_context>legacy environment</environment_context>旧快照中的真实请求') }] }, '继续', path.join(f.root, 'context'));
+  assert.doesNotMatch(compiled.prompt, /recommended_plugins|environment_context|legacy catalog|legacy environment/);
+  assert.match(compiled.prompt, /旧快照中的真实请求/); assert.match(compiled.prompt, /data:image\/png/);
+});
+
 test('new routes explicitly separate execution and read permissions', () => {
   const id = 'a'.repeat(64);
   assert.equal(permissionForRoute('POST', `/api/sessions/${id}/continue-as-new`), 'work.execute');
