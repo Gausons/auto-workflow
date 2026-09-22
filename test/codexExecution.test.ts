@@ -178,6 +178,7 @@ test('remote device claims once, reports real thread state, and rejects other de
   const task = (await center.snapshot()).tasks[0];
   const { executionId } = await service.execute({ taskId: task.id, revision: task.revision, deviceId: 'remote', projectId: 'p', cwd: root });
   const selection = await service.pickDirectory({ deviceId: 'remote', projectId: 'p' }, { id: 'requester' });
+  assert.ok('requestId' in selection);
   assert.equal(db.readTaskCenter('default').executions[0].status, 'queued');
   await assert.rejects(service.action({ action: 'claim', executionId }, { id: 'other' }), { statusCode: 403 });
   const client = new FakeClient(); let runner: any;
@@ -259,7 +260,7 @@ test('history continuation is scoped, idempotent, task-owned and retains a singl
   assert.deepEqual((await center.snapshot()).tasks[0].sessionIds, [id]);
   const saved = db.readTaskCenter('default').executions[0];
   update({ ...saved, status: 'completed', output: '回复' });
-  assert.equal((await service.historyExecution(id)).execution.output, '回复');
+  assert.equal((await service.historyExecution(id)).execution!.output, '回复');
   assert.equal((await center.snapshot()).tasks[0].status, 'review');
   await service.continueHistory(id, { ...input, requestId: '33333333-3333-3333-3333-333333333333' });
   assert.equal(started, 2); assert.equal(db.readTaskCenter('default').tasks.length, 1);
