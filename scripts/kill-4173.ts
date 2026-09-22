@@ -14,8 +14,8 @@ for (const pid of pids) {
   try {
     process.kill(Number(pid), "SIGTERM");
     console.log(`Sent SIGTERM to ${pid}.`);
-  } catch (error: any) {
-    console.error(`Failed to kill ${pid}: ${error.message}`);
+  } catch (error: unknown) {
+    console.error(`Failed to kill ${pid}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 

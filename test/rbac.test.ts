@@ -10,6 +10,13 @@ import { hashToken, openDatabase } from '../src/database.js';
 
 const setupToken = 'setup-token-'.repeat(4);
 const password = 'correct-member-password';
+interface ApiUser { id: string; role: string; password_hash?: string; username?: string }
+interface AuditEvent { action: string; actorName?: string }
+interface ApiData {
+  token?: string; user?: ApiUser; permissions?: string[]; members?: ApiUser[]; events?: AuditEvent[];
+  config?: { assignee?: string }; [key: string]: unknown;
+}
+interface LoginData extends ApiData { token: string; user: ApiUser; permissions: string[] }
 
 test('organization members, role enforcement, cross-organization access and immediate session revocation', async () => {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), 'bugflow-rbac-'));
@@ -19,13 +26,15 @@ test('organization members, role enforcement, cross-organization access and imme
     const address = app.server.address();
     assert.ok(address && typeof address === 'object');
     const base = `http://127.0.0.1:${address.port}`;
-    const request = async (token: any, endpoint: any, method = 'GET', body?: any) => {
+    const request = async (token: string | null, endpoint: string, method = 'GET', body?: unknown) => {
       const response = await fetch(base + endpoint, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
-      return { status: response.status, data: await response.json() };
+      return { status: response.status, data: await response.json() as ApiData };
     };
-    const login = async (username: any, userPassword = password, tenantId = 'default') => {
+    const login = async (username: string, userPassword = password, tenantId = 'default'): Promise<LoginData> => {
       const result = await request(null, '/api/auth/login', 'POST', { tenantId, username, password: userPassword });
-      assert.equal(result.status, 200, JSON.stringify(result.data)); return result.data;
+      assert.equal(result.status, 200, JSON.stringify(result.data));
+      assert.ok(result.data.token && result.data.user && result.data.permissions);
+      return result.data as LoginData;
     };
     assert.equal((await request(setupToken, '/api/bootstrap')).status, 401);
     const competing = await Promise.all(['owner', 'other-owner'].map((username) => request(setupToken, '/api/auth/setup', 'POST', { username, password })));
@@ -36,11 +45,11 @@ test('organization members, role enforcement, cross-organization access and imme
     assert.ok(owner.permissions.includes('members.manage'));
     assert.equal((await request(setupToken, '/api/auth/setup')).status, 409);
     assert.equal((await request(setupToken, '/api/config', 'PUT', { assignee: 'bypass' })).status, 401);
-    const users: any = {};
+    const users: Record<string, LoginData> = {};
     for (const role of ['admin', 'operator', 'viewer']) {
       const created = await request(owner.token, '/api/organization/members', 'POST', { username: role, password, role });
       assert.equal(created.status, 201);
-      assert.equal(created.data.user.password_hash, undefined);
+      assert.equal(created.data.user?.password_hash, undefined);
       users[role] = await login(role);
     }
     const viewer = users.viewer, admin = users.admin, operator = users.operator;
@@ -98,11 +107,11 @@ test('organization members, role enforcement, cross-organization access and imme
     assert.notEqual(other.user.id, owner.user.id);
     assert.equal((await request(other.token, `/api/organization/members/${owner.user.id}`, 'PATCH', { role: 'viewer' })).status, 404);
     assert.equal((await request(other.token, `/api/organization/members/${owner.user.id}/password`, 'PUT', { password })).status, 404);
-    assert.equal((await request(other.token, '/api/organization/members')).data.members.length, 1);
-    assert.equal((await request(other.token, '/api/bootstrap')).data.config.assignee === 'admin-assignee', false);
-    const audit = (await request(owner.token, '/api/organization/audit')).data.events;
-    assert.ok(audit.some((event: any) => event.action === 'member.password_reset'));
-    assert.ok(audit.some((event: any) => event.action === 'api.request' && event.actorName === 'admin'));
+    assert.equal((await request(other.token, '/api/organization/members')).data.members?.length, 1);
+    assert.equal((await request(other.token, '/api/bootstrap')).data.config?.assignee === 'admin-assignee', false);
+    const audit = (await request(owner.token, '/api/organization/audit')).data.events || [];
+    assert.ok(audit.some(event => event.action === 'member.password_reset'));
+    assert.ok(audit.some(event => event.action === 'api.request' && event.actorName === 'admin'));
     assert.ok(!JSON.stringify(audit).includes(password));
 
     const secondOwner = await request(owner.token, '/api/organization/members', 'POST', { username: 'successor', password, role: 'owner' });

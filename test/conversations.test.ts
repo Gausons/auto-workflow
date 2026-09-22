@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, appendFile, readFile, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -11,9 +11,12 @@ import { createConversations } from '../src/conversations.js';
 import { createCodexExecution } from '../src/codexExecution.js';
 import { contextPrompt, freezeContext, readContext } from '../src/contextCompiler.js';
 import { permissionForRoute } from '../src/rbac.js';
-const line = (row: any) => JSON.stringify(row) + '\n';
+type ExecutionOptions = Parameters<typeof createCodexExecution>[0];
+type Update = Parameters<NonNullable<ExecutionOptions['runnerFactory']>>[0];
+type RunnerJob = Parameters<Update>[0];
+const line = (row: unknown) => JSON.stringify(row) + '\n';
 const message = (text: string, role = 'user') => ({ type: 'response_item', payload: { type: 'message', role, content: [{ type: 'input_text', text }] } });
-async function fixture(t: any) {
+async function fixture(t: TestContext) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'conversation-'));
   const records = path.join(root, 'records'); await mkdir(records);
   const file = path.join(records, 'session.jsonl');
@@ -23,15 +26,15 @@ async function fixture(t: any) {
   const history = createAgentHistory({ environment, workspace: () => root });
   const delivery = createSessionDelivery({ history, environment });
   const source = (await history.catalog()).sessions[0]!.id;
-  let update: any; const launched: any[] = [];
-  const execution = createCodexExecution({ database, tenantId: 'default', workspace: () => root, history, runnerFactory: (notify: any) => {
+  let update: Update = () => {}; const launched: RunnerJob[] = [];
+  const execution = createCodexExecution({ database, tenantId: 'default', workspace: () => root, history, runnerFactory: notify => {
     update = notify;
-    return { projects: async () => ['codex', 'claude'].map(agent => ({ id: agent, agent, protocol: 'acp', cwd: root })), start: async (job: any) => { launched.push(job); update({ ...job, status: 'running', sessionId: job.resumeSessionId || randomUUID() }); }, close() {} };
+    return { projects: async () => ['codex', 'claude'].map(agent => ({ id: agent, agent, protocol: 'acp' as const, cwd: root })), start: async job => { launched.push(job); update({ ...job, status: 'running', sessionId: job.resumeSessionId || randomUUID() }); }, close() {} };
   } });
   const options = { database, tenantId: 'default', history, delivery, execution, environment, contextRoot: path.join(root, 'context') };
   const service = createConversations(options);
   t.after(async () => { execution.close(); database.close(); await rm(root, { recursive: true, force: true }); });
-  const finish = (output = '已补充测试，全部通过') => { const job = database.readTaskCenter('default').executions.at(-1); update({ ...job, status: 'completed', output }); };
+  const finish = (output = '已补充测试，全部通过') => { const job = database.readTaskCenter('default').executions.at(-1); assert.ok(job); update({ ...job, status: 'completed', output }); };
   return { root, file, database, history, delivery, source, execution, options, service, launched, finish };
 }
 
@@ -131,8 +134,9 @@ test('a persisted initial message is dispatched once after preparation was inter
   const f = await fixture(t);
   const created = await f.service.create(f.source, { requestId: randomUUID(), targetAgent: 'claude' });
   const requestId = randomUUID();
-  f.database.mutateTaskCenter('default', (data: any) => {
-    const session = data.sessions.find((s: any) => s.id === created.sessionId);
+  f.database.mutateTaskCenter('default', data => {
+    const session = data.sessions.find(candidate => candidate.id === created.sessionId);
+    assert.ok(session);
     session.pendingMessage = '继续未发送的消息'; session.pendingRequestId = requestId;
   });
   const restarted = createConversations(f.options);

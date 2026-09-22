@@ -6,6 +6,14 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { AcpAgentConnection, AcpPreferredRunner, AcpTaskRunner, AgentRunnerSet, configuredAcpAgents, resolveAcpLaunch } from '../src/acpAgent.js';
+import type { Execution } from '../public/taskTypes.js';
+
+interface TestJob {
+  id: string; agent?: string; protocol?: string; projectId?: string; status?: string; sessionId?: string | null;
+  resumeSessionId?: string; conversationId?: string; cwd?: string; prompt?: string; title?: string; output?: string;
+  model?: string | null; reasoningEffort?: string | null; desktopOpened?: boolean; message?: string;
+  [key: string]: unknown;
+}
 
 test('resolves ACP for built-in and custom agents and supports explicit opt-out', () => {
   assert.deepEqual(resolveAcpLaunch('codex', {}), { command: 'codex-acp', args: [] });
@@ -17,8 +25,8 @@ test('resolves ACP for built-in and custom agents and supports explicit opt-out'
 
 test('enumerates built-in and configured ACP Agents without duplicate targets', async () => {
   assert.deepEqual(configuredAcpAgents({ ACP_AGENTS: 'claude,my-agent,codex' }), ['codex', 'claude', 'my-agent']);
-  const starts: any[] = [];
-  const available = { projects: async () => [{ id: 'acp:codex', agent: 'codex' }], start: async (job: any) => starts.push(job), close() {} };
+  const starts: TestJob[] = [];
+  const available = { projects: async () => [{ id: 'acp:codex', agent: 'codex' }], start: async (job: TestJob) => starts.push(job), close() {} };
   const unavailable = { projects: async () => { throw new Error('unavailable'); }, close() {} };
   const set = new AgentRunnerSet([['codex', available], ['claude', unavailable]]);
   assert.deepEqual(await set.projects('/repo'), [{ id: 'acp:codex', agent: 'codex' }]);
@@ -58,9 +66,9 @@ test('performs a real ACP v1 initialize, session/new, session/prompt and update 
   `);
   const connection = new AcpAgentConnection({ agent: 'fixture', launch: { command: process.execPath, args: [agentFile] }, environment: process.env });
   t.after(() => connection.close());
-  const updates: any[] = []; connection.on('update', update => updates.push(update));
+  const updates: Array<{ update: { content: { text: string } } }> = []; connection.on('update', update => updates.push(update));
   connection.on('permission', () => connection.respond('accept'));
-  const initialized: any = await connection.initialize();
+  const initialized = await connection.initialize();
   assert.equal(initialized.protocolVersion, 1);
   const session = await connection.newSession(root); assert.equal(session.sessionId, 'session-fixture');
   await connection.configure(session, 'm2', 'high');
@@ -86,29 +94,29 @@ test('ACP preferred runner only falls back when ACP is unavailable', async () =>
   assert.equal((await fallback.projects('/repo'))[0].id, 'legacy');
   assert.deepEqual(fallbackCalls, ['acp', 'legacy']);
 
-  let started: any;
+  let started: TestJob | undefined;
   const startFallback = new AcpPreferredRunner({
     primary: { start: async () => { throw Object.assign(new Error('handshake failed'), { code: 'ACP_UNAVAILABLE' }); }, close() {} },
-    fallback: { start: async (job: any) => { started = job; return job; }, close() {} }
+    fallback: { start: async (job: TestJob) => { started = job; return job; }, close() {} }
   });
   await startFallback.start({ id: 'job', protocol: 'acp', projectId: 'acp:codex', agent: 'codex' });
-  assert.equal(started.protocol, 'legacy'); assert.equal(started.projectId, undefined);
+  assert.equal(started?.protocol, 'legacy'); assert.equal(started?.projectId, undefined);
 });
 
 test('Codex ACP task sessions are named and opened in the desktop client', async () => {
   const nativeId = '12345678-1234-1234-1234-123456789abc';
   class FakeConnection extends EventEmitter {
-    promptStarted = false; closed = false; configured: any;
+    promptStarted = false; closed = false; configured?: [string | undefined, string | undefined];
     async initialize() { return { protocolVersion: 1 }; }
     async newSession() { return { sessionId: nativeId }; }
-    async configure(_session: any, model: any, effort: any) { this.configured = [model, effort]; return []; }
+    async configure(_session: unknown, model?: string, effort?: string) { this.configured = [model, effort]; return []; }
     async prompt() { this.promptStarted = true; return { stopReason: 'end_turn' }; }
     close() { this.closed = true; }
   }
-  const named: any[] = [], opened: any[] = [], updates: any[] = [], fake = new FakeConnection();
+  const named: Array<[string, string]> = [], opened: Array<[string]> = [], updates: Execution[] = [], fake = new FakeConnection();
   const runner = new AcpTaskRunner({
-    agent: 'codex', environment: {}, connectionFactory: () => fake, onUpdate: (job: any) => updates.push(job),
-    threadNamer: async (...args: any[]) => named.push(args), desktopOpener: async (...args: any[]) => opened.push(args)
+    agent: 'codex', environment: {}, connectionFactory: () => fake, onUpdate: job => updates.push(job),
+    threadNamer: async (threadId: string, name: string) => { named.push([threadId, name]); }, desktopOpener: async (threadId: string) => { opened.push([threadId]); }
   });
   await runner.start({ id: 'job', agent: 'codex', agentLabel: 'Codex', title: '桌面任务', cwd: process.cwd(), prompt: '执行', model: 'm2', reasoningEffort: 'high', status: 'queued' });
   await new Promise(resolve => setImmediate(resolve));
@@ -121,26 +129,27 @@ test('managed ACP conversations reuse live sessions and load after reconnect wit
   const root = await mkdtemp(path.join(os.tmpdir(), 'acp-conversation-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const fixture = new URL('./fixtures/conversation-agent.mjs', import.meta.url);
-  const updates: any[] = [];
-  const runner = new AcpTaskRunner({ agent: 'claude', environment: { ...process.env, ACP_CLAUDE_EXECUTABLE: process.execPath, ACP_CLAUDE_ARGS: JSON.stringify([fixture.pathname]) }, onUpdate: (job: any) => updates.push(job) });
+  const updates: Execution[] = [];
+  const runner = new AcpTaskRunner({ agent: 'claude', environment: { ...process.env, ACP_CLAUDE_EXECUTABLE: process.execPath, ACP_CLAUDE_ARGS: JSON.stringify([fixture.pathname]) }, onUpdate: job => updates.push(job) });
   t.after(() => runner.close());
-  async function run(input: any) {
+  async function run(input: TestJob): Promise<Execution> {
     await runner.start(input);
     for (let i = 0; i < 100; i++) {
       const job = updates.filter(j => j.id === input.id).at(-1);
       if (job?.status === 'completed') return job;
-      assert.ok(!['failed', 'unknown'].includes(job?.status), job?.message);
+      assert.ok(!job?.status || !['failed', 'unknown'].includes(job.status), job?.message);
       await new Promise(resolve => setTimeout(resolve, 20));
     }
     assert.fail('turn timeout');
   }
   const base = { agent: 'claude', conversationId: 'managed', cwd: root, prompt: 'hello', protocol: 'acp' };
   const first = await run({ ...base, id: 'one' });
+  assert.ok(first.sessionId);
   const second = await run({ ...base, id: 'two', resumeSessionId: first.sessionId });
-  assert.equal(first.sessionId, second.sessionId); assert.match(second.output, /第 2 轮/);
+  assert.equal(first.sessionId, second.sessionId); assert.match(second.output || '', /第 2 轮/);
   runner.close();
   const third = await run({ ...base, id: 'three', resumeSessionId: first.sessionId });
-  assert.equal(third.sessionId, first.sessionId); assert.doesNotMatch(third.output, /REPLAY_SHOULD_NOT_APPEAR/);
+  assert.equal(third.sessionId, first.sessionId); assert.doesNotMatch(third.output || '', /REPLAY_SHOULD_NOT_APPEAR/);
 });
 
 test('uncertain managed ACP session creation never falls back to creating another session', async () => {
@@ -150,10 +159,10 @@ test('uncertain managed ACP session creation never falls back to creating anothe
     async newSession() { throw new Error('session/new response lost'); }
     close() { this.closed = true; }
   }
-  const updates: any[] = [];
-  const primary = new AcpTaskRunner({ agent: 'codex', connectionFactory: () => new UncertainConnection(), onUpdate: (job: any) => updates.push(job) });
+  const updates: Execution[] = [];
+  const primary = new AcpTaskRunner({ agent: 'codex', connectionFactory: () => new UncertainConnection(), onUpdate: job => updates.push(job) });
   let fallbackStarts = 0;
   const runner = new AcpPreferredRunner({ primary, fallback: { start() { fallbackStarts++; }, close() {} } });
   await runner.start({ id: 'uncertain', agent: 'codex', protocol: 'acp', conversationId: 'managed', cwd: '/repo', prompt: 'continue' });
-  assert.equal(updates.at(-1).status, 'unknown'); assert.equal(fallbackStarts, 0); runner.close();
+  assert.equal(updates.at(-1)?.status, 'unknown'); assert.equal(fallbackStarts, 0); runner.close();
 });

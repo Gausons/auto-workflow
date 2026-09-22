@@ -122,8 +122,8 @@ test("normalizeAssignmentRecommendation falls back to configured fallback person
 });
 
 test("isAssignmentCandidate only accepts actionable unassigned recommendations", () => {
-  const isAssignableStatus = (status: any) => ["待处理", "处理中"].includes(status);
-  const readyBug: any = {
+  const isAssignableStatus = (status: unknown) => typeof status === 'string' && ["待处理", "处理中"].includes(status);
+  const readyBug = {
     status: "待处理",
     assignmentRecommendation: { status: "ready", assigneeId: "1001", assigned: false }
   };

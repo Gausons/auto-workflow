@@ -6,7 +6,7 @@ import test from 'node:test';
 import { openDatabase } from '../src/database.js';
 
 const tokenA = 'a'.repeat(43), tokenB = 'b'.repeat(43);
-const snapshot = (title: any) => ({ bugs: [{ id: 'same-bug', title }] });
+const snapshot = (title: string) => ({ bugs: [{ id: 'same-bug', title }] });
 
 test('SQLite isolates identical user and entity IDs by tenant, rolls back failed snapshots and survives reopen', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'bugflow-db-'));

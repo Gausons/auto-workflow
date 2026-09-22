@@ -1,4 +1,5 @@
 import test from 'node:test';
+import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { once } from 'node:events';
@@ -8,21 +9,23 @@ import { openDatabase } from '../src/database.js';
 import { createTaskCenter } from '../src/taskCenter.js';
 import { syncDeviceOnce } from '../scripts/device-sync.js';
 import { createApp } from '../server.js';
+import type { Actor, Task, TaskCenterData } from '../public/taskTypes.js';
+import type { HistorySession } from '../src/agentHistory/types.js';
 
-const actor: any = { id: 'owner' };
-const source: any = { id: 'a'.repeat(64), agent: 'codex', agentLabel: 'Codex', nativeId: 'source', title: '登录修复', cwd: '/repo', updatedAt: new Date().toISOString() };
-const history: any = { catalog: async () => ({ providers: [{ id: 'codex' }, { id: 'claude' }], sessions: [source] }) };
-function fixture(t: any, filename = ':memory:') {
+const actor: Actor = { id: 'owner' };
+const source: HistorySession = { id: 'a'.repeat(64), agent: 'codex', agentLabel: 'Codex', deviceId: 'local', sessionId: 'source', title: '登录修复', cwd: '/repo', workspaces: ['/repo'], model: '', branch: '', status: 'completed', archived: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messageCount: 0, partial: false };
+const history = { catalog: async () => ({ providers: [{ id: 'codex' }, { id: 'claude' }], sessions: [source] }) };
+function fixture(t: TestContext, filename = ':memory:') {
   const database = openDatabase(filename);
   database.createTenant({ id: 'default', token: 'x'.repeat(32) });
   database.createTenant({ id: 'other', token: 'y'.repeat(32) });
   t.after(() => database.close());
   const center = createTaskCenter({ database, tenantId: 'default', history });
-  const cmd = (input: any) => center.command(input, actor);
+  const cmd = (input: unknown) => center.command(input, actor);
   return { database, center, cmd };
 }
-const handoff = (task: any, overrides: any = {}) => ({ action: 'handoff', taskId: task.id, revision: task.revision, mode: 'continue', deviceId: 'remote', agent: 'claude', instruction: '补充回归测试', includeFiles: true, includeSources: true, ...overrides });
-const heartbeat = (sessions: any = []) => ({ action: 'heartbeat', deviceId: 'remote', name: 'Linux', agents: ['claude'], sessions });
+const handoff = (task: Task, overrides: Record<string, unknown> = {}) => ({ action: 'handoff', taskId: task.id, revision: task.revision, mode: 'continue', deviceId: 'remote', agent: 'claude', instruction: '补充回归测试', includeFiles: true, includeSources: true, ...overrides });
+const heartbeat = (sessions: unknown[] = []) => ({ action: 'heartbeat', deviceId: 'remote', name: 'Linux', agents: ['claude'], sessions });
 
 test('task linking, context versions, optimistic concurrency and tenant isolation', async t => {
   const { database, center, cmd } = fixture(t);
@@ -46,8 +49,8 @@ test('offline queue, connector receipt, explicit started session and immutable p
   const dir = await mkdtemp(path.join(os.tmpdir(), 'task-device-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   await cmd(heartbeat());
-  database.mutateTaskCenter('default', (data: any) => { data.devices[0].lastSeen = '2020-01-01T00:00:00Z'; });
-  assert.equal((await center.snapshot()).devices.find((d: any) => d.id === 'remote')?.online, false);
+  database.mutateTaskCenter('default', data => { data.devices[0].lastSeen = '2020-01-01T00:00:00Z'; });
+  assert.equal((await center.snapshot()).devices.find(d => d.id === 'remote')?.online, false);
   await cmd({ action: 'create', title: '登录修复', sessionId: source.id, context: { files: 'auth.ts @ v1' } });
   let task = (await center.snapshot()).tasks[0]!;
   const { handoffId } = await cmd(handoff(task));
@@ -55,8 +58,8 @@ test('offline queue, connector receipt, explicit started session and immutable p
   await assert.rejects(cmd(handoff(task)), { statusCode: 409 });
   assert.equal((await center.snapshot()).handoffs[0].status, 'pending');
   await assert.rejects(cmd({ action: 'ack', handoffId, status: 'started' }), { statusCode: 409 });
-  const remoteHistory: any = { catalog: async () => ({ providers: [{ id: 'claude' }], sessions: [{ ...source, id: 'remote-session', agent: 'claude', title: '继续补充测试' }] }) };
-  const result = await syncDeviceOnce({ request: (method: any, body: any) => method === 'GET' ? center.snapshot() : cmd(body), history: remoteHistory, deviceId: 'remote', name: 'Linux', outputDir: dir });
+  const remoteHistory = { catalog: async () => ({ providers: [{ id: 'claude' }], sessions: [{ ...source, id: 'remote-session', agent: 'claude', title: '继续补充测试' }] }) };
+  const result = await syncDeviceOnce({ request: (method, body) => method === 'GET' ? center.snapshot() : cmd(body), history: remoteHistory, deviceId: 'remote', name: 'Linux', outputDir: dir });
   assert.deepEqual(result, { sessions: 1, received: 1 });
   const packet = JSON.parse(await readFile(path.join(dir, handoffId + '.json'), 'utf8'));
   assert.equal(packet.packet.context.files, 'auth.ts @ v1');
@@ -64,14 +67,14 @@ test('offline queue, connector receipt, explicit started session and immutable p
   assert.equal(snapshot.handoffs[0].status, 'received');
   assert.equal(snapshot.tasks[0].status, 'ready', 'receipt must not claim execution');
   await assert.rejects(cmd({ action: 'ack', handoffId, status: 'started', sessionId: source.id }), { statusCode: 400 });
-  const remote = snapshot.sessions.find((s: any) => s.deviceId === 'remote')!;
+  const remote = snapshot.sessions.find(s => s.deviceId === 'remote')!;
   await cmd({ action: 'ack', handoffId, status: 'started', sessionId: remote.id });
   await cmd({ action: 'ack', handoffId, status: 'started', sessionId: remote.id });
   snapshot = await center.snapshot();
   assert.equal(snapshot.tasks[0].status, 'running');
   assert.deepEqual(snapshot.tasks[0].sessionIds, [source.id, remote.id]);
   await assert.rejects(cmd({ action: 'ack', handoffId, status: 'cancelled' }), { statusCode: 409 });
-  assert.equal((await syncDeviceOnce({ request: (method: any, body: any) => method === 'GET' ? center.snapshot() : cmd(body), history: remoteHistory, deviceId: 'remote', name: 'Linux', outputDir: dir })).received, 0);
+  assert.equal((await syncDeviceOnce({ request: (method, body) => method === 'GET' ? center.snapshot() : cmd(body), history: remoteHistory, deviceId: 'remote', name: 'Linux', outputDir: dir })).received, 0);
 });
 
 test('branches, references, running source protection, and device identity', async t => {
@@ -85,16 +88,16 @@ test('branches, references, running source protection, and device identity', asy
   await assert.rejects(cmd(handoff(task)), { statusCode: 409 });
   const branch = await cmd(handoff(task, { mode: 'branch', includeFiles: false }));
   snapshot = await center.snapshot();
-  const child = snapshot.tasks.find((t: any) => t.id === branch.taskId)!;
+  const child = snapshot.tasks.find(t => t.id === branch.taskId)!;
   assert.equal(child.parentTaskId, task.id);
-  assert.equal(snapshot.tasks.find((t: any) => t.id === task.id)?.status, 'running');
+  assert.equal(snapshot.tasks.find(t => t.id === task.id)?.status, 'running');
   assert.equal(snapshot.handoffs[0].packet.context.files, '');
-  task = snapshot.tasks.find((t: any) => t.id === task.id)!;
+  task = snapshot.tasks.find(t => t.id === task.id)!;
   await assert.rejects(cmd(handoff(task, { mode: 'reference', targetSessionId: source.id })), { statusCode: 400 });
-  const ref = await cmd(handoff(task, { mode: 'reference', targetSessionId: snapshot.sessions.find((s: any) => s.deviceId === 'remote')!.id }));
+  const ref = await cmd(handoff(task, { mode: 'reference', targetSessionId: snapshot.sessions.find(s => s.deviceId === 'remote')!.id }));
   await cmd({ action: 'ack', handoffId: ref.handoffId, status: 'received' });
   await assert.rejects(cmd({ action: 'ack', handoffId: ref.handoffId, status: 'started' }), { statusCode: 409 });
-  assert.equal((await center.snapshot()).tasks.find((t: any) => t.id === task.id)?.status, 'running');
+  assert.equal((await center.snapshot()).tasks.find(t => t.id === task.id)?.status, 'running');
 });
 
 test('task data survives reopening the database', async t => {
@@ -116,9 +119,10 @@ test('HTTP auth, viewer write rejection, and task UI assets', async t => {
   const address = app.server.address();
   assert.ok(address && typeof address === 'object');
   const base = `http://127.0.0.1:${address.port}`;
-  const req = async (route: any, method = 'GET', body?: any, token?: any) => {
+  interface ApiData { token?: string; tasks?: unknown[]; [key: string]: unknown }
+  const req = async (route: string, method = 'GET', body?: unknown, token?: string) => {
     const r = await fetch(base + route, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
-    return { status: r.status, data: await r.json() };
+    return { status: r.status, data: await r.json() as ApiData };
   };
   assert.equal((await req('/api/task-center')).status, 401);
   await req('/api/auth/setup', 'POST', { username: 'owner', password }, setup);
@@ -127,7 +131,7 @@ test('HTTP auth, viewer write rejection, and task UI assets', async t => {
   assert.equal(created.status, 200);
   await req('/api/organization/members', 'POST', { username: 'viewer', role: 'viewer', password }, owner.token);
   const viewer = (await req('/api/auth/login', 'POST', { tenantId: 'default', username: 'viewer', password })).data;
-  assert.equal((await req('/api/task-center', 'GET', null, viewer.token)).data.tasks.length, 1);
+  assert.equal((await req('/api/task-center', 'GET', null, viewer.token)).data.tasks?.length, 1);
   assert.equal((await req('/api/task-center', 'POST', { action: 'create', title: 'forbidden' }, viewer.token)).status, 403);
   const continuation = '/api/agent-sessions/' + 'a'.repeat(64) + '/continue';
   assert.equal((await req(continuation, 'POST', { message: 'test' })).status, 401);
@@ -167,7 +171,7 @@ test('connector does not acknowledge receipt when writing the packet fails', asy
   const dir = await mkdtemp(path.join(os.tmpdir(), 'task-write-failure-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'not-a-directory'); await writeFile(file, 'existing');
-  await assert.rejects(syncDeviceOnce({ request: (method: any, body: any) => method === 'GET' ? center.snapshot() : cmd(body), history: { catalog: async () => ({ providers: [{ id: 'claude' }], sessions: [] }) }, deviceId: 'remote', name: 'Linux', outputDir: file }));
+  await assert.rejects(syncDeviceOnce({ request: (method, body) => method === 'GET' ? center.snapshot() : cmd(body), history: { catalog: async () => ({ providers: [{ id: 'claude' }], sessions: [] }) }, deviceId: 'remote', name: 'Linux', outputDir: file }));
   assert.equal((await center.snapshot()).handoffs[0].status, 'pending');
 });
 
@@ -177,19 +181,19 @@ test('moving and unlinking sessions preserve history and enforce both task revis
   const second = await cmd({ action: 'create', title: '目标任务' });
   const move = { action: 'move', taskId: first.taskId, revision: 1, targetTaskId: second.taskId, targetRevision: 1, sessionId: source.id };
   await assert.rejects(cmd({ ...move, targetRevision: 0 }), { statusCode: 409 });
-  assert.deepEqual((await center.snapshot()).tasks.find((v: any) => v.id === first.taskId)?.sessionIds, [source.id]);
+  assert.deepEqual((await center.snapshot()).tasks.find(v => v.id === first.taskId)?.sessionIds, [source.id]);
   await cmd(move);
   let snapshot = await center.snapshot();
-  assert.deepEqual(snapshot.tasks.find((v: any) => v.id === first.taskId)?.sessionIds, []);
-  assert.deepEqual(snapshot.tasks.find((v: any) => v.id === second.taskId)?.sessionIds, [source.id]);
-  database.mutateTaskCenter('default', (data: any) => { data.executions = [{ id: 'active', taskId: second.taskId, status: 'running' }]; });
+  assert.deepEqual(snapshot.tasks.find(v => v.id === first.taskId)?.sessionIds, []);
+  assert.deepEqual(snapshot.tasks.find(v => v.id === second.taskId)?.sessionIds, [source.id]);
+  database.mutateTaskCenter('default', data => { data.executions = [{ id: 'active', taskId: second.taskId, status: 'running' }] as TaskCenterData['executions']; });
   await assert.rejects(cmd({ action: 'unlink', taskId: second.taskId, revision: 2, sessionId: source.id }), { statusCode: 409 });
-  database.mutateTaskCenter('default', (data: any) => { data.executions = []; });
+  database.mutateTaskCenter('default', data => { data.executions = []; });
   await cmd({ action: 'unlink', taskId: second.taskId, revision: 2, sessionId: source.id });
   snapshot = await center.snapshot();
   assert.equal(snapshot.sessions.length, 1);
-  assert.equal(snapshot.tasks.find((v: any) => v.id === second.taskId)?.sessionIds.length, 0);
-  assert.ok(snapshot.tasks.find((v: any) => v.id === first.taskId)?.events.some((e: any) => e.message.includes('解除会话关联')));
+  assert.equal(snapshot.tasks.find(v => v.id === second.taskId)?.sessionIds.length, 0);
+  assert.ok(snapshot.tasks.find(v => v.id === first.taskId)?.events.some(e => e.message.includes('解除会话关联')));
 });
 
 
@@ -197,23 +201,23 @@ test('single Markdown body supports creation, editing, legacy conversion and han
   const { database, center, cmd } = fixture(t);
   const content = '# 修复登录\n\n- 保留兼容性\n\n```ts\nconst done = true;\n```';
   const created = await cmd({ action: 'create', content });
-  let task = (await center.snapshot()).tasks.find((task: any) => task.id === created.taskId)!;
+  let task = (await center.snapshot()).tasks.find(task => task.id === created.taskId)!;
   assert.equal(task.title, '修复登录'); assert.equal(task.content, content);
   assert.equal(database.readTaskCenter('default').tasks[0].context, undefined);
   await cmd({ action: 'update', taskId: task.id, revision: task.revision, content: '# 更新目标\n\n**完整说明**', status: task.status });
-  task = (await center.snapshot()).tasks.find((task: any) => task.id === created.taskId)!;
+  task = (await center.snapshot()).tasks.find(task => task.id === created.taskId)!;
   assert.equal(task.title, '更新目标'); assert.equal(task.contextVersion, 2);
   await assert.rejects(cmd({ action: 'create', content: '  ' }), { statusCode: 400 });
   await assert.rejects(cmd({ action: 'create', content: 'x'.repeat(64001) }), { statusCode: 400 });
   await cmd(heartbeat());
   const branched = await cmd(handoff(task, { mode: 'branch' }));
   const snapshot = await center.snapshot();
-  assert.equal(snapshot.tasks.find((item: any) => item.id === branched.taskId)?.content, task.content);
+  assert.equal(snapshot.tasks.find(item => item.id === branched.taskId)?.content, task.content);
   assert.equal(snapshot.handoffs[0].packet.content, task.content);
   const legacy = await cmd({ action: 'create', title: '旧任务', context: { goal: '目标', constraints: '约束内容', decisions: '结论', next: '下一步内容', files: 'file.ts' } });
-  const oldTask = (await center.snapshot()).tasks.find((item: any) => item.id === legacy.taskId)!;
+  const oldTask = (await center.snapshot()).tasks.find(item => item.id === legacy.taskId)!;
   for (const text of ['目标', '约束内容', '结论', '下一步内容', 'file.ts']) assert.ok(oldTask.content?.includes(text));
   await cmd({ action: 'update', taskId: oldTask.id, revision: oldTask.revision, content: oldTask.content, status: oldTask.status });
-  const migrated = database.readTaskCenter('default').tasks.find((item: any) => item.id === oldTask.id);
+  const migrated = database.readTaskCenter('default').tasks.find(item => item.id === oldTask.id);
   assert.equal(migrated?.content, oldTask.content); assert.equal(migrated?.context, undefined);
 });

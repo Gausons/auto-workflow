@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import { mkdtemp, mkdir, writeFile, appendFile, rm, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,9 +7,11 @@ import { once } from 'node:events';
 import { createAgentHistory } from '../src/agentHistory/index.js';
 import { createApp } from '../server.js';
 import { canonicalWorkspace } from '../src/tenancy.js';
+import type { Environment } from '../src/issueSources/types.js';
+import type { HistoryAdapter, JsonObject } from '../src/agentHistory/types.js';
 
 const timestamp = '2026-09-08T01:00:00Z';
-const codex = (cwd: any, id = 'same-id') => [
+const codex = (cwd: string | undefined, id = 'same-id') => [
   { type: 'session_meta', timestamp, payload: { id, cwd, timestamp, git: { branch: 'main' } } },
   { type: 'event_msg', timestamp, payload: { type: 'user_message', message: '修复登录' } },
   { type: 'response_item', timestamp, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '修复登录' }] } },
@@ -19,14 +21,14 @@ const codex = (cwd: any, id = 'same-id') => [
   { type: 'event_msg', timestamp, payload: { type: 'agent_message', message: '<script>alert(1)</script>' } },
   { type: 'event_msg', timestamp, payload: { type: 'task_complete' } }
 ];
-async function fixture(t: any) {
+async function fixture(t: TestContext) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'agent-history-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const workspace = path.join(root, 'repo'), other = path.join(root, 'repo-other');
   const codexDir = path.join(root, 'codex'), claudeDir = path.join(root, 'claude');
   await Promise.all([workspace, other, codexDir, claudeDir].map((dir) => mkdir(dir)));
-  const environment: any = { IDE_HISTORY_CODEX_DIR: codexDir, IDE_HISTORY_CLAUDE_DIR: claudeDir };
-  const save = async (file: any, rows: any) => { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, rows.map((row: any) => JSON.stringify(row)).join('\n') + '\n'); };
+  const environment: Environment = { IDE_HISTORY_CODEX_DIR: codexDir, IDE_HISTORY_CLAUDE_DIR: claudeDir };
+  const save = async (file: string, rows: unknown[]) => { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, rows.map(row => JSON.stringify(row)).join('\n') + '\n'); };
   return { root, workspace, other, codexDir, claudeDir, environment, save, history: createAgentHistory({ environment, workspace: () => workspace }) };
 }
 
@@ -40,7 +42,7 @@ test('normalizes both agents, deduplicates Codex events, filters and paginates',
   ]);
   const list = await f.history.list();
   assert.equal(list.total, 2);
-  assert.equal(new Set(list.sessions.map((s: any) => s.id)).size, 2);
+  assert.equal(new Set(list.sessions.map(session => session.id)).size, 2);
   assert.equal(list.sessions[0].agent, 'claude');
   const filtered = await f.history.list(new URLSearchParams({ agent: 'codex', q: '登录', limit: '1' }));
   assert.equal(filtered.total, 1);
@@ -48,7 +50,7 @@ test('normalizes both agents, deduplicates Codex events, filters and paginates',
   assert.equal(filtered.sessions[0].status, 'completed');
   assert.equal(filtered.sessions[0].messages, undefined);
   const detail = await f.history.detail(filtered.sessions[0].id, new URLSearchParams({ offset: '1', limit: '2' }));
-  assert.deepEqual(detail.messages.map((m: any) => m.role), ['tool_call', 'tool_result']);
+  assert.deepEqual(detail.messages.map(message => message.role), ['tool_call', 'tool_result']);
   assert.equal(detail.total, 4);
   const claudeDetail = await f.history.detail(list.sessions[0].id);
   assert.equal(claudeDetail.messages.at(-1)?.text, 'ok');
@@ -73,7 +75,7 @@ test('optional workspace scope isolates symlinks, missing metadata, changed cwd 
   await assert.rejects(otherHistory.detail(list.sessions[0].id), { statusCode: 404 });
   await assert.rejects(f.history.detail('../../secret'), { statusCode: 404 });
   const unconfigured = createAgentHistory({ environment: {}, tenantId: 'other', workspace: () => f.workspace });
-  assert.ok((await unconfigured.list()).providers.every((p: any) => p.status === 'unconfigured'));
+  assert.ok((await unconfigured.list()).providers.every(provider => provider.status === 'unconfigured'));
 });
 
 test('refreshes appended and deleted sessions and tolerates partial JSONL', async (t) => {
@@ -93,7 +95,7 @@ test('refreshes appended and deleted sessions and tolerates partial JSONL', asyn
 test('supports additional adapters without changing the service contract', async (t) => {
   const f = await fixture(t);
   await f.save(path.join(f.codexDir, 'extra.jsonl'), [{ cwd: f.workspace, timestamp, prompt: 'hello' }]);
-  const adapter: any = { id: 'custom', label: 'Custom Agent', roots: () => [f.codexDir], decode: (row: any) => ({ cwd: row.cwd, entries: [{ role: 'user', text: row.prompt, timestamp: row.timestamp }] }) };
+  const adapter: HistoryAdapter = { id: 'custom', label: 'Custom Agent', roots: () => [f.codexDir], decode: (row: JsonObject) => ({ cwd: row.cwd, entries: [{ role: 'user', text: String(row.prompt || ''), timestamp: typeof row.timestamp === 'string' ? row.timestamp : undefined, images: [] }] }) };
   const history = createAgentHistory({ workspace: () => f.workspace, adapters: [adapter] });
   const list = await history.list();
   assert.equal(list.sessions[0].agent, 'custom');
@@ -127,7 +129,7 @@ test('history HTTP API requires member authentication and supports viewer read a
   const address = app.server.address();
   assert.ok(address && typeof address === 'object');
   const base = `http://127.0.0.1:${address.port}`;
-  async function request(endpoint: any, auth: any = null, method = 'GET', body?: any) {
+  async function request(endpoint: string, auth: string | null = null, method = 'GET', body?: unknown) {
     const response = await fetch(base + endpoint, { method, headers: { 'Content-Type': 'application/json', ...(auth ? { Authorization: `Bearer ${auth}` } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
     return { status: response.status, data: await response.json() };
   }
@@ -207,7 +209,7 @@ test('preserves image-only messages from Codex and Claude', async (t) => {
   for (const [dir, row] of ([
     [f.codexDir, { type: 'response_item', timestamp, payload: { type: 'message', role: 'user', content: [{ type: 'input_image', image_url: 'data:image/png;base64,aGVsbG8=' }] } }],
     [f.claudeDir, { type: 'user', cwd: f.workspace, sessionId: 'image-only', timestamp, message: { content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' } }] } }]
-  ] as Array<[string, any]>)) await f.save(path.join(dir, 'image.jsonl'), [{ type: 'session_meta', timestamp, payload: { id: 'image', cwd: f.workspace } }, row]);
+  ] as Array<[string, unknown]>)) await f.save(path.join(dir, 'image.jsonl'), [{ type: 'session_meta', timestamp, payload: { id: 'image', cwd: f.workspace } }, row]);
   const list = await f.history.list();
   assert.equal(list.total, 2);
   for (const session of list.sessions) {
@@ -220,7 +222,7 @@ test('preserves image-only messages from Codex and Claude', async (t) => {
 
 test('Codex transcript preserves turn identity across repeated messages', async t => {
   const f = await fixture(t);
-  const rows: any[] = [{ type: 'session_meta', timestamp, payload: { id: 'turn-test', cwd: f.workspace } }];
+  const rows: unknown[] = [{ type: 'session_meta', timestamp, payload: { id: 'turn-test', cwd: f.workspace } }];
   for (const turnId of ['first-turn', 'second-turn']) {
     rows.push({ type: 'event_msg', timestamp, payload: { type: 'task_started', turn_id: turnId } });
     rows.push(...codex(f.workspace).slice(1));
@@ -228,5 +230,5 @@ test('Codex transcript preserves turn identity across repeated messages', async 
   await f.save(path.join(f.codexDir, 'turns.jsonl'), rows);
   const list = await f.history.list();
   const detail = await f.history.detail(list.sessions[0].id);
-  assert.deepEqual(detail.messages.filter((m: any) => m.role === 'user').map((m: any) => m.turnId), ['first-turn', 'second-turn']);
+  assert.deepEqual(detail.messages.filter(message => message.role === 'user').map(message => message.turnId), ['first-turn', 'second-turn']);
 });
