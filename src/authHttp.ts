@@ -1,9 +1,14 @@
 import { ROLES, httpError, permissionsFor, publicIdentity } from './rbac.js';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 
-export function createAuthHandler(database: any) {
-  const attempts = new Map();
+type Database = ReturnType<typeof import('./database.js').openDatabase>;
+type Principal = NonNullable<ReturnType<Database['authenticateSession']>>;
+type SendJson = (response: ServerResponse, status: number, value: unknown) => void;
+
+export function createAuthHandler(database: Database) {
+  const attempts = new Map<string, { count: number; until: number }>();
   let passwordOperations = 0;
-  function rateLimit(key: any, limit = 10) {
+  function rateLimit(key: string, limit = 10) {
     const now = Date.now();
     for (const [entry, value] of attempts) if (value.until <= now) attempts.delete(entry);
     const value = attempts.get(key) || { count: 0, until: now + 15 * 60 * 1000 };
@@ -11,14 +16,18 @@ export function createAuthHandler(database: any) {
     value.count += 1;
     attempts.set(key, value);
   }
-  async function expensive(operation: any) {
+  async function expensive<T>(operation: () => Promise<T>): Promise<T> {
     if (passwordOperations >= 4) throw httpError(429, '正在处理其他登录请求，请稍后重试');
     passwordOperations += 1;
     try { return await operation(); } finally { passwordOperations -= 1; }
   }
-  const sessionResponse = (session: any) => ({ ...session, ...publicIdentity(database.authenticateSession(session.token)) });
+  const sessionResponse = (session: { token: string; expiresAt: number }) => {
+    const principal = database.authenticateSession(session.token);
+    if (!principal) throw httpError(401, '登录会话创建失败');
+    return { ...session, ...publicIdentity(principal) };
+  };
 
-  return async function handleAuth(req: any, res: any, url: any, token: any, principal: any, sendJson: any) {
+  return async function handleAuth(req: IncomingMessage, res: ServerResponse, url: URL, token: unknown, principal: Principal | null, sendJson: SendJson) {
     const endpoint = url.pathname;
     if (endpoint === '/api/auth/login' && req.method === 'POST') {
       rateLimit(`ip:${req.socket.remoteAddress}`, 100);
@@ -30,7 +39,7 @@ export function createAuthHandler(database: any) {
       sendJson(res, 200, sessionResponse(session));
       return true;
     }
-    if (endpoint === '/api/auth/setup' && ['GET', 'POST'].includes(req.method)) {
+    if (endpoint === '/api/auth/setup' && ['GET', 'POST'].includes(req.method || '')) {
       const tenant = database.authenticate(token);
       if (!tenant) throw httpError(401, '请提供有效的组织初始化令牌');
       if (database.hasUsers(tenant.id)) throw httpError(409, '组织已初始化，组织令牌已停用，请使用成员账号登录');
@@ -49,7 +58,7 @@ export function createAuthHandler(database: any) {
       sendJson(res, 200, publicIdentity(principal)); return true;
     }
     if (endpoint === '/api/auth/logout' && req.method === 'POST') {
-      database.logout(token);
+      if (typeof token === 'string') database.logout(token);
       database.audit(principal.tenant.id, principal.user, 'auth.logout');
       sendJson(res, 200, { ok: true }); return true;
     }
@@ -67,7 +76,7 @@ export function createAuthHandler(database: any) {
       requirePermission(principal, 'members.manage');
       sendJson(res, 200, { roles: Object.entries(ROLES).map(([id, role]) => ({ id, ...role })) }); return true;
     }
-    if (endpoint === '/api/organization/members' && ['GET', 'POST'].includes(req.method)) {
+    if (endpoint === '/api/organization/members' && ['GET', 'POST'].includes(req.method || '')) {
       requirePermission(principal, 'members.manage');
       if (req.method === 'GET') sendJson(res, 200, { members: database.listUsers(principal.tenant.id) });
       else {
@@ -93,21 +102,22 @@ export function createAuthHandler(database: any) {
   };
 }
 
-function requirePermission(principal: any, permission: any) {
+function requirePermission(principal: Principal, permission: string) {
   if (!permissionsFor(principal.user.role).includes(permission)) throw httpError(403, '当前角色没有此操作权限');
 }
 
-export async function readAuthJson(req: any) {
-  const chunks: any[] = [];
+export async function readAuthJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
-    size += chunk.length;
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
     if (size > 64 * 1024) throw httpError(413, '请求体过大');
-    chunks.push(chunk);
+    chunks.push(buffer);
   }
   try {
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error();
-    return body;
+    return body as Record<string, unknown>;
   } catch { throw httpError(400, '请求体必须为 JSON 对象'); }
 }

@@ -4,6 +4,23 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import type { Environment } from './issueSources/types.js';
+
+type JsonObject = Record<string, unknown>;
+interface ProtocolReader {
+  call(method: string, params: JsonObject): Promise<unknown>;
+  close(): unknown;
+}
+interface RpcResponse extends JsonObject {
+  type?: string; requestId?: string; resultType?: string; result?: JsonObject; error?: string; handledByClientId?: string;
+}
+interface BridgeParams extends JsonObject { threadId?: string; turnId?: string; input?: unknown[] }
+interface ThreadItem extends JsonObject { id?: string; type?: string }
+interface ThreadTurn extends JsonObject { id?: string; items?: ThreadItem[] }
+interface ThreadReadResult { thread?: { path?: string; turns?: ThreadTurn[] } }
+type ErrorLike = Error & { code?: string };
+const record = (value: unknown): JsonObject => value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : {};
+const asError = (value: unknown): ErrorLike => value instanceof Error ? value as ErrorLike : new Error(String(value));
 
 // Experimental, versioned local client IPC. Never creates a router, changes socket
 // permissions, impersonates an official client, or retries a submitted message.
@@ -12,11 +29,11 @@ export class CodexDesktopBridge extends EventEmitter {
   private buffer = Buffer.alloc(0);
   private clientId = 'initializing-client';
   private owner = '';
-  private pending = new Map<string, { resolve: (value: any) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private pending = new Map<string, { resolve: (value: RpcResponse) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private timer?: ReturnType<typeof setTimeout>;
   private turnId?: string;
   private failures = 0;
-  constructor(private socket: net.Socket, private reader: any, private threadId: string) {
+  constructor(private socket: net.Socket, private reader: ProtocolReader, private threadId: string) {
     super();
     socket.on('data', data => {
       try {
@@ -25,12 +42,13 @@ export class CodexDesktopBridge extends EventEmitter {
           const length = this.buffer.readUInt32LE(0);
           if (!length || length > 64 * 1024 * 1024) throw new Error('IPC 消息长度无效');
           if (this.buffer.length < length + 4) break;
-          const message = JSON.parse(this.buffer.subarray(4, length + 4).toString('utf8'));
+          const message = record(JSON.parse(this.buffer.subarray(4, length + 4).toString('utf8'))) as RpcResponse;
           this.buffer = this.buffer.subarray(length + 4);
           if (message.type === 'response') {
-            const pending = this.pending.get(message.requestId);
-            if (pending) { clearTimeout(pending.timer); this.pending.delete(message.requestId); pending.resolve(message); }
-          } else if (message.type === 'broadcast' && message.method === 'client-status-changed' && message.params?.clientId === this.owner && message.params?.status === 'disconnected') {
+            const requestId = message.requestId;
+            const pending = typeof requestId === 'string' ? this.pending.get(requestId) : undefined;
+            if (pending && requestId) { clearTimeout(pending.timer); this.pending.delete(requestId); pending.resolve(message); }
+          } else if (message.type === 'broadcast' && message.method === 'client-status-changed' && record(message.params).clientId === this.owner && record(message.params).status === 'disconnected') {
             this.disconnected(new Error('会话拥有端已退出，请核对执行结果'));
           } else if (message.type === 'client-discovery-request') {
             this.send({ type: 'client-discovery-response', requestId: message.requestId, response: { canHandle: false } });
@@ -41,14 +59,14 @@ export class CodexDesktopBridge extends EventEmitter {
     socket.on('error', error => this.disconnected(error));
     socket.on('close', () => this.disconnected(new Error('客户端 IPC 连接已关闭；请核对原会话，不要重复发送')));
   }
-  static async connect(reader: any, threadId: string, environment: any = process.env): Promise<CodexDesktopBridge | null> {
+  static async connect(reader: ProtocolReader, threadId: string, environment: Environment = process.env): Promise<CodexDesktopBridge | null> {
     if (process.platform === 'win32') return null;
     const endpoint = path.join(environment.CODEX_HOME || path.join(homedir(), '.codex'), 'ipc', 'ipc.sock');
     try {
       const [directory, socketFile] = await Promise.all([lstat(path.dirname(endpoint)), lstat(endpoint)]);
       const uid = process.getuid?.();
       if (!directory.isDirectory() || !socketFile.isSocket() || directory.uid !== uid || socketFile.uid !== uid || (directory.mode & 0o077) || (socketFile.mode & 0o077)) throw new Error('客户端 IPC 路径权限不安全，已停止连接');
-    } catch (error: any) { if (error.code === 'ENOENT') return null; throw error; }
+    } catch (caught: unknown) { const error = asError(caught); if (error.code === 'ENOENT') return null; throw error; }
     const socket = net.connect(endpoint), bridge = new CodexDesktopBridge(socket, reader, threadId);
     try {
       await new Promise<void>((resolve, reject) => {
@@ -69,12 +87,12 @@ export class CodexDesktopBridge extends EventEmitter {
       return bridge;
     } catch (error) { bridge.detach(); throw error; }
   }
-  private send(message: any) {
+  private send(message: unknown) {
     if (this.closed) throw new Error('客户端 IPC 连接已关闭');
     const body = Buffer.from(JSON.stringify(message)), header = Buffer.alloc(4);
     header.writeUInt32LE(body.length); this.socket.write(Buffer.concat([header, body]));
   }
-  private rpc(method: string, params: any, version: number, targetClientId?: string): Promise<any> {
+  private rpc(method: string, params: JsonObject, version: number, targetClientId?: string): Promise<RpcResponse> {
     const requestId = randomUUID();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(requestId); reject(new Error('客户端 IPC 响应超时，结果待核对；不会自动重发')); }, 15000);
@@ -83,20 +101,20 @@ export class CodexDesktopBridge extends EventEmitter {
       catch (error) { clearTimeout(timer); this.pending.delete(requestId); reject(error); }
     });
   }
-  async call(method: string, params: any): Promise<any> {
+  async call(method: string, params: BridgeParams): Promise<unknown> {
     if (params.threadId !== this.threadId) throw new Error('IPC 会话标识不一致');
     if (method === 'thread/read') return this.reader.call(method, params);
     if (method === 'thread/unsubscribe') return { status: 'notSubscribed' };
     if (method === 'turn/start') {
       const response = await this.rpc('thread-follower-start-turn', {
         conversationId: this.threadId,
-        turnStart: { request: { ...params, input: params.input.map((item: any) => ({ ...item, text_elements: [] })) }, context: { inheritThreadSettings: true } }
+        turnStart: { request: { ...params, input: (params.input || []).map(item => ({ ...record(item), text_elements: [] })) }, context: { inheritThreadSettings: true } }
       }, 2, this.owner);
       // Any error after dispatch is ambiguous: never fall back to another writer.
       if (response.resultType !== 'success') throw new Error(response.error || '客户端提交结果未知');
-      const result = response.result?.result;
-      if (typeof result?.turn?.id !== 'string') throw new Error('客户端未返回执行标识，请核对原会话');
-      this.turnId = result.turn.id;
+      const result = record(response.result?.result), turn = record(result.turn);
+      if (typeof turn.id !== 'string') throw new Error('客户端未返回执行标识，请核对原会话');
+      this.turnId = turn.id;
       this.timer = setTimeout(() => void this.poll(), 500);
       return result;
     }
@@ -109,16 +127,19 @@ export class CodexDesktopBridge extends EventEmitter {
   }
   private async poll() {
     if (this.closed || !this.turnId) return;
+    const turnId = this.turnId;
     try {
-      const result = await this.reader.call('thread/read', { threadId: this.threadId, includeTurns: true });
+      const result = await this.reader.call('thread/read', { threadId: this.threadId, includeTurns: true }) as ThreadReadResult;
       if (this.closed) return;
-      const turn = result.thread?.turns?.find((item: any) => item.id === this.turnId);
+      const turn = result.thread?.turns?.find(item => item.id === turnId);
       if (!turn) throw new Error('尚未读取到本轮持久记录');
-      const output = turn.items?.filter((item: any) => item.type === 'agentMessage').at(-1);
+      const output = turn.items?.filter(item => item.type === 'agentMessage').at(-1);
       if (output) this.emit('notification', { method: 'item/completed', params: { threadId: this.threadId, turnId: this.turnId, item: output } });
       // A separate app-server may report an actively persisted foreign turn as
       // interrupted. Only an explicit terminal rollout event confirms completion.
-      const terminal = await readDesktopTerminal(result.thread.path, this.turnId);
+      const rolloutPath = result.thread?.path;
+      if (typeof rolloutPath !== 'string') throw new Error('缺少原会话记录路径，无法核对结果');
+      const terminal = await readDesktopTerminal(rolloutPath, turnId);
       this.failures = 0;
       if (terminal) {
         if (terminal.text) this.emit('notification', { method: 'item/completed', params: { threadId: this.threadId, turnId: this.turnId, item: { type: 'agentMessage', text: terminal.text } } });
@@ -155,10 +176,10 @@ export async function readDesktopTerminal(file: string, turnId: string): Promise
     const lines = buffer.subarray(0, bytesRead).toString('utf8').split('\n');
     if (start) lines.shift();
     for (const line of lines.reverse()) {
-      let record; try { record = JSON.parse(line); } catch { continue; }
-      const event = record.payload;
-      if (record.type !== 'event_msg' || event?.turn_id !== turnId) continue;
-      if (event.type === 'task_complete') return { status: 'completed', text: event.last_agent_message || '' };
+      let parsed: unknown; try { parsed = JSON.parse(line); } catch { continue; }
+      const row = record(parsed), event = record(row.payload);
+      if (row.type !== 'event_msg' || event.turn_id !== turnId) continue;
+      if (event.type === 'task_complete') return { status: 'completed', text: typeof event.last_agent_message === 'string' ? event.last_agent_message : '' };
       if (event.type === 'turn_aborted') return { status: 'interrupted' };
     }
     return null;

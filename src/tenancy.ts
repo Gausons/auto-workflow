@@ -3,22 +3,30 @@ import { existsSync, readFileSync, realpathSync, mkdirSync, writeFileSync } from
 import { parseEnv } from 'node:util';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
+import type { Tenant } from './database.js';
+import type { Environment } from './issueSources/types.js';
 
-export function readEnvFile(filename: any) {
+interface TenantDatabase {
+  getTenant(id: string): Tenant | undefined;
+  createTenant(input: { id: string; name?: string; token: string }): Tenant | undefined;
+}
+interface WorkspaceEntry { id: unknown; workspace?: unknown; [key: string]: unknown }
+
+export function readEnvFile(filename: string): Environment {
   return existsSync(filename) ? parseEnv(readFileSync(filename, 'utf8')) : {};
 }
 
-export function loadEnvironment(rootDir: any) {
+export function loadEnvironment(rootDir: string): Environment {
   return { ...readEnvFile(path.join(rootDir, '.env')), ...process.env };
 }
 
-export function databasePath(rootDir: any, environment: any) {
+export function databasePath(rootDir: string, environment: Environment) {
   return path.resolve(rootDir, environment.DATABASE_PATH || '.workflow-data/workflow.sqlite');
 }
 
 export const generateToken = () => randomBytes(32).toString('base64url');
 
-export function provisionDefaultTenant(database: any, rootDir: any, environment: any) {
+export function provisionDefaultTenant(database: TenantDatabase, rootDir: string, environment: Environment) {
   if (database.getTenant('default')) return false;
   const token = environment.DEFAULT_TENANT_TOKEN || generateToken();
   // Save the generated token before inserting its hash, so an interrupted initialization is recoverable.
@@ -31,9 +39,9 @@ export function provisionDefaultTenant(database: any, rootDir: any, environment:
   return true;
 }
 
-export function tenantEnvironment(tenant: any, rootDir: any, environment: any) {
+export function tenantEnvironment(tenant: Pick<Tenant, 'id'>, rootDir: string, environment: Environment): Environment {
   // Explicit allowlist for OS tooling. Never pass server or other tenants' credentials to a child process.
-  const result: any = {};
+  const result: Environment = {};
   for (const key of ['PATH', 'HOME', 'USER', 'SHELL', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL', 'SYSTEMROOT']) {
     if (environment[key] !== undefined) result[key] = environment[key];
   }
@@ -51,9 +59,9 @@ export function tenantEnvironment(tenant: any, rootDir: any, environment: any) {
   return result;
 }
 
-export function canonicalWorkspace(value: any) {
+export function canonicalWorkspace(value: string) {
   let current = path.resolve(value);
-  const suffix: any[] = [];
+  const suffix: string[] = [];
   while (!existsSync(current)) {
     suffix.unshift(path.basename(current));
     current = path.dirname(current);
@@ -61,8 +69,8 @@ export function canonicalWorkspace(value: any) {
   return path.join(realpathSync(current), ...suffix);
 }
 
-export function assertSeparateWorkspaces(entries: any) {
-  const workspaces = entries.filter((entry: any) => entry.workspace).map((entry: any) => ({ ...entry, workspace: canonicalWorkspace(entry.workspace) }));
+export function assertSeparateWorkspaces(entries: WorkspaceEntry[]) {
+  const workspaces = entries.filter((entry): entry is WorkspaceEntry & { workspace: string } => typeof entry.workspace === 'string' && Boolean(entry.workspace)).map(entry => ({ ...entry, workspace: canonicalWorkspace(entry.workspace) }));
   for (let i = 0; i < workspaces.length; i++) {
     for (let j = i + 1; j < workspaces.length; j++) {
       const a = workspaces[i], b = workspaces[j];
