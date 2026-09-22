@@ -107,6 +107,7 @@ export interface Session {
   updatedAt: string;
   workspaces?: string[];
   model?: string;
+  reasoningEffort?: string;
   branch?: string;
   messageCount?: number;
 }

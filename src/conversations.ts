@@ -42,6 +42,10 @@ interface ConversationInput {
   requestId?: unknown;
   message?: unknown;
   targetAgent?: unknown;
+  projectId?: unknown;
+  cwd?: unknown;
+  model?: unknown;
+  reasoningEffort?: unknown;
 }
 interface ConversationSource {
   session: Session;
@@ -175,7 +179,15 @@ export function createConversations({ database, tenantId, history, delivery, exe
       const requestId = requestKey(input), message = messageText(input.message, true);
       if (typeof input.targetAgent !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(input.targetAgent)) throw httpError(400, '请选择目标 Agent');
       const targetAgent = input.targetAgent;
-      const fingerprint = createHash('sha256').update(JSON.stringify([id, targetAgent, message])).digest('hex');
+      if (input.projectId !== undefined && (typeof input.projectId !== 'string' || input.projectId.length > 500)) throw httpError(400, '执行目标格式无效');
+      if (input.cwd !== undefined && (typeof input.cwd !== 'string' || input.cwd.length > 2000)) throw httpError(400, '工作目录格式无效');
+      if (input.model !== undefined && (typeof input.model !== 'string' || input.model.length > 200)) throw httpError(400, '模型格式无效');
+      if (input.reasoningEffort !== undefined && (typeof input.reasoningEffort !== 'string' || input.reasoningEffort.length > 80)) throw httpError(400, '思考强度格式无效');
+      const projectId = typeof input.projectId === 'string' ? input.projectId : '';
+      const requestedCwd = typeof input.cwd === 'string' ? input.cwd.trim() : '';
+      const model = typeof input.model === 'string' ? input.model.trim() : '';
+      const reasoningEffort = typeof input.reasoningEffort === 'string' ? input.reasoningEffort.trim() : '';
+      const fingerprint = createHash('sha256').update(JSON.stringify([id, targetAgent, projectId, requestedCwd, model, reasoningEffort, message])).digest('hex');
       const repeated = read().sessions.find(session => session.createRequestId === requestId);
       if (repeated) {
         if (repeated.createFingerprint !== fingerprint) throw httpError(409, '发送标识已用于另一请求');
@@ -186,9 +198,14 @@ export function createConversations({ database, tenantId, history, delivery, exe
       // Keep code and attachments at the same location. Cross-device copying is not implicit.
       const deviceId = origin.session.deviceId || 'local';
       const projects = (await execution.targets()).projects.filter(project => project.deviceId === deviceId && (project.agent || 'codex') === targetAgent);
-      const project = projects.find(project => project.cwd === origin.session.cwd) || projects[0];
+      const project = (projectId ? projects.find(project => project.id === projectId) : undefined) || projects.find(project => project.cwd === origin.session.cwd) || projects[0];
       if (!project) throw httpError(422, `来源设备上没有可用的 ${targetAgent}，请配置该 Agent 后重试`);
-      let cwd = origin.session.cwd || project.cwd;
+      if (projectId && project.id !== projectId) throw httpError(400, '请选择来源设备上的可用执行目标');
+      const selectedModel = (project.models || []).find(item => item.id === model);
+      if (model && !selectedModel) throw httpError(400, '所选模型不属于目标 Agent');
+      const efforts = Array.isArray(selectedModel?.reasoningEfforts) ? selectedModel.reasoningEfforts : project.reasoningEfforts || [];
+      if (reasoningEffort && !efforts.some(item => item.id === reasoningEffort)) throw httpError(400, '所选思考强度不受当前模型支持');
+      let cwd = requestedCwd || origin.session.cwd || project.cwd;
       if (deviceId !== 'local' && cwd !== project.cwd) throw httpError(409, '来源目录尚未注册为目标设备的可执行项目');
       if (deviceId === 'local') {
         try { cwd = await realpath(cwd); if (!(await stat(cwd)).isDirectory()) throw new Error(); }
@@ -218,7 +235,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
         database.saveSessionContext(tenantId, snapshot);
         const sessionId = createHash('sha256').update(randomUUID()).digest('hex');
         data.sessions.push({ id: sessionId, source: 'conversation', managed: true, taskId: task.id, sourceSessionId: id, contextId: snapshot.id, createRequestId: requestId, createFingerprint: fingerprint,
-          agent: targetAgent, agentLabel: targetAgent === 'codex' ? 'Codex' : targetAgent === 'claude' ? 'Claude Code' : targetAgent,
+          agent: targetAgent, agentLabel: targetAgent === 'codex' ? 'Codex' : targetAgent === 'claude' ? 'Claude Code' : targetAgent, model: model || undefined, reasoningEffort: reasoningEffort || undefined,
           deviceId, projectId: project.id, appServerProjectId: project.appServerProjectId, protocol: project.protocol || 'legacy', cwd, nativeId: null,
           title: origin.session.title, status: waiting ? 'preparing' : 'ready', pendingMessage: message, pendingRequestId: requestId, partial: snapshot.partial, createdAt: now(), updatedAt: now(), excerpt: '' });
         task.sessionIds.push(sessionId); task.revision++; task.updatedAt = now();
@@ -260,7 +277,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
         if (s.nativeId !== session.nativeId) throw httpError(409, '会话已更新，请重试');
         const j: Execution = { id: randomUUID(), requestId, conversationId: id, sourceSessionId: s.sourceSessionId, contextId: s.contextId, contextDigest: snapshot.digest,
           contextCompacted: compiled.compacted, taskId: task.id, contextVersion: task.contextVersion, userMessage: message, prompt: compiled.prompt,
-          agent: s.agent, agentLabel: s.agentLabel, deviceId: s.deviceId, cwd: s.cwd, projectId: s.projectId, appServerProjectId: s.appServerProjectId, protocol: s.protocol,
+          agent: s.agent, agentLabel: s.agentLabel, deviceId: s.deviceId, cwd: s.cwd, projectId: s.projectId, appServerProjectId: s.appServerProjectId, protocol: s.protocol, model: s.model || null, reasoningEffort: s.reasoningEffort || null,
           ...(s.nativeId ? s.protocol === 'acp' ? { resumeSessionId: s.nativeId } : { resumeThreadId: s.nativeId } : {}),
           title: s.title, status: 'queued', createdAt: now(), updatedAt: now(), output: '', message: '已提交消息', sessionId: null, threadId: null, turnId: null };
         (current.executions ||= []).push(j); s.pendingMessage = ''; s.pendingRequestId = null; s.status = 'queued'; s.updatedAt = now(); task.status = 'running'; task.revision++;

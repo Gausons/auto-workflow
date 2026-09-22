@@ -29,7 +29,7 @@ async function fixture(t: TestContext) {
   let update: Update = () => {}; const launched: RunnerJob[] = [];
   const execution = createCodexExecution({ database, tenantId: 'default', workspace: () => root, history, runnerFactory: notify => {
     update = notify;
-    return { projects: async () => ['codex', 'claude'].map(agent => ({ id: agent, agent, protocol: 'acp' as const, cwd: root })), start: async job => { launched.push(job); update({ ...job, status: 'running', sessionId: job.resumeSessionId || randomUUID() }); }, close() {} };
+    return { projects: async () => ['codex', 'claude'].map(agent => ({ id: agent, agent, protocol: 'acp' as const, cwd: root, models: [{ id: 'test-model', name: 'Test Model', reasoningEfforts: [{ id: 'low', name: '低' }] }] })), start: async job => { launched.push(job); update({ ...job, status: 'running', sessionId: job.resumeSessionId || randomUUID() }); }, close() {} };
   } });
   const options = { database, tenantId: 'default', history, delivery, execution, environment, contextRoot: path.join(root, 'context') };
   const service = createConversations(options);
@@ -67,6 +67,25 @@ test('create and send are idempotent, reject reused keys, and reuse the native s
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.launched[1].resumeSessionId, nativeId);
   assert.equal(f.launched[1].prompt, '再检查边界条件');
+});
+
+test('new conversation honors the selected project, directory, model and reasoning effort', async t => {
+  const f = await fixture(t);
+  const created = await f.service.create(f.source, {
+    requestId: randomUUID(), targetAgent: 'codex', projectId: 'codex', cwd: f.root,
+    model: 'test-model', reasoningEffort: 'low', message: '使用明确选择的运行配置'
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  const session = f.service.detail(created.sessionId).session;
+  assert.equal(session.projectId, 'codex');
+  assert.equal(session.model, 'test-model');
+  assert.equal(session.reasoningEffort, 'low');
+  assert.equal(session.cwd, await import('node:fs/promises').then(fs => fs.realpath(f.root)));
+  assert.equal(f.launched[0].projectId, 'codex');
+  assert.equal(f.launched[0].model, 'test-model');
+  assert.equal(f.launched[0].reasoningEffort, 'low');
+  assert.equal(f.launched[0].userMessage, '使用明确选择的运行配置');
+  await assert.rejects(f.service.create(f.source, { requestId: randomUUID(), targetAgent: 'codex', projectId: 'claude' }), { statusCode: 400 });
 });
 
 test('switching back carries original context and new turns without nesting injected prompts', async t => {

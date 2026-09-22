@@ -1,6 +1,7 @@
 import { taskContent } from './taskContent.js';
 import { renderMessages, renderMarkdown } from './historyView.js';
 import { taskTimeline, taskActivity } from './taskTimeline.js';
+import { renderRunContext, renderRunModel, runDirectoryName, selectedAgentProject, type AgentRunConfig } from './agentRunConfig.js';
 import type { AgentProject, Api, Execution, Handoff, HistoryMessage, Session, Task, TaskCenterData } from './taskTypes.js';
 
 type Page = 'tasks' | 'inbox' | 'devices' | 'new';
@@ -124,20 +125,8 @@ export function createTaskCenterUI({ root, api, canEdit, toast }: TaskCenterUiOp
     };
   }
   const mutate = (body: Record<string, unknown>) => api<MutationResult>('/api/task-center', { method: 'POST', body: JSON.stringify(body) });
-  const createProject = () => createTargets?.[createProjectIndex];
-  function createModelOptions() {
-    const project = createProject(), models = project?.models || [];
-    return `<option value="">默认模型${project?.defaultModel ? `（${esc(project.defaultModel)}）` : ''}</option>${models.map(model => `<option value="${esc(model.id)}" ${createModel === model.id ? 'selected' : ''}>${esc(model.name || model.id)}</option>`).join('')}`;
-  }
-  function createEffortOptions() {
-    const project = createProject(), model = (project?.models || []).find(item => item.id === (createModel || project?.defaultModel));
-    const efforts = Array.isArray(model?.reasoningEfforts) ? model.reasoningEfforts : project?.reasoningEfforts || [];
-    const fallback = model?.defaultReasoningEffort || project?.defaultReasoningEffort;
-    return `<option value="">默认强度${fallback ? `（${esc(fallback)}）` : ''}</option>${efforts.map(effort => `<option value="${esc(effort.id)}" ${createReasoningEffort === effort.id ? 'selected' : ''}>${esc(effort.name || effort.id)}</option>`).join('')}`;
-  }
-  const directoryName = (cwd: string) => cwd.split(/[\\/]/).filter(Boolean).at(-1) || cwd || '默认目录';
-  const effortLabel = (value: string) => ({ none: '无', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高', ultra: '极高' } as Record<string, string>)[value] || value;
-  const createIcon = (kind: 'folder' | 'device') => `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${kind === 'folder' ? '<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/><path d="M3 9h18"/>' : '<rect x="4" y="3" width="16" height="14" rx="2"/><path d="M2 20h20M9 17v3m6-3v3"/>'}</svg>`;
+  const createConfig = (): AgentRunConfig => ({ projects: createTargets || [], projectIndex: createProjectIndex, cwd: createCwd, model: createModel, reasoningEffort: createReasoningEffort });
+  const createProject = () => selectedAgentProject(createConfig());
   const workspaceKey = () => JSON.stringify([createProject()?.id, createProject()?.deviceId, createCwd]);
   async function loadBranches() {
     const key = workspaceKey(); branchKey = key; branchLoading = true; branchError = ''; branchState = null;
@@ -159,35 +148,19 @@ export function createTaskCenterUI({ root, api, canEdit, toast }: TaskCenterUiOp
     });
   }
   function createConversation() {
-    const project = createProject(), directories = project?.commonDirectories || [];
-    const cwd = createCwd || project?.cwd || '';
-    const model = (project?.models || []).find(item => item.id === (createModel || project?.defaultModel));
-    const modelLabel = model?.name || createModel || project?.defaultModel || '默认模型';
-    const effort = createReasoningEffort || model?.defaultReasoningEffort || project?.defaultReasoningEffort || '';
+    const project = createProject();
     const disabled = creating ? 'disabled' : '';
-    const targetOptions = (createTargets || []).map((item, index) => `<option value="${index}" ${index === createProjectIndex ? 'selected' : ''}>${esc(item.name)} · ${esc(item.deviceName)}${item.online ? '' : '（离线）'}</option>`).join('');
     return `<section class="tc-create" aria-label="新建任务会话">
       <div class="tc-create-log" role="log" aria-live="polite">${createdMessages.length ? createdMessages.map(m => `<p class="tc-create-message">${esc(m.text)}</p><div class="tc-create-reply">${m.executed ? '任务已创建并提交 Agent。' : '任务已创建。'}${button('open-created', '查看任务', m.taskId)}</div>`).join('') : empty('想让 Agent 完成什么？', '描述你的目标，让 Agent 帮你完成。')}</div>
       <form id="tc-create-form" class="tc-create-shell" aria-busy="${creating}">
-        <div class="tc-create-context" aria-label="任务运行环境">${project ? `
-          <details class="tc-config-menu tc-directory-menu" name="create-config">
-            <summary title="${esc(cwd || '工作目录')}" aria-label="工作目录：${esc(cwd || '默认目录')}">${createIcon('folder')}<span id="tc-create-directory-name">${esc(directoryName(cwd))}</span><span class="tc-config-chevron" aria-hidden="true">⌄</span></summary>
-            <div class="tc-config-panel">
-              <label class="tc-create-setting" for="tc-create-cwd">工作目录</label>
-              <input id="tc-create-cwd" aria-label="工作目录" value="${esc(createCwd)}" placeholder="${esc(project.cwd || '输入工作目录')}" maxlength="2000" ${disabled}>
-              <div class="tc-actions"><button type="button" class="button secondary" data-tc="create-pick-directory" ${disabled}>选择目录</button><button type="button" class="button ghost" data-tc="create-clear-directory" ${disabled}>使用默认目录</button></div>
-              ${directories.length ? `<p class="tc-create-hint">常用目录</p><div class="tc-directory-options">${directories.slice(0, 4).map((path: string, index: number) => `<button type="button" data-tc="create-directory" data-id="${index}" title="${esc(path)}" aria-label="${esc(path)}" aria-pressed="${path === cwd}" ${disabled}>${createIcon('folder')}<span>${esc(directoryName(path))}<small>${esc(path)}</small></span></button>`).join('')}</div>` : ''}
-            </div>
-          </details>
-          <label class="tc-target-control" title="执行位置">${createIcon('device')}<select id="tc-create-project" aria-label="执行位置" ${disabled}>${targetOptions}</select></label>${branchMenu()}
-        ` : `<p class="tc-create-hint" role="${createTargets === null ? 'status' : 'alert'}">${esc(createTargets === null ? '正在读取运行配置…' : createTargetsError || '未发现可用 Agent，仍可创建任务。')}</p>`}</div>
+        <div class="tc-create-context" aria-label="任务运行环境">${project ? renderRunContext(createConfig(), { disabled: creating, branch: branchMenu() }) : `<p class="tc-create-hint" role="${createTargets === null ? 'status' : 'alert'}">${esc(createTargets === null ? '正在读取运行配置…' : createTargetsError || '未发现可用 Agent，仍可创建任务。')}</p>`}</div>
         <div class="tc-composer conversation-composer">
           ${sourceSessionId ? `<p class="tc-meta">将关联会话：${esc(data.sessions.find(s => s.id === sourceSessionId)?.title)}</p>` : ''}
           <textarea id="tc-create-message" aria-label="任务描述" placeholder="描述任务、期望结果，或需要解决的问题…" rows="4" maxlength="64000" required ${disabled}>${esc(draft)}</textarea>
           <div class="tc-attachment-list">${createFiles.map((file, index) => `<span class="tc-attachment" title="${esc(file.name)}"><span>${esc(file.name)}</span><small>${Math.max(1, Math.round(file.size / 1024))} KB</small><button type="button" data-tc="remove-file" data-id="${index}" aria-label="移除 ${esc(file.name)}" ${disabled}>×</button></span>`).join('')}</div>
           <input type="file" id="tc-create-files" multiple hidden ${disabled}>
           <footer><div class="tc-create-tools"><button type="button" class="tc-attach-button" data-tc="attach-files" aria-label="附加文件" title="${project?.deviceId === 'local' ? '附加文件（最多 10 个，单个 5 MB）' : '附件暂仅支持工作台所在设备'}" ${creating || project?.deviceId !== 'local' ? 'disabled' : ''}>＋</button><span class="tc-create-shortcut">⌘ / Ctrl + Enter 发送</span></div><div class="tc-create-send">
-            ${project ? `<details class="tc-config-menu tc-model-menu" name="create-config" id="tc-create-model-menu"><summary aria-label="模型与思考强度"><span>${esc(modelLabel)}</span><span class="tc-effort-label">${esc(effortLabel(effort) || '默认')}</span><span class="tc-config-chevron" aria-hidden="true">⌄</span></summary><div class="tc-config-panel"><label class="tc-create-setting">模型<select id="tc-create-model" ${disabled}>${createModelOptions()}</select></label><label class="tc-create-setting">思考强度<select id="tc-create-effort" ${disabled}>${createEffortOptions()}</select></label><p class="tc-create-hint">${esc(model?.description || '默认选项沿用所选 Agent 的配置。')}</p></div></details>` : ''}
+            ${project ? renderRunModel(createConfig(), creating) : ''}
             <button class="button primary" type="submit" aria-label="创建并发送任务" title="创建并发送任务" ${creating || !draft.trim() ? 'disabled' : ''}>${creating ? '…' : '↑'}</button>
           </div></footer>
           <p class="tc-form-error" role="alert" ${createError ? '' : 'hidden'}>${esc(createError)}</p>
@@ -286,7 +259,7 @@ export function createTaskCenterUI({ root, api, canEdit, toast }: TaskCenterUiOp
       selectFrom(root, '#tc-create-form [type="submit"]').disabled = creating || !draft.trim();
       return;
     }
-    if (target.id === 'tc-create-cwd') { createCwd = target.value; const name = selectFrom(root, '#tc-create-directory-name'); if (name) { name.textContent = directoryName(createCwd || createProject()?.cwd || ''); const summary = name.closest<HTMLElement>('summary'); if (summary) { summary.title = createCwd || createProject()?.cwd || '工作目录'; summary.setAttribute('aria-label', `工作目录：${summary.title}`); } } return; }
+    if (target.id === 'tc-create-cwd') { createCwd = target.value; const name = selectFrom(root, '#tc-create-directory-name'); if (name) { name.textContent = runDirectoryName(createCwd || createProject()?.cwd || ''); const summary = name.closest<HTMLElement>('summary'); if (summary) { summary.title = createCwd || createProject()?.cwd || '工作目录'; summary.setAttribute('aria-label', `工作目录：${summary.title}`); } } return; }
     if (target.id !== 'tc-query') return;
     query = target.value; const needle = query.toLowerCase();
     selectFrom(root, '#tc-inbox-list').innerHTML = data.sessions.filter(s => !linked(s.id) && [s.title, s.agent, s.cwd, position(s)].join(' ').toLowerCase().includes(needle)).map(s => sessionCard(s, true)).join('') || empty('暂无匹配会话', '试试其他搜索词。');

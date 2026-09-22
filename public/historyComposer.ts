@@ -1,10 +1,11 @@
 import { escape, renderMessages } from './historyView.js';
 import { pendingHistoryMessages } from './historyTimeline.js';
+import { renderRunContext, renderRunModel, selectedAgentProject, type AgentRunConfig } from './agentRunConfig.js';
 import type { AgentProject, HistoryMessage, InteractionRequest } from './taskTypes.js';
 
 interface ComposerSession {
   id: string; agent: string; agentLabel?: string; deviceId?: string; sessionId?: string | null;
-  archived?: boolean; managed?: boolean; model?: string;
+  archived?: boolean; managed?: boolean; model?: string; cwd?: string;
 }
 interface ComposerJob {
   id: string; status: string; prompt: string; message?: string; output?: string; turnId?: string | null;
@@ -22,6 +23,8 @@ interface StatusResponse { execution?: ComposerJob | null; executions?: Composer
 interface ExecutionResponse { executionId: string }
 interface NewSessionResponse { sessionId: string }
 interface TargetsResponse { projects: AgentProject[]; localError?: string }
+interface BranchState { repository: boolean; current?: string; changes: number; branches: string[] }
+interface DirectoryPickerResult { status: 'pending' | 'selecting' | 'completed' | 'cancelled' | 'failed'; requestId: string; cwd?: string; message?: string }
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 const requestId = () => {
   const bytes = crypto.getRandomValues(new Uint8Array(16)); bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
@@ -38,6 +41,7 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
   const drafts = new Map<string, { text: string; requestId: string; sentText: string }>();
   let liveOutput: HTMLElement | null = null;
   let historyMessages: HistoryMessage[] = [], executions: ComposerJob[] = [];
+  let newSessionConfig: AgentRunConfig | null = null, newSessionStatus = '', branchState: BranchState | null = null, branchLoading = false, branchError = '';
   let submission = 0, synchronizedSignature = '';
   let host: HTMLElement | null = null, session: ComposerSession | null = null, generation = 0, timer: ReturnType<typeof setTimeout> | undefined, sending = false, polling = false, job: ComposerJob | null = null, outputSignature = '';
   const draft = () => { if (!session) throw new Error('会话尚未挂载'); if (!drafts.has(session.id)) drafts.set(session.id, { text: '', requestId: '', sentText: '' }); return drafts.get(session.id)!; };
@@ -80,7 +84,7 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
     catch (error: unknown) { const target = select('[data-error]'); if (current === generation && target) target.textContent = errorMessage(error); }
     finally { if (current === generation) { polling = false; timer = setTimeout(poll, 2500); } }
   }
-  function unmount() { generation++; clearTimeout(timer); host = null; liveOutput = null; session = null; polling = false; sending = false; job = null; historyMessages = []; executions = []; synchronizedSignature = ''; outputSignature = ''; }
+  function unmount() { generation++; clearTimeout(timer); host = null; liveOutput = null; session = null; polling = false; sending = false; job = null; historyMessages = []; executions = []; synchronizedSignature = ''; outputSignature = ''; newSessionConfig = null; newSessionStatus = ''; branchState = null; branchLoading = false; branchError = ''; }
   function mount(element: HTMLElement, value: ComposerSession, output?: HTMLElement, messages: HistoryMessage[] = []) {
     unmount(); host = element; liveOutput = output || null; session = value; historyMessages = messages;
     canSendNative = Boolean(value.managed || (value.agent === 'codex' && (!value.deviceId || value.deviceId === 'local') && value.sessionId && !value.archived));
@@ -123,32 +127,88 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
   function mountSwitch() {
     if (!host || !session || !openSession) return;
     const currentSession = session, current = generation, id = currentSession.id, container = document.createElement('div');
-    container.className = 'conversation-switch';
-    container.innerHTML = '<label>带上下文新开会话 <select aria-label="目标 Agent"><option>正在查找 Agent…</option></select></label><button type="button" disabled>新开会话 →</button><span role="status"></span>';
+    container.className = 'conversation-switch tc-create-shell';
+    container.innerHTML = '<div class="tc-create-context"><p class="tc-create-hint" role="status">正在读取运行配置…</p></div>';
     host.prepend(container);
-    const choice = container.querySelector('select')!, button = container.querySelector('button')!, status = container.querySelector('span')!;
+    const project = () => newSessionConfig ? selectedAgentProject(newSessionConfig) : undefined;
+    const branchMenu = () => project()?.deviceId !== 'local' ? '' : `<details class="tc-config-menu tc-branch-menu" id="history-branch-menu" name="create-config"><summary data-new-session="branches" aria-label="Git 分支"><span aria-hidden="true">⑂</span><span>${escape(branchState?.current || 'Git 分支')}</span><span aria-hidden="true">⌄</span></summary><div class="tc-config-panel">${branchLoading ? '<p role="status">正在读取分支…</p>' : branchError ? `<p role="alert">${escape(branchError)}</p>` : branchState?.repository ? `<input data-new-session="branch-search" aria-label="搜索分支" placeholder="搜索分支"><p class="tc-create-hint">${branchState.current ? `当前：${escape(branchState.current)}` : '当前为分离 HEAD'} · 未提交：${branchState.changes} 项</p><div class="tc-branch-options">${branchState.branches.map(name => `<button type="button" data-new-session="switch-branch" data-id="${escape(name)}" aria-pressed="${name === branchState?.current}">${escape(name)}${name === branchState?.current ? ' ✓' : ''}</button>`).join('')}</div><label class="tc-create-setting">新分支<input data-new-session="new-branch-name" aria-label="新分支名称" placeholder="输入分支名称" maxlength="200"></label><button type="button" class="button secondary" data-new-session="new-branch">创建并切换</button>` : '<p class="tc-create-hint">展开后读取当前 Git 分支。</p>'}</div></details>`;
+    const renderSwitch = () => {
+      if (current !== generation || !newSessionConfig) return;
+      container.innerHTML = `<div class="tc-create-context" aria-label="新会话运行环境">${renderRunContext(newSessionConfig, { disabled: sending, branch: branchMenu() })}</div><div class="conversation-new-actions">${renderRunModel(newSessionConfig, sending)}<button type="button" class="button secondary" data-new-session="create" ${sending ? 'disabled' : ''}>带上下文新开会话 →</button><span role="status">${escape(newSessionStatus)}</span></div>`;
+    };
     void api('/api/task-center/codex').then(value => {
       const result = value as TargetsResponse;
       if (current !== generation) return;
-      const agents: string[] = [...new Set<string>(result.projects.filter(project => project.deviceId === (currentSession.deviceId || 'local')).map(project => project.agent || 'codex'))];
-      choice.innerHTML = agents.length ? agents.map(agent => `<option value="${escape(agent)}">${escape(agent === 'claude' ? 'Claude Code' : agent === 'codex' ? 'Codex' : agent)}</option>`).join('') : '<option value="">没有可用 Agent</option>';
-      choice.value = agents.find(agent => agent !== currentSession.agent) || agents[0] || '';
-      button.disabled = !agents.length;
-      if (!agents.length) status.textContent = result.localError || '请先配置 Agent';
-    }).catch((error: unknown) => { if (current === generation) status.textContent = errorMessage(error); });
-    button.onclick = async event => {
-      event.stopPropagation(); if (sending || !choice.value) return;
-      const message = draft().text.trim(), targetAgent = choice.value;
-      const signature = JSON.stringify([targetAgent, message]);
+      const projects = result.projects.filter(item => item.deviceId === (currentSession.deviceId || 'local'));
+      const matching = projects.findIndex(item => item.cwd === currentSession.cwd && (item.agent || 'codex') === currentSession.agent);
+      newSessionConfig = { projects, projectIndex: Math.max(0, matching), cwd: '', model: '', reasoningEffort: '' };
+      if (!projects.length) newSessionStatus = result.localError || '来源设备上没有可用 Agent';
+      renderSwitch();
+    }).catch((error: unknown) => { if (current === generation) { newSessionStatus = errorMessage(error); newSessionConfig = { projects: [], projectIndex: 0, cwd: '', model: '', reasoningEffort: '' }; renderSwitch(); } });
+    container.oninput = event => {
+      if (!newSessionConfig) return;
+      const target = event.target as HTMLInputElement;
+      if (target.id === 'tc-create-cwd') newSessionConfig.cwd = target.value;
+      if (target.dataset.newSession === 'branch-search') container.querySelectorAll<HTMLElement>('[data-new-session="switch-branch"]').forEach(button => { button.hidden = !(button.dataset.id || '').toLowerCase().includes(target.value.toLowerCase()); });
+    };
+    container.onchange = event => {
+      if (!newSessionConfig) return;
+      const target = event.target as HTMLSelectElement;
+      if (target.id === 'tc-create-project') { newSessionConfig.projectIndex = Number(target.value) || 0; newSessionConfig.cwd = ''; newSessionConfig.model = ''; newSessionConfig.reasoningEffort = ''; branchState = null; branchError = ''; }
+      else if (target.id === 'tc-create-model') { newSessionConfig.model = target.value; newSessionConfig.reasoningEffort = ''; }
+      else if (target.id === 'tc-create-effort') newSessionConfig.reasoningEffort = target.value;
+      else return;
+      renderSwitch();
+    };
+    container.onclick = async event => {
+      const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button,[data-new-session="branches"]');
+      if (!button || !newSessionConfig) return;
+      event.stopPropagation();
+      const action = button.dataset.newSession || button.dataset.tc;
+      if (action === 'create-directory') { newSessionConfig.cwd = project()?.commonDirectories?.[Number(button.dataset.id)] || ''; renderSwitch(); return; }
+      if (action === 'create-clear-directory') { newSessionConfig.cwd = ''; renderSwitch(); return; }
+      if (action === 'create-pick-directory') {
+        const selected = project(); if (!selected) return; button.disabled = true;
+        try {
+          const response = await api('/api/task-center/directory-picker', { method: 'POST', body: JSON.stringify({ deviceId: selected.deviceId, projectId: selected.id }) }) as DirectoryPickerResult;
+          if (response.status === 'completed') newSessionConfig.cwd = response.cwd || '';
+          else for (let attempt = 0; attempt < 300; attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            const status = await api(`/api/task-center/directory-picker?requestId=${encodeURIComponent(response.requestId)}`) as DirectoryPickerResult;
+            if (status.status === 'completed') { newSessionConfig.cwd = status.cwd || ''; break; }
+            if (status.status === 'cancelled') throw new Error('已取消选择目录');
+            if (status.status === 'failed') throw new Error(status.message || '无法选择目录');
+            if (attempt === 299) throw new Error('等待目录选择超时');
+          }
+        } catch (error: unknown) { newSessionStatus = errorMessage(error); }
+        renderSwitch(); return;
+      }
+      if (action === 'branches') {
+        if (branchLoading || branchState) return; branchLoading = true; renderSwitch();
+        try { branchState = await api('/api/task-center/git', { method: 'POST', body: JSON.stringify({ action: 'list', projectId: project()?.id, deviceId: project()?.deviceId, cwd: newSessionConfig.cwd }) }) as BranchState; }
+        catch (error: unknown) { branchError = errorMessage(error); }
+        finally { branchLoading = false; renderSwitch(); container.querySelector<HTMLDetailsElement>('#history-branch-menu')!.open = true; }
+        return;
+      }
+      if (action === 'switch-branch' || action === 'new-branch') {
+        const branch = action === 'new-branch' ? container.querySelector<HTMLInputElement>('[data-new-session="new-branch-name"]')?.value.trim() : button.dataset.id;
+        if (!branch) { newSessionStatus = '请输入分支名称'; renderSwitch(); return; }
+        try { branchState = await api('/api/task-center/git', { method: 'POST', body: JSON.stringify({ action: action === 'new-branch' ? 'create' : 'switch', branch, projectId: project()?.id, deviceId: project()?.deviceId, cwd: newSessionConfig.cwd }) }) as BranchState; branchError = ''; }
+        catch (error: unknown) { branchError = errorMessage(error); }
+        renderSwitch(); return;
+      }
+      if (action !== 'create' || sending || !project()) return;
+      const message = draft().text.trim(), selected = project()!;
+      const signature = JSON.stringify([selected.deviceId, selected.id, newSessionConfig.cwd, newSessionConfig.model, newSessionConfig.reasoningEffort, message]);
       let attempt = newRequests.get(id);
       if (!attempt || attempt.signature !== signature) { attempt = { signature, requestId: requestId() }; newRequests.set(id, attempt); }
-      sending = true; button.disabled = true; status.textContent = '正在带上上下文…'; update();
+      sending = true; newSessionStatus = '正在带上上下文…'; renderSwitch(); update();
       try {
-        const result = await api(`/api/sessions/${id}/continue-as-new`, { method: 'POST', body: JSON.stringify({ targetAgent, message, requestId: attempt.requestId }) }) as NewSessionResponse;
+        const result = await api(`/api/sessions/${id}/continue-as-new`, { method: 'POST', body: JSON.stringify({ targetAgent: selected.agent || 'codex', projectId: selected.id, cwd: newSessionConfig.cwd.trim(), model: newSessionConfig.model, reasoningEffort: newSessionConfig.reasoningEffort, message, requestId: attempt.requestId }) }) as NewSessionResponse;
         drafts.get(id)!.text = ''; newRequests.delete(id);
         if (current === generation) await openSession(result.sessionId);
-      } catch (error: unknown) { if (current === generation) status.textContent = `${errorMessage(error)}。再次点击可重试，输入已保留。`; }
-      finally { if (current === generation) { sending = false; button.disabled = false; update(); } }
+      } catch (error: unknown) { if (current === generation) newSessionStatus = `${errorMessage(error)}。再次点击可重试，输入已保留。`; }
+      finally { if (current === generation) { sending = false; renderSwitch(); update(); } }
     };
   }
   function respond() {

@@ -89,6 +89,7 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
       const assets: Record<string, [string, string]> = { '/': ['index.html', 'text/html; charset=utf-8'], '/index.html': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['build/app.js', 'text/javascript; charset=utf-8'], '/historyView.js': ['build/historyView.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'] };
       assets['/taskContent.js'] = ['build/taskContent.js', 'text/javascript; charset=utf-8'];
       assets['/taskCenter.js'] = ['build/taskCenter.js', 'text/javascript; charset=utf-8'];
+      assets['/agentRunConfig.js'] = ['build/agentRunConfig.js', 'text/javascript; charset=utf-8'];
       assets['/historyComposer.js'] = ['build/historyComposer.js', 'text/javascript; charset=utf-8'];
       assets['/historyTimeline.js'] = ['build/historyTimeline.js', 'text/javascript; charset=utf-8'];
       assets['/taskTimeline.js'] = ['build/taskTimeline.js', 'text/javascript; charset=utf-8'];
