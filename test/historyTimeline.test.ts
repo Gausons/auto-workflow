@@ -60,3 +60,8 @@ test('composer keeps every pending turn and removes persisted copies without rem
  test('failed submissions without a turn do not appear as duplicate conversation messages', () => {
   assert.deepEqual(pendingHistoryMessages([], [{ ...job, status: 'failed', turnId: null, output: '' }]), []);
 });
+
+test('managed conversation display identity does not duplicate turns with a native turn ID', () => {
+  const messages = [{ role: 'user', text: 'continue', turnId: 'execution-1' }, { role: 'assistant', text: 'done', turnId: 'execution-1' }];
+  assert.deepEqual(pendingHistoryMessages(messages, [{ id: 'execution-1', conversationId: 'managed', turnId: 'native-turn', prompt: 'continue', output: 'done', status: 'completed' }]), []);
+});

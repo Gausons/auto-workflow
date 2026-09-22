@@ -7,6 +7,7 @@ import { createSessionDelivery } from './sessionDelivery/index.ts';
 import { createAgentHistory } from './agentHistory/index.js';
 import { createTaskCenter } from './taskCenter.js';
 import { createCodexExecution } from './codexExecution.js';
+import { createConversations } from './conversations.js';
 import { applyAssignmentBusinessRules, buildAssignmentJsonSchema, buildAssignmentSystemPrompt, buildAssignmentUserPayload, isAssignmentCandidate, normalizeAssignmentPeople, normalizeAssignmentRecommendation } from './assignmentEngine.js';
 import { createIssueSource, issueSourceConfig, issueSourceId, sourceStorageKey, syncCheckpoint } from './issueSources/index.ts';
 
@@ -74,6 +75,11 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
   }
 
   async function handleApi(req: any, res: any, url: any) {
+    const newConversation = /^\/api\/sessions\/([a-f0-9]{64})\/continue-as-new$/.exec(url.pathname);
+    if (newConversation && req.method === 'POST') { sendJson(res, 202, await conversations.create(newConversation[1], await readJson(req))); return; }
+    if (url.pathname === '/api/conversations' && req.method === 'GET') { sendJson(res, 200, { sessions: conversations.list() }); return; }
+    const inherited = /^\/api\/conversations\/([a-f0-9]{64})\/inherited$/.exec(url.pathname);
+    if (inherited && req.method === 'GET') { sendJson(res, 200, conversations.inherited(inherited[1], url.searchParams)); return; }
     if (url.pathname === '/api/task-center/git' && req.method === 'POST') { sendJson(res, 200, await codexExecution.git(await readJson(req))); return; }
     if (url.pathname === '/api/task-center/directory-picker') {
       const actor = requestIdentity.getStore().user;
@@ -82,7 +88,7 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     if (url.pathname === '/api/task-center/directory-action') { sendJson(res, 200, codexExecution.directoryAction(await readJson(req), requestIdentity.getStore().user)); return; }
     if (url.pathname === '/api/task-center/codex') { sendJson(res, 200, await codexExecution.targets()); return; }
     if (url.pathname === '/api/task-center/execute') { sendJson(res, 202, await codexExecution.execute(await readJson(req, 15_000_000))); return; }
-    if (url.pathname === '/api/task-center/execution-action') { sendJson(res, 200, await codexExecution.action(await readJson(req), requestIdentity.getStore().user)); return; }
+    if (url.pathname === '/api/task-center/execution-action') { sendJson(res, 200, await codexExecution.action(await readJson(req, 8_000_000), requestIdentity.getStore().user)); return; }
     if (url.pathname === '/api/task-center') {
       sendJson(res, 200, req.method === 'GET' ? await taskCenter.snapshot() : await taskCenter.command(await readJson(req), requestIdentity.getStore().user)); return;
     }
@@ -90,11 +96,11 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     const delivery = /^\/api\/sessions\/([a-f0-9]{64})(?:\/(events|records))?$/.exec(url.pathname);
     if (req.method === 'GET' && delivery) { const operation = delivery[2] === 'records' ? 'record' : delivery[2] || 'detail'; sendJson(res, 200, await sessionDelivery[operation](delivery[1], url.searchParams)); return; }
     const continuation = /^\/api\/agent-sessions\/([a-f0-9]{64})\/continue$/.exec(url.pathname);
-    if (continuation && req.method === 'POST') { sendJson(res, 202, await codexExecution.continueHistory(continuation[1], await readJson(req))); return; }
-    if (continuation && req.method === 'GET') { sendJson(res, 200, await codexExecution.historyExecution(continuation[1])); return; }
-    if (req.method === 'GET' && url.pathname === '/api/agent-sessions') { sendJson(res, 200, await agentHistory.list(url.searchParams)); return; }
+    if (continuation && req.method === 'POST') { sendJson(res, 202, conversations.has(continuation[1]) ? await conversations.send(continuation[1], await readJson(req)) : await codexExecution.continueHistory(continuation[1], await readJson(req))); return; }
+    if (continuation && req.method === 'GET') { sendJson(res, 200, conversations.has(continuation[1]) ? conversations.status(continuation[1]) : await codexExecution.historyExecution(continuation[1])); return; }
+    if (req.method === 'GET' && url.pathname === '/api/agent-sessions') { sendJson(res, 200, await conversations.historyList(url.searchParams)); return; }
     const history = /^\/api\/agent-sessions\/([a-f0-9]{64})$/.exec(url.pathname);
-    if (req.method === 'GET' && history) { sendJson(res, 200, await agentHistory.detail(history[1], url.searchParams)); return; }
+    if (req.method === 'GET' && history) { sendJson(res, 200, conversations.has(history[1]) ? conversations.detail(history[1], url.searchParams) : conversations.remoteDetail(history[1], url.searchParams) || await agentHistory.detail(history[1], url.searchParams)); return; }
     if (req.method === 'GET' && url.pathname === '/api/bootstrap') { sendJson(res, 200, getBootstrap()); return; }
     if (req.method === 'GET' && url.pathname === '/api/assignment/people') { sendJson(res, 200, { people: state.assignmentPeople }); return; }
     if (req.method === 'PUT' && url.pathname === '/api/assignment/people') {
@@ -562,6 +568,10 @@ async function ensureBugAttachmentsLoaded(bug: any) {
   const sessionDelivery: any = createSessionDelivery({ history: agentHistory, environment });
   const taskCenter = createTaskCenter({ database, tenantId: tenant.id, history: agentHistory });
   const codexExecution = createCodexExecution({ database, attachmentRoot: path.join(rootDir, '.workflow-data', 'attachments', createHash('sha256').update(tenant.id).digest('hex')), tenantId: tenant.id, workspace: () => state.config.codexWorkspaceDir, history: agentHistory, environment });
+  const conversations = createConversations({ database, tenantId: tenant.id, history: agentHistory, delivery: sessionDelivery, execution: codexExecution, environment,
+    contextRoot: path.join(rootDir, '.workflow-data', 'context', createHash('sha256').update(tenant.id).digest('hex')) });
+  const conversationTimer = setInterval(() => { void conversations.preparePending().catch(() => {}); }, 1500);
+  conversationTimer.unref();
   return {
     workspace: () => state.config.codexWorkspaceDir,
     async handleApi(req: any, res: any, url: any, principal: any) {
@@ -574,7 +584,7 @@ async function ensureBugAttachmentsLoaded(bug: any) {
       finally { if (mutation) mutationPending = false; }
     },
     async close() {
-      codexExecution.close(); configureScheduler(false); assignmentJobSeq++; await persistIssueState(); closing = true;
+      clearInterval(conversationTimer); conversations.close(); codexExecution.close(); configureScheduler(false); assignmentJobSeq++; await persistIssueState(); closing = true;
     }
   };
 }

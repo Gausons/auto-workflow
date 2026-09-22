@@ -21,7 +21,7 @@ const taskCenterUI = createTaskCenterUI({
   canEdit: () => state.permissions.includes('work.execute'),
   toast: showToast
 });
-const historyComposer = createHistoryComposer({ api, canEdit: () => state.permissions.includes('work.execute'), refresh: (id: string) => loadAgentSession(id), syncHistory: syncAgentSession });
+const historyComposer = createHistoryComposer({ api, canEdit: () => state.permissions.includes('work.execute'), refresh: (id: string) => loadAgentSession(id), syncHistory: syncAgentSession, openSession: (id: string) => { location.hash = `history/${id}`; } });
 let pollTimer: any = null;
 let configFormDirty = false;
 
@@ -118,7 +118,11 @@ async function loadCurrentView() {
     else taskCenterUI.showTasks();
   }
   if (state.view === 'settings' && state.settingsSection === 'members') await loadMembers();
-  if (state.view === 'history') await loadAgentHistory();
+  if (state.view === 'history') {
+    await loadAgentHistory();
+    const id = /^#history\/([a-f0-9]{64})$/.exec(location.hash)?.[1];
+    if (id) await loadAgentSession(id);
+  }
 }
 
 async function loadBootstrap({ silent = false }: any = {}) {
@@ -427,7 +431,7 @@ function bindHistoryEvents() {
   select('#historyNext').addEventListener('click', () => loadAgentHistory(historyState.offset + 30));
   select('#historyList').addEventListener('click', (event: any) => {
     const button = event.target.closest('[data-session-id]');
-    if (button) loadAgentSession(button.dataset.sessionId);
+    if (button) { history.replaceState(null, '', `#history/${button.dataset.sessionId}`); loadAgentSession(button.dataset.sessionId); }
   });
   select('#historyDetail').addEventListener('click', (event: any) => {
     if (event.target.closest('[data-more-messages]') && historyState.detail) {
@@ -436,7 +440,7 @@ function bindHistoryEvents() {
   });
 }
 
-const historyStatusLabel = (value: any) => ({ completed: '本轮结束', interrupted: '已中断', error: '发生错误', unknown: '运行状态未知' } as Record<string, string>)[value] || '运行状态未知';
+const historyStatusLabel = (value: any) => ({ ready: '等待输入', preparing: '正在准备上下文', queued: '等待执行', launching: '正在连接', running: '正在回复', waiting: '等待处理', failed: '执行失败', completed: '本轮结束', interrupted: '已中断', error: '发生错误', unknown: '运行状态未知' } as Record<string, string>)[value] || '运行状态未知';
 const historyTime = (value: any) => Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('zh-CN') : '时间未知';
 
 async function loadAgentHistory(offset = historyState.offset) {
@@ -472,7 +476,7 @@ async function loadAgentHistory(offset = historyState.offset) {
     select('#historyList').innerHTML = data.sessions.map((session: any) => `<button class="history-card" type="button" data-session-id="${escapeHtml(session.id)}" aria-pressed="false">
       <strong>${escapeHtml(session.title)}</strong>
       <span class="history-meta">${escapeHtml(session.agentLabel)} · ${historyTime(session.updatedAt)}</span>
-      <span>${escapeHtml(historyStatusLabel(session.status))} · ${session.messageCount} 条记录${session.archived ? ' · 已归档' : ''}${session.partial ? ' · 部分记录' : ''}</span>
+      <span>${escapeHtml(historyStatusLabel(session.status))} · ${session.messageCount} 条记录${session.managed ? ' · 已继承上下文' : ''}${session.archived ? ' · 已归档' : ''}${session.partial ? ' · 部分记录' : ''}</span>
       <span class="history-meta">${escapeHtml(session.cwd?.split('/').filter(Boolean).at(-1) || '未知工作区')}${session.branch ? ' · ' + escapeHtml(session.branch) : ''}</span></button>`).join('');
     select('#historyPage').textContent = data.total ? `${data.offset + 1}–${Math.min(data.offset + data.limit, data.total)} / ${data.total}` : '0 / 0';
     select('#historyPrev').disabled = data.offset === 0;
@@ -526,12 +530,26 @@ async function loadAgentSession(id: string, offset = 0) {
     const { session, messages, total } = historyState.detail;
     const duration = Math.max(0, Date.parse(session.updatedAt) - Date.parse(session.createdAt));
     const durationText = Number.isFinite(duration) ? `${Math.floor(duration / 60000)} 分钟 ${Math.floor(duration / 1000) % 60} 秒` : '未知';
-    panel.innerHTML = `<header class="history-chat-header"><div><h2>${escapeHtml(session.title)}</h2><span>${escapeHtml(session.agentLabel)} · ${escapeHtml(session.cwd?.split('/').filter(Boolean).at(-1) || '未知工作区')}</span></div><span class="history-readonly">${session.agent === 'codex' && state.permissions.includes('work.execute') && !session.archived ? '可续聊' : '只读'}</span></header>
+    panel.innerHTML = `<header class="history-chat-header"><div><h2>${escapeHtml(session.title)}</h2><span>${escapeHtml(session.agentLabel)} · ${escapeHtml(session.cwd?.split('/').filter(Boolean).at(-1) || '未知工作区')}</span></div><span class="history-readonly">${(session.managed || (session.agent === 'codex' && (!session.deviceId || session.deviceId === 'local'))) && state.permissions.includes('work.execute') && !session.archived ? '可续聊' : '只读'}</span></header>
       <div class="history-chat-scroll"><div class="history-chat-content"><details class="history-session-info"><summary>会话跨度 ${durationText}<span>›</span></summary>
       <dl class="history-info"><dt>会话 ID</dt><dd>${escapeHtml(session.sessionId || session.id)}</dd><dt>工作目录</dt><dd>${escapeHtml(session.workspaces?.join('、') || session.cwd || '未知')}</dd><dt>模型 / 分支</dt><dd>${escapeHtml(session.model || '未知')} / ${escapeHtml(session.branch || '未知')}</dd><dt>记录状态</dt><dd>${escapeHtml(historyStatusLabel(session.status))}</dd><dt>创建 / 更新</dt><dd>${historyTime(session.createdAt)} / ${historyTime(session.updatedAt)}</dd></dl></details>
       ${session.partial ? '<p class="history-warning">部分记录损坏、尚未写完或超出读取上限，当前展示部分内容。</p>' : ''}
+      ${data.inherited ? `<details class="history-inherited"><summary>接续自原会话 · ${data.inherited.count} 条上下文${data.inherited.partial ? " · 部分记录" : ""}</summary><div data-inherited-records></div><button type="button" class="button secondary" data-inherited-more>查看继承记录</button></details>` : ''}
       <div class="history-messages" data-history-transcript>${renderMessages(messages)}</div>
       <div class="history-chat-footer"><span>已显示 ${messages.length} / ${total} 条记录</span>${messages.length < total ? '<button class="button secondary" type="button" data-more-messages>加载更多记录</button>' : ''}</div><div id="historyLiveOutput" class="history-messages" role="log" aria-live="polite"></div></div></div><section class="history-composer" id="historyComposer" aria-label="会话输入框"></section>`;
+    let inheritedOffset = 0;
+    const inheritedButton = panel.querySelector('[data-inherited-more]');
+    if (inheritedButton) inheritedButton.addEventListener('click', async () => {
+      inheritedButton.disabled = true;
+      try {
+        const inherited = await api(`/api/conversations/${id}/inherited?offset=${inheritedOffset}`);
+        if (request !== historyState.detailRequest) return;
+        panel.querySelector('[data-inherited-records]').insertAdjacentHTML('beforeend', renderMessages(inherited.messages));
+        inheritedOffset += inherited.messages.length; inheritedButton.hidden = inheritedOffset >= inherited.total;
+        inheritedButton.textContent = '加载更多继承记录';
+      } catch (error: any) { showToast(error.message); }
+      finally { inheritedButton.disabled = false; }
+    });
     historyComposer.mount(select('#historyComposer'), session, select('#historyLiveOutput'), messages);
   } catch (error: any) {
     if (request !== historyState.detailRequest) return;
@@ -553,6 +571,7 @@ function configurePolling() {
 function currentView() {
   const view = location.hash.replace(/^#/, '') || 'tasks';
   if (view === 'settings' || view.startsWith('settings/') || ['assignment', 'config', 'members', 'account'].includes(view)) return 'settings';
+  if (view.startsWith('history/')) return 'history';
   return ['tasks', 'new-task', 'workbench', 'history', 'inbox'].includes(view) ? view : 'tasks';
 }
 function currentSettingsSection() {

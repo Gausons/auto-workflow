@@ -6,6 +6,7 @@
 !/docs/
 /docs/*
 !/docs/desktop-continuation-validation.md
+!/docs/agent-context-handoff-plan.md
 !/LICENSE
 !/package.json
 !/pnpm-lock.yaml

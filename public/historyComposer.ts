@@ -6,9 +6,11 @@ const requestId = () => {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 };
 const busy = new Set(['queued', 'launching', 'running', 'waiting', 'unknown']);
-const names: Record<string, string> = { blocked: '会话被占用 · 未发送', queued: '等待执行', launching: '恢复原会话中', running: '正在回复', waiting: '等待你处理', completed: '本轮完成', failed: '执行失败', interrupted: '已停止', unknown: '结果待核对' };
+const names: Record<string, string> = { blocked: '会话被占用 · 未发送', queued: '等待执行', launching: '正在连接 Agent', running: '正在回复', waiting: '等待你处理', completed: '本轮完成', failed: '执行失败', interrupted: '已停止', unknown: '结果待核对' };
 
-export function createHistoryComposer({ api, canEdit, refresh, syncHistory }: any) {
+export function createHistoryComposer({ api, canEdit, refresh, syncHistory, openSession }: any) {
+  let canSendNative = false;
+  const newRequests = new Map<string, { signature: string; requestId: string }>();
   const restoredConflicts = new Set<string>();
   const drafts = new Map<string, { text: string; requestId: string; sentText: string }>();
   let liveOutput: HTMLElement | null = null;
@@ -19,12 +21,12 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory }: an
   const select = (s: string): any => host?.querySelector(s);
   function update() {
     const submit = select('[type="submit"]'), input = select('textarea');
-    if (submit) submit.disabled = sending || (busy.has(job?.status) || job?.releaseStatus === 'releasing') || !input?.value.trim();
+    if (submit) submit.disabled = !canSendNative || sending || (busy.has(job?.status) || job?.releaseStatus === 'releasing') || !input?.value.trim();
     if (input) input.disabled = sending;
     const status = select('[data-status]');
-    if (status) status.textContent = sending ? '正在发送…' : job ? `${names[job.status] || job.status} · ${job.message || ''}${job.executionTransport === 'desktop-ipc' ? ' · 由客户端执行；审批和问题请在客户端处理' : ''}${job.releaseStatus === 'releasing' ? ' · 正在释放网页连接' : job.releaseStatus === 'released' ? ' · 网页连接已释放' : job.releaseStatus === 'failed' ? ' · 会话释放失败，请检查服务进程' : ''}` : '消息将追加到原会话，沿用其上下文与配置。';
+    if (status) status.textContent = sending ? '正在发送…' : job ? `${names[job.status] || job.status} · ${job.message || ''}${job.executionTransport === 'desktop-ipc' ? ' · 由客户端执行；审批和问题请在客户端处理' : ''}${job.releaseStatus === 'releasing' ? ' · 正在释放网页连接' : job.releaseStatus === 'released' ? ' · 网页连接已释放' : job.releaseStatus === 'failed' ? ' · 会话释放失败，请检查服务进程' : ''}` : session?.managed ? '已继承原会话上下文，直接输入下一条消息即可。' : canSendNative ? '消息将追加到原会话，沿用其上下文与配置。' : '选择其他 Agent 新开会话，即可带上上下文继续。';
     const actions = select('[data-actions]');
-    if (actions) actions.innerHTML = job ? `${['queued', 'running', 'waiting'].includes(job.status) ? '<button type="button" data-control="stop">停止</button>' : ''}${job.status === 'waiting' && job.request ? '<button type="button" data-control="respond">处理请求</button>' : ''}${job.status === 'unknown' ? '<button type="button" data-control="reconcile">核对结果</button>' : ''}${!busy.has(job.status) ? '<button type="button" data-refresh>刷新原始记录</button>' : ''}${['failed', 'interrupted', 'blocked'].includes(job.status) ? '<button type="button" data-restore>重新编辑本轮消息</button><button type="button" data-copy>复制本轮消息</button>' : ''}` : '';
+    if (actions) actions.innerHTML = job ? `${job.id && ['queued', 'running', 'waiting'].includes(job.status) ? '<button type="button" data-control="stop">停止</button>' : ''}${job.status === 'waiting' && job.request ? '<button type="button" data-control="respond">处理请求</button>' : ''}${job.status === 'unknown' ? '<button type="button" data-control="reconcile">核对结果</button>' : ''}${!busy.has(job.status) ? '<button type="button" data-refresh>刷新原始记录</button>' : ''}${['failed', 'interrupted', 'blocked'].includes(job.status) ? '<button type="button" data-restore>重新编辑本轮消息</button><button type="button" data-copy>复制本轮消息</button>' : ''}` : '';
     const output = liveOutput;
     const messages = pendingHistoryMessages(historyMessages, executions);
     const signature = JSON.stringify(messages);
@@ -58,22 +60,24 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory }: an
   function unmount() { generation++; clearTimeout(timer); host = null; liveOutput = null; session = null; polling = false; sending = false; job = null; historyMessages = []; executions = []; synchronizedSignature = ''; outputSignature = ''; }
   function mount(element: HTMLElement, value: any, output?: HTMLElement, messages: any[] = []) {
     unmount(); host = element; liveOutput = output || null; session = value; historyMessages = messages;
-    if (!canEdit() || value.agent !== 'codex' || !value.sessionId || value.archived) {
+    canSendNative = Boolean(value.managed || (value.agent === 'codex' && (!value.deviceId || value.deviceId === 'local') && value.sessionId && !value.archived));
+    if (!canEdit()) {
       host.innerHTML = `<p class="history-meta">${!canEdit() ? '只读成员无法发送消息。' : value.archived ? '请先在 Codex 客户端取消归档，再继续此会话。' : '此 Agent 暂不支持网页原会话续聊，请在对应客户端继续。'}</p>`; return;
     }
     const state = draft();
-    host.innerHTML = `<form class="conversation-composer"><label class="history-sr-only" for="historyReply">发送消息</label><textarea id="historyReply" rows="3" maxlength="12000" placeholder="继续讨论，或描述下一步需要完成的工作…" required>${escape(state.text)}</textarea><div class="history-compose-footer"><a class="conversation-context" href="codex://threads/${encodeURIComponent(value.sessionId)}" title="在 Codex 中打开">↗ ${escape(value.agentLabel || 'Codex')} · ${escape(value.model || '沿用会话配置')}</a><span class="conversation-send"><span class="history-meta">⌘ / Ctrl + Enter</span><button type="submit" aria-label="发送消息" title="发送消息">↑</button></span></div></form><p class="history-meta" data-status role="status"></p><p data-error role="alert"></p><div data-actions></div>`;
+    const contextLink = value.agent === 'codex' && value.sessionId ? `<a class="conversation-context" href="codex://threads/${encodeURIComponent(value.sessionId)}">在 Codex 中打开 ↗</a>` : `<span class="conversation-context">${escape(value.agentLabel || value.agent)} · ${escape(value.model || '默认配置')}</span>`;
+    host.innerHTML = `<form class="conversation-composer"><label class="history-sr-only" for="historyReply">发送消息</label><textarea id="historyReply" rows="3" maxlength="12000" placeholder="继续讨论，或描述下一步需要完成的工作…" required>${escape(state.text)}</textarea><div class="history-compose-footer">${contextLink}<span class="conversation-send"><span class="history-meta">⌘ / Ctrl + Enter</span><button type="submit" aria-label="发送消息" title="发送消息">↑</button></span></div></form><p class="history-meta" data-status role="status"></p><p data-error role="alert"></p><div data-actions></div>`;
     select('textarea').oninput = (e: any) => { state.text = e.target.value; if (state.text.trim() !== state.sentText) state.requestId = ''; update(); };
     select('textarea').onkeydown = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && !e.isComposing) { e.preventDefault(); if (!select('[type="submit"]').disabled) select('form').requestSubmit(); } };
     select('form').onsubmit = async (e: Event) => {
-      e.preventDefault(); if (sending || (busy.has(job?.status) || job?.releaseStatus === 'releasing') || !state.text.trim()) return;
+      e.preventDefault(); if (!canSendNative || sending || (busy.has(job?.status) || job?.releaseStatus === 'releasing') || !state.text.trim()) return;
       const current = generation, id = session.id, message = state.text.trim(), createdAt = new Date().toISOString();
       state.requestId ||= requestId(); state.sentText = message;
       submission++; sending = true; select('[data-error]').textContent = ''; update();
       try {
         const result = await api(`/api/agent-sessions/${id}/continue`, { method: 'POST', body: JSON.stringify({ message, requestId: state.requestId }) });
         if (state.text.trim() === message) state.text = ''; state.requestId = '';
-        if (current === generation) { select('textarea').value = state.text; job = { id: result.executionId, createdAt, status: 'queued', prompt: message, message: '已提交到原会话' }; executions = [...executions.filter(item => item.id !== job.id), job]; }
+        if (current === generation) { select('textarea').value = state.text; job = { id: result.executionId, turnId: value.managed ? result.executionId : undefined, createdAt, status: 'queued', prompt: message, message: value.managed ? '已提交到当前会话' : '已提交到原会话' }; executions = [...executions.filter(item => item.id !== job.id), job]; }
       } catch (error: any) { if (current === generation) select('[data-error]').textContent = `${error.message}。输入已保留；再次发送相同内容不会重复提交。`; }
       finally { if (current === generation) { sending = false; update(); } }
     };
@@ -89,7 +93,38 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory }: an
       catch (error: any) { if (current === generation) select('[data-error]').textContent = error.message; }
       finally { target.disabled = false; }
     };
-    update(); void poll();
+    mountSwitch();
+    update(); if (canSendNative) void poll();
+  }
+  function mountSwitch() {
+    if (!host || !openSession) return;
+    const current = generation, id = session.id, container = document.createElement('div');
+    container.className = 'conversation-switch';
+    container.innerHTML = '<label>带上下文新开会话 <select aria-label="目标 Agent"><option>正在查找 Agent…</option></select></label><button type="button" disabled>新开会话 →</button><span role="status"></span>';
+    host.prepend(container);
+    const choice = container.querySelector('select')!, button = container.querySelector('button')!, status = container.querySelector('span')!;
+    void api('/api/task-center/codex').then((result: any) => {
+      if (current !== generation) return;
+      const agents: string[] = [...new Set<string>(result.projects.filter((p: any) => p.deviceId === (session.deviceId || 'local')).map((p: any) => p.agent || 'codex'))];
+      choice.innerHTML = agents.length ? agents.map(agent => `<option value="${escape(agent)}">${escape(agent === 'claude' ? 'Claude Code' : agent === 'codex' ? 'Codex' : agent)}</option>`).join('') : '<option value="">没有可用 Agent</option>';
+      choice.value = agents.find(agent => agent !== session.agent) || agents[0] || '';
+      button.disabled = !agents.length;
+      if (!agents.length) status.textContent = result.localError || '请先配置 Agent';
+    }).catch((error: any) => { if (current === generation) status.textContent = error.message; });
+    button.onclick = async event => {
+      event.stopPropagation(); if (sending || !choice.value) return;
+      const message = draft().text.trim(), targetAgent = choice.value;
+      const signature = JSON.stringify([targetAgent, message]);
+      let attempt = newRequests.get(id);
+      if (!attempt || attempt.signature !== signature) { attempt = { signature, requestId: requestId() }; newRequests.set(id, attempt); }
+      sending = true; button.disabled = true; status.textContent = '正在带上上下文…'; update();
+      try {
+        const result = await api(`/api/sessions/${id}/continue-as-new`, { method: 'POST', body: JSON.stringify({ targetAgent, message, requestId: attempt.requestId }) });
+        drafts.get(id)!.text = ''; newRequests.delete(id);
+        if (current === generation) await openSession(result.sessionId);
+      } catch (error: any) { if (current === generation) status.textContent = `${error.message}。再次点击可重试，输入已保留。`; }
+      finally { if (current === generation) { sending = false; button.disabled = false; update(); } }
+    };
   }
   function respond() {
     const executionId = job.id, request = job.request;

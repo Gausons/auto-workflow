@@ -81,6 +81,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
 
 export class AcpAgentConnection extends EventEmitter {
   agent: string; launch: Launch; environment: any; child: any; connection: any; context: any;
+  capabilities: any = {};
   sessionId: string | null = null; closed = false; promptStarted = false; pendingPermission: any = null; processFailure: any = null;
 
   constructor({ agent, launch, environment = process.env, spawnProcess = spawn }: any) {
@@ -94,7 +95,7 @@ export class AcpAgentConnection extends EventEmitter {
     this.child.on('exit', (code: any, signal: any) => {
       if (!this.closed) {
         const error = Object.assign(new Error('ACP Agent 连接已关闭'), { code, signal });
-        this.processFailure = error; this.emit('processFailure', error); this.emit('disconnected', error);
+        this.closed = true; this.processFailure = error; this.emit('processFailure', error); this.emit('disconnected', error);
       }
     });
   }
@@ -123,7 +124,15 @@ export class AcpAgentConnection extends EventEmitter {
     });
     const result: any = await withTimeout(Promise.race([request, this.processFailurePromise()]), timeoutMs, 'ACP initialize 响应超时');
     if (result.protocolVersion !== acp.PROTOCOL_VERSION) throw new Error(`ACP 协议版本不兼容：${result.protocolVersion}`);
+    this.capabilities = result.agentCapabilities || {};
     return result;
+  }
+
+  async loadSession(sessionId: string, cwd: string) {
+    if (!this.capabilities.loadSession) throw httpError(409, "当前 Agent 不支持恢复已关闭的会话，请用其他 Agent 新开会话继续");
+    const result = await this.context.request(acp.methods.agent.session.load, { sessionId, cwd: await realpath(cwd), mcpServers: [] });
+    this.sessionId = sessionId;
+    return { ...result, sessionId };
   }
 
   async newSession(cwd: string, timeoutMs = 15000) {
@@ -229,6 +238,7 @@ const now = () => new Date().toISOString();
 /** ACP implementation of the task-center runner. One process is kept for each
  * active session so permissions and cancellation remain bidirectional. */
 export class AcpTaskRunner {
+  retained = new Map<string, any>();
   agent: string; environment: any; onUpdate: any; connectionFactory: any; desktopOpener: any; threadNamer: any; jobs = new Map(); connections = new Map(); available: any = undefined; configuration: any = undefined;
   constructor({ agent = 'codex', environment = process.env, onUpdate = () => {}, connectionFactory, desktopOpener = async () => {}, threadNamer = async () => {} }: any = {}) {
     this.agent = agent; this.environment = environment; this.onUpdate = onUpdate; this.connectionFactory = connectionFactory; this.desktopOpener = desktopOpener; this.threadNamer = threadNamer;
@@ -260,13 +270,18 @@ export class AcpTaskRunner {
     this.jobs.set(job.id, job);
     const launch = resolveAcpLaunch(job.agent, this.environment);
     if (!launch) throw new Error('ACP Agent 未配置');
-    const connection = this.connectionFactory
+    const retained = job.resumeSessionId ? this.retained.get(job.resumeSessionId) : null;
+    const connection = retained && !retained.closed ? retained : this.connectionFactory
       ? this.connectionFactory({ agent: job.agent, launch, environment: this.environment })
       : new AcpAgentConnection({ agent: job.agent, launch, environment: this.environment });
     this.connections.set(job.id, connection);
+    connection.removeAllListeners("update"); connection.removeAllListeners("permission"); connection.removeAllListeners("disconnected");
+    let acceptingUpdates = false, creatingSession = false, promptDispatched = false;
     connection.on('update', ({ update }: any) => {
+      if (!acceptingUpdates) return;
       const value = textFromUpdate(update);
-      if (value) this.publish(job, { output: `${job.output || ''}${value}`.slice(-24000) });
+      if (value) this.publish(job, { output: job.conversationId ? `${job.output || ''}${value}` : `${job.output || ''}${value}`.slice(-24000) });
+      if (job.conversationId && ['tool_call', 'tool_call_update'].includes(update?.sessionUpdate)) this.publish(job, { contextEvents: [...(job.contextEvents || []), update] });
     });
     connection.on('permission', (params: any) => this.publish(job, {
       status: 'waiting', request: { method: 'session/request_permission', params }, message: `${job.agentLabel || job.agent} 等待操作确认`
@@ -276,25 +291,40 @@ export class AcpTaskRunner {
     });
     try {
       this.publish(job, { status: 'launching', message: `正在通过 ACP 创建 ${job.agentLabel || job.agent} 会话` });
-      await connection.initialize();
-      const session = await connection.newSession(job.cwd);
+      if (connection !== retained || connection.closed) await connection.initialize();
+      creatingSession = !job.resumeSessionId;
+      const session = job.resumeSessionId
+        ? connection === retained && !connection.closed ? { sessionId: job.resumeSessionId } : await connection.loadSession(job.resumeSessionId, job.cwd)
+        : await connection.newSession(job.cwd);
+      creatingSession = false;
       await connection.configure(session, job.model, job.reasoningEffort);
       this.publish(job, { sessionId: session.sessionId, status: 'running', message: `${job.agentLabel || job.agent} 正在通过 ACP 执行` });
-      if (job.agent === 'codex' && /^[a-f0-9-]{36}$/.test(session.sessionId)) {
+      if (!job.resumeSessionId && job.agent === 'codex' && /^[a-f0-9-]{36}$/.test(session.sessionId)) {
         try { await this.threadNamer(session.sessionId, job.title); } catch { /* The session still works without a custom title. */ }
         try { await this.desktopOpener(session.sessionId); this.publish(job, { desktopOpened: true }); }
         catch { this.publish(job, { desktopOpened: false, desktopMessage: 'Codex 会话已创建，但无法自动在客户端打开。' }); }
       }
+      acceptingUpdates = true; promptDispatched = true;
       void connection.prompt(job.prompt).then((result: any) => {
         const status = result.stopReason === 'end_turn' ? 'completed' : result.stopReason === 'cancelled' ? 'interrupted' : 'failed';
         this.publish(job, { status, request: null, message: status === 'completed' ? 'ACP 本轮执行完成' : `ACP 执行结束：${result.stopReason}` });
-        this.connections.delete(job.id); connection.close();
+        this.connections.delete(job.id);
+        if (job.conversationId) this.retained.set(session.sessionId, connection); else connection.close();
       }).catch((error: any) => {
-        this.publish(job, { status: 'failed', request: null, message: error.message });
-        this.connections.delete(job.id); connection.close();
+        this.publish(job, { status: 'unknown', request: null, message: error.message });
+        this.retained.delete(session.sessionId); this.connections.delete(job.id); connection.close();
       });
     } catch (error: any) {
       this.connections.delete(job.id); connection.close();
+      if (job.conversationId && (creatingSession || promptDispatched)) {
+        this.publish(job, { status: 'unknown', request: null, message: error.message });
+        return job;
+      }
+      if (job.resumeSessionId) {
+        this.retained.delete(job.resumeSessionId);
+        this.publish(job, { status: "failed", request: null, message: error.message });
+        return job;
+      }
       if (connection.sessionId) {
         this.publish(job, { status: 'failed', request: null, message: error.message });
         return job;
@@ -323,7 +353,7 @@ export class AcpTaskRunner {
   async reconcile() {
     throw httpError(409, 'ACP v1 不提供通用的已结束执行查询；请在 Agent 中核对会话');
   }
-  close() { for (const connection of this.connections.values()) connection.close(); this.connections.clear(); }
+  close() { for (const connection of new Set([...this.connections.values(), ...this.retained.values()])) connection.close(); this.connections.clear(); this.retained.clear(); }
 }
 
 export class AcpPreferredRunner {
@@ -341,7 +371,7 @@ export class AcpPreferredRunner {
     this.routes.set(job.id, job.protocol);
     try { return await this.route(job).start(job); }
     catch (error: any) {
-      if (job.protocol !== 'acp' || error.code !== 'ACP_UNAVAILABLE') throw error;
+      if (job.resumeSessionId || job.protocol !== 'acp' || error.code !== 'ACP_UNAVAILABLE') throw error;
       const legacyJob = { ...job, protocol: 'legacy', projectId: undefined, message: `ACP 不可用，回退 ${job.agentLabel || job.agent || 'Agent'} 原执行通道` };
       this.routes.set(job.id, 'legacy');
       return this.fallback.start(legacyJob);

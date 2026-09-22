@@ -6,7 +6,8 @@ test('backfilled history uses original time, executions nest once and missing so
   const task = { id: 't', updatedAt: '2026-09-18T15:00:00Z', sessionIds: ['old', 'new', 'gone'], events: [{ id: 'linked', at: '2026-09-18T15:00:00Z', message: '关联历史' }] };
   const data = { sessions: [{ id: 'old', createdAt: '2026-09-17T08:00:00Z', updatedAt: '2026-09-18T16:00:00Z' }, { id: 'new', createdAt: '2026-09-18T09:00:00Z', deviceId: 'local', agent: 'codex', nativeId: 'thread' }], executions: [{ id: 'job', taskId: 't', deviceId: 'local', agent: 'codex', threadId: 'thread', createdAt: '2026-09-18T09:00:00Z' }, { id: 'pending', taskId: 't', createdAt: '2026-09-18T17:00:00Z' }], handoffs: [] };
   const entries = taskTimeline(task, data);
-  assert.ok(entries.findIndex(e => e.id === 'old') < entries.findIndex(e => e.id === 'linked'));
+  assert.ok(entries.findIndex(e => e.id === 'old') < entries.findIndex(e => e.id === 'new'));
+  assert.ok(!entries.some(e => e.id === 'linked'), 'audit events stay outside the reading timeline');
   assert.equal(entries.find(e => e.id === 'new')?.jobs[0].id, 'job');
   assert.ok(!entries.some(e => e.kind === 'execution' && e.id === 'job'));
   assert.equal(entries.find(e => e.id === 'gone')?.value.missing, true);
@@ -22,4 +23,12 @@ test('audit transitions do not become timeline nodes while actionable execution 
   assert.ok(timeline.every(item => item.kind === 'execution' || item.kind === 'handoff'));
   assert.equal(timeline.find(item => item.id === 'completed')?.value.output, '完成结果');
   assert.equal(task.events.length, 5, 'audit data is preserved without appearing in the reading timeline');
+});
+
+test('queued managed turns belong only to their own conversation before a native ID exists', () => {
+  const task = { id: 't', sessionIds: ['a', 'b'], events: [] };
+  const data = { sessions: ['a', 'b'].map(id => ({ id, deviceId: 'local', agent: 'claude', nativeId: null })), executions: [{ id: 'job', taskId: 't', conversationId: 'b', deviceId: 'local', agent: 'claude', sessionId: null, threadId: null }], handoffs: [] };
+  const timeline = taskTimeline(task, data);
+  assert.equal(timeline.find(item => item.id === 'a')?.jobs.length, 0);
+  assert.equal(timeline.find(item => item.id === 'b')?.jobs[0].id, 'job');
 });

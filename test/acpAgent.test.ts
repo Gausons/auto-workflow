@@ -116,3 +116,44 @@ test('Codex ACP task sessions are named and opened in the desktop client', async
   assert.deepEqual(fake.configured, ['m2', 'high']);
   assert.equal(updates.some(job => job.desktopOpened === true), true);
 });
+
+test('managed ACP conversations reuse live sessions and load after reconnect without replaying old output', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'acp-conversation-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fixture = new URL('./fixtures/conversation-agent.mjs', import.meta.url);
+  const updates: any[] = [];
+  const runner = new AcpTaskRunner({ agent: 'claude', environment: { ...process.env, ACP_CLAUDE_EXECUTABLE: process.execPath, ACP_CLAUDE_ARGS: JSON.stringify([fixture.pathname]) }, onUpdate: (job: any) => updates.push(job) });
+  t.after(() => runner.close());
+  async function run(input: any) {
+    await runner.start(input);
+    for (let i = 0; i < 100; i++) {
+      const job = updates.filter(j => j.id === input.id).at(-1);
+      if (job?.status === 'completed') return job;
+      assert.ok(!['failed', 'unknown'].includes(job?.status), job?.message);
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.fail('turn timeout');
+  }
+  const base = { agent: 'claude', conversationId: 'managed', cwd: root, prompt: 'hello', protocol: 'acp' };
+  const first = await run({ ...base, id: 'one' });
+  const second = await run({ ...base, id: 'two', resumeSessionId: first.sessionId });
+  assert.equal(first.sessionId, second.sessionId); assert.match(second.output, /第 2 轮/);
+  runner.close();
+  const third = await run({ ...base, id: 'three', resumeSessionId: first.sessionId });
+  assert.equal(third.sessionId, first.sessionId); assert.doesNotMatch(third.output, /REPLAY_SHOULD_NOT_APPEAR/);
+});
+
+test('uncertain managed ACP session creation never falls back to creating another session', async () => {
+  class UncertainConnection extends EventEmitter {
+    sessionId = null; closed = false; promptStarted = false;
+    async initialize() {}
+    async newSession() { throw new Error('session/new response lost'); }
+    close() { this.closed = true; }
+  }
+  const updates: any[] = [];
+  const primary = new AcpTaskRunner({ agent: 'codex', connectionFactory: () => new UncertainConnection(), onUpdate: (job: any) => updates.push(job) });
+  let fallbackStarts = 0;
+  const runner = new AcpPreferredRunner({ primary, fallback: { start() { fallbackStarts++; }, close() {} } });
+  await runner.start({ id: 'uncertain', agent: 'codex', protocol: 'acp', conversationId: 'managed', cwd: '/repo', prompt: 'continue' });
+  assert.equal(updates.at(-1).status, 'unknown'); assert.equal(fallbackStarts, 0); runner.close();
+});
