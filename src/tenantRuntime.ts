@@ -16,7 +16,7 @@ import type { Environment, IssueAttachment, WorkIssue } from './issueSources/typ
 
 type Database = ReturnType<typeof import('./database.js').openDatabase>;
 type JsonObject = Record<string, unknown>;
-interface Principal { user: { id: string; role: string; [key: string]: unknown }; tenant: Tenant; expiresAt?: string }
+interface Principal { user: { id: string; role: string }; tenant: Tenant; expiresAt?: unknown }
 interface AssignmentPerson { name: string; employeeId: string; responsibility: string }
 interface AssignmentRecommendation {
   status: string; source?: string; reason?: string; error?: string; model?: string; assigneeId?: string;
@@ -198,8 +198,9 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
 
   function findBug(id: string) { return state.bugs.find((item) => item.id === id || item.aid === id); }
   function getBootstrap() {
+    const principal = requestIdentity.getStore();
     return {
-      ...(requestIdentity.getStore() ? publicIdentity(requestIdentity.getStore()) : {}),
+      ...(principal ? publicIdentity(principal) : {}),
       tenant: { id: tenant.id, name: tenant.name }, storage: { driver: 'sqlite', schemaVersion: 4 },
       config: { ...state.config, workspaceManaged: Boolean(environment.CODEX_WORKSPACE_DIR) || database.listTenants().length > 1, issueSourceLabel: issueSource().label, issueSourceConfigured: issueSource().configured },
       scheduler: state.scheduler, assignmentPeople: state.assignmentPeople, storageUserKey: state.storageUserKey,

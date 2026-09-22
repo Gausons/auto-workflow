@@ -7,48 +7,57 @@ import { createTenantRuntime } from './src/tenantRuntime.js';
 import { createAuthHandler } from './src/authHttp.js';
 import { permissionForRoute, permissionsFor } from './src/rbac.js';
 import { assertSeparateWorkspaces, canonicalWorkspace, databasePath, loadEnvironment, provisionDefaultTenant, tenantEnvironment } from './src/tenancy.js';
+import type { ServerResponse } from 'node:http';
+import type { Tenant } from './src/database.js';
+import type { Environment } from './src/issueSources/types.js';
 
 const projectDir = path.dirname(fileURLToPath(import.meta.url));
+type TenantRuntime = ReturnType<typeof createTenantRuntime>;
+interface AppOptions { rootDir?: string; environment?: Environment }
+type ErrorLike = Error & { statusCode?: number };
+const asError = (value: unknown): ErrorLike => value instanceof Error ? value as ErrorLike : new Error(String(value));
 
-export function createApp({ rootDir = projectDir, environment = loadEnvironment(rootDir) }: any = {}) {
+export function createApp({ rootDir = projectDir, environment = loadEnvironment(rootDir) }: AppOptions = {}) {
   const filename = databasePath(rootDir, environment);
   const database = openDatabase(filename);
   const handleAuth = createAuthHandler(database);
-  const runtimes = new Map();
-  const environments = new Map();
+  const runtimes = new Map<string, TenantRuntime>();
+  const environments = new Map<string, Environment>();
   let closing = false;
 
-  function tenantEnv(tenant: any) {
+  function tenantEnv(tenant: Tenant) {
     if (!environments.has(tenant.id)) environments.set(tenant.id, tenantEnvironment(tenant, rootDir, environment));
-    return environments.get(tenant.id);
+    return environments.get(tenant.id)!;
   }
-  function workspaceFor(tenant: any) {
-    if (runtimes.has(tenant.id)) return runtimes.get(tenant.id).workspace();
-    return tenantEnv(tenant).CODEX_WORKSPACE_DIR || (tenant.id === 'default' ? database.readSettings(tenant.id).config.codexWorkspaceDir || rootDir : '');
+  function workspaceFor(tenant: Tenant): string {
+    if (runtimes.has(tenant.id)) return runtimes.get(tenant.id)!.workspace();
+    const configured = tenantEnv(tenant).CODEX_WORKSPACE_DIR || (tenant.id === 'default' ? database.readSettings(tenant.id).config.codexWorkspaceDir : '');
+    return typeof configured === 'string' && configured ? configured : tenant.id === 'default' ? rootDir : '';
   }
-  function validateWorkspace(tenant: any, workspace: any) {
+  function validateWorkspace(tenant: Tenant, workspace: unknown) {
+    const candidate = typeof workspace === 'string' ? workspace : '';
     const configured = tenantEnv(tenant).CODEX_WORKSPACE_DIR;
-    if (database.listTenants().length > 1 && canonicalWorkspace(workspace || rootDir) !== canonicalWorkspace(workspaceFor(tenant) || rootDir)) {
+    if (database.listTenants().length > 1 && canonicalWorkspace(candidate || rootDir) !== canonicalWorkspace(workspaceFor(tenant) || rootDir)) {
       throw Object.assign(new Error('多租户模式下请管理员通过租户环境文件修改 IDE 工作目录，并重启服务'), { statusCode: 400 });
     }
-    if (configured && canonicalWorkspace(workspace || rootDir) !== canonicalWorkspace(configured)) {
+    if (configured && canonicalWorkspace(candidate || rootDir) !== canonicalWorkspace(configured)) {
       throw Object.assign(new Error('IDE 工作目录已由租户环境文件固定'), { statusCode: 400 });
     }
-    assertSeparateWorkspaces(database.listTenants().map((item) => ({ id: item.id, workspace: item.id === tenant.id ? workspace : workspaceFor(item) })));
+    assertSeparateWorkspaces(database.listTenants().map((item) => ({ id: item.id, workspace: item.id === tenant.id ? candidate : workspaceFor(item) })));
   }
-  function runtimeFor(tenant: any) {
+  function runtimeFor(tenant: Tenant) {
     if (!runtimes.has(tenant.id)) {
       validateWorkspace(tenant, workspaceFor(tenant));
-      runtimes.set(tenant.id, createTenantRuntime({ database, tenant, environment: tenantEnv(tenant), rootDir, validateWorkspace: (workspace: any) => validateWorkspace(tenant, workspace) }));
+      runtimes.set(tenant.id, createTenantRuntime({ database, tenant, environment: tenantEnv(tenant), rootDir, validateWorkspace: workspace => validateWorkspace(tenant, workspace) }));
     }
-    return runtimes.get(tenant.id);
+    return runtimes.get(tenant.id)!;
   }
 
   try {
     provisionDefaultTenant(database, rootDir, environment);
     database.importLegacy(rootDir, 'default');
     assertSeparateWorkspaces(database.listTenants().map((tenant) => ({ id: tenant.id, workspace: workspaceFor(tenant) })));
-  } catch (error: any) { database.close(); throw error; }
+  } catch (error: unknown) { database.close(); throw error; }
 
   const server = http.createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -77,7 +86,7 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
         await runtimeFor(tenant).handleApi(req, res, url, principal);
         return;
       }
-      const assets: any = { '/': ['index.html', 'text/html; charset=utf-8'], '/index.html': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['build/app.js', 'text/javascript; charset=utf-8'], '/historyView.js': ['build/historyView.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'] };
+      const assets: Record<string, [string, string]> = { '/': ['index.html', 'text/html; charset=utf-8'], '/index.html': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['build/app.js', 'text/javascript; charset=utf-8'], '/historyView.js': ['build/historyView.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'] };
       assets['/taskContent.js'] = ['build/taskContent.js', 'text/javascript; charset=utf-8'];
       assets['/taskCenter.js'] = ['build/taskCenter.js', 'text/javascript; charset=utf-8'];
       assets['/historyComposer.js'] = ['build/historyComposer.js', 'text/javascript; charset=utf-8'];
@@ -88,7 +97,8 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
       const content = await readFile(path.join(projectDir, 'public', asset![0]!));
       res.writeHead(200, { 'Content-Type': asset[1], 'Cache-Control': 'no-cache' });
       res.end(req.method === 'HEAD' ? undefined : content);
-    } catch (error: any) {
+    } catch (caught: unknown) {
+      const error = asError(caught);
       if (!res.headersSent) sendJson(res, error.statusCode || 500, { error: 'request_failed', message: error.message || '服务端错误' });
       else res.destroy();
     }
@@ -108,7 +118,7 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
   };
 }
 
-function sendJson(res: any, status: any, data: any) {
+function sendJson(res: ServerResponse, status: number, data: unknown) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(data));
 }

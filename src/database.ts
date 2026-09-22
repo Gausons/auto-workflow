@@ -9,7 +9,7 @@ import type { WorkIssue } from './issueSources/types.js';
 import type { TaskCenterData } from '../public/taskTypes.js';
 import type { SessionContext } from './contextCompiler.js';
 
-export interface Tenant { id: string; name: string; createdAt: string }
+export interface Tenant { id: string; name: string; createdAt?: string }
 export interface TenantSettings { config: Record<string, unknown>; assignmentPeople: unknown[] }
 type JsonRecord = Record<string, unknown>;
 const emptyTaskCenter = '{"tasks":[],"devices":[],"sessions":[],"handoffs":[]}';
@@ -163,7 +163,7 @@ export function openDatabase(filename: string) {
       return result;
     }),
     createTenant, getTenant, authenticate, readSettings, writeSettings, createStore, importLegacy,
-    listTenants: () => db.prepare('SELECT id, name, created_at AS createdAt FROM tenants ORDER BY id').all(),
+    listTenants: () => db.prepare('SELECT id, name, created_at AS createdAt FROM tenants ORDER BY id').all() as unknown as Tenant[],
     rotateToken: (id: string, token: string) => {
       if (!getTenant(id)) throw new Error('租户不存在');
       if (typeof token !== 'string' || token.length < 32) throw new Error('租户令牌至少需要 32 个字符');

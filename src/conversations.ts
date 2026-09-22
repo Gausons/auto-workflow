@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { taskContent } from '../public/taskContent.js';
 import type { AgentProject, Execution, HistoryMessage, Session, TaskCenterData } from '../public/taskTypes.js';
-import { contextPrompt, freezeContext, readContext, type ContextEntry } from './contextCompiler.js';
+import { contextPrompt, freezeContext, readContext, type ContextDelivery, type ContextEntry } from './contextCompiler.js';
 import type { Environment } from './issueSources/types.js';
 import { deliverRecord } from './sessionDelivery/records.js';
 import { httpError } from './rbac.js';
@@ -30,7 +30,7 @@ interface ConversationServices {
   database: Database;
   tenantId: string;
   history: { catalog(): Promise<HistoryCatalog> };
-  delivery: unknown;
+  delivery: ContextDelivery;
   execution: {
     targets(): Promise<{ projects: AgentProject[] }>;
     launch(job: Execution): void;

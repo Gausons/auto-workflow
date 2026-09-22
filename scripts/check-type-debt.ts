@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
 const roots = ['src', 'public', 'test', 'scripts'];
-const explicitDynamicTypeBudget = 227;
+const explicitDynamicTypeBudget = 190;
 const debtToken = String.fromCharCode(97, 110, 121);
 const tokenPattern = new RegExp(`\\b${debtToken}\\b`, 'g');
 

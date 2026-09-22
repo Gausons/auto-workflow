@@ -2,13 +2,19 @@ import { resolveCodexExecutable } from './codexExecutable.js';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { EventEmitter } from 'node:events';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import type { Environment } from './issueSources/types.js';
+
+interface AppServerOptions { executable?: string; spawnProcess?: typeof spawn; environment?: Environment }
+interface ProtocolMessage { id?: number; method?: string; result?: unknown; error?: { message?: string; code?: unknown } }
+interface PendingCall { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
 
 // Uses the installed Codex protocol and its existing login/configuration. No shell,
 // no ephemeral threads, and no direct writes to Codex's database or rollout files.
 export class CodexAppServer extends EventEmitter {
-  sequence: any; pending: any; closed: any; child: any;
+  sequence: number; pending: Map<number, PendingCall>; closed: boolean; child: ChildProcessWithoutNullStreams;
 
-  constructor({ executable = 'codex', spawnProcess = spawn, environment = process.env }: any = {}) {
+  constructor({ executable = 'codex', spawnProcess = spawn, environment = process.env }: AppServerOptions = {}) {
     super();
     this.sequence = 0; this.pending = new Map(); this.closed = false;
     const command = resolveCodexExecutable({ executable, environment });
@@ -16,14 +22,16 @@ export class CodexAppServer extends EventEmitter {
     this.child.stderr.on('data', () => {}); // Never relay configuration or credentials in diagnostics.
     const lines = createInterface({ input: this.child.stdout });
     lines.on('line', line => {
-      let message; try { message = JSON.parse(line); } catch { return; }
+      let message: ProtocolMessage; try { message = JSON.parse(line) as ProtocolMessage; } catch { return; }
       if (message.method) { this.emit(message.id !== undefined ? 'request' : 'notification', message); return; }
-      const pending = this.pending.get(message.id); if (!pending) return;
-      clearTimeout(pending.timer); this.pending.delete(message.id);
+      const id = message.id;
+      if (typeof id !== 'number') return;
+      const pending = this.pending.get(id); if (!pending) return;
+      clearTimeout(pending.timer); this.pending.delete(id);
       if (message.error) pending.reject(Object.assign(new Error(message.error.message || 'Codex 请求失败'), { code: message.error.code }));
       else pending.resolve(message.result);
     });
-    const ended = (error: any) => {
+    const ended = (error: Error) => {
       if (this.closed) return; this.closed = true;
       for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(error); }
       this.pending.clear(); this.emit('disconnected', error);
@@ -32,13 +40,13 @@ export class CodexAppServer extends EventEmitter {
     this.child.on('exit', () => ended(new Error('Codex 执行连接已关闭')));
     this.child.stdin.on('error', () => ended(new Error('Codex 执行连接已中断')));
   }
-  send(message: any) { if (this.closed) throw new Error('Codex 连接未打开'); this.child.stdin.write(JSON.stringify(message) + '\n'); }
-  call(method: any, params: any = {}, timeoutMs = 30000) {
+  send(message: unknown) { if (this.closed) throw new Error('Codex 连接未打开'); this.child.stdin.write(JSON.stringify(message) + '\n'); }
+  call(method: string, params: Record<string, unknown> = {}, timeoutMs = 30000): Promise<unknown> {
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`Codex ${method} 响应超时，执行结果待确认`)); }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      try { this.send({ id, method, params }); } catch (error: any) { clearTimeout(timer); this.pending.delete(id); reject(error); }
+      try { this.send({ id, method, params }); } catch (error: unknown) { clearTimeout(timer); this.pending.delete(id); reject(error); }
     });
   }
   async initialize() {

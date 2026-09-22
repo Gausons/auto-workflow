@@ -4,6 +4,8 @@ import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { httpError } from './rbac.js';
 const exec = promisify(execFile);
+type ErrorLike = Error & { stderr?: string | Buffer };
+const asError = (value: unknown): ErrorLike => value instanceof Error ? value as ErrorLike : new Error(String(value));
 const git = async (cwd: string, args: string[]) => (await exec('git', ['-C', cwd, ...args], { timeout: 15000, maxBuffer: 2 * 1024 * 1024 })).stdout.replace(/\n$/, '');
 export async function gitBranches(cwd: string) {
   try { await git(cwd, ['rev-parse', '--show-toplevel']); }
@@ -22,15 +24,16 @@ export async function switchGitBranch(cwd: string, branch: unknown, create = fal
   try { await git(cwd, ['check-ref-format', `refs/heads/${branch}`]); }
   catch { throw httpError(400, '分支名称无效'); }
   try { await git(cwd, create ? ['switch', '-c', branch] : ['switch', '--no-guess', branch]); }
-  catch (error: any) { throw httpError(409, `无法切换分支，未强制覆盖文件：${String(error.stderr || error.message).slice(0, 1500)}`); }
+  catch (caught: unknown) { const error = asError(caught); throw httpError(409, `无法切换分支，未强制覆盖文件：${String(error.stderr || error.message).slice(0, 1500)}`); }
   return gitBranches(cwd);
 }
-export function decodeAttachments(input: any) {
+export function decodeAttachments(input: unknown) {
   if (input === undefined) return [];
   if (!Array.isArray(input) || input.length > 10) throw httpError(400, '最多附加 10 个文件');
   let total = 0;
-  return input.map(file => {
-    if (!file || typeof file.name !== 'string' || !file.name || file.name.length > 255 || /[\\/\x00-\x1f]/.test(file.name) || ['.', '..'].includes(file.name)) throw httpError(400, '附件名称无效');
+  return input.map(value => {
+    const file = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+    if (typeof file.name !== 'string' || !file.name || file.name.length > 255 || /[\\/\x00-\x1f]/.test(file.name) || ['.', '..'].includes(file.name)) throw httpError(400, '附件名称无效');
     if (typeof file.data !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(file.data) || file.data.length % 4 !== 0) throw httpError(400, '附件编码无效');
     const bytes = Buffer.from(file.data, 'base64');
     if (bytes.toString('base64') !== file.data) throw httpError(400, '附件编码无效');

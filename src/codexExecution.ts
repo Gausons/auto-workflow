@@ -304,7 +304,7 @@ export class CodexRunner {
         }
       } catch (error: unknown) { this.publish(job, { releaseError: asError(error).message }); }
       finally {
-        // Only this job uses this process. Closing it also drops any remaining writer lease.
+        // Only this job uses this process. Closing it also drops the remaining writer lease.
         try {
           const exited = await client.close();
           this.publish(job, { releaseStatus: exited === false ? 'failed' : 'released', ...(exited === false ? { releaseError: '执行已结束，但未能确认会话进程退出' } : {}) });

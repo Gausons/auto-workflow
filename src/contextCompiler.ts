@@ -8,36 +8,50 @@ export interface SessionContext {
   id: string; version: 1; digest: string; entries: ContextEntry[]; sources: string[];
   partial: boolean; createdAt: string;
 }
-const stringify = (value: any): string => typeof value === 'string' ? value : JSON.stringify(value ?? '');
+interface DeliveryEvent { kind: string; href?: string; sourceLine?: number; agent?: string; record?: unknown }
+interface DeliveryPage { coverage: { pendingBytes: number }; events: Array<DeliveryEvent | null>; nextCursor?: string | null }
+export interface ContextDelivery {
+  detail(id: string, params?: URLSearchParams): Promise<unknown>;
+  record(id: string, params?: URLSearchParams): Promise<unknown>;
+}
+type JsonObject = Record<string, unknown>;
+const record = (value: unknown): JsonObject => value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : {};
+const stringify = (value: unknown): string => typeof value === 'string' ? value : JSON.stringify(value ?? '') ?? '';
 
 // Use delivery records, not the history preview (which truncates individual messages).
-export async function readContext(delivery: any, id: string): Promise<{ entries: ContextEntry[]; partial: boolean }> {
+export async function readContext(delivery: ContextDelivery, id: string): Promise<{ entries: ContextEntry[]; partial: boolean }> {
   const entries: ContextEntry[] = [], fallback: ContextEntry[] = [];
   let cursor: string | null = null, partial = false, turnId: string | undefined;
   do {
-    const page: any = await delivery.detail(id, new URLSearchParams({ limit: '200', ...(cursor ? { cursor } : {}) }));
+    const page = await delivery.detail(id, new URLSearchParams({ limit: '200', ...(cursor ? { cursor } : {}) })) as DeliveryPage;
     partial ||= page.coverage.pendingBytes > 0;
     for (let event of page.events) {
+      if (!event) { partial = true; continue; }
       if (event.kind === 'reference') {
-        const ref = new URL(event.href, 'http://localhost').searchParams.get('ref');
-        event = (await delivery.record(id, new URLSearchParams({ ref: ref || "" }))).event;
+        const ref = new URL(event.href || '', 'http://localhost').searchParams.get('ref');
+        const resolved = (await delivery.record(id, new URLSearchParams({ ref: ref || "" })) as { event?: DeliveryEvent | null }).event;
+        if (!resolved) { partial = true; continue; }
+        event = resolved;
       }
       if (event.kind === 'unavailable') { partial = true; continue; }
       if (!event.record || event.kind === 'omitted') continue;
-      const row = event.record, p = row.payload || {};
-      if (p.turn_id) turnId = p.turn_id;
-      const add = (role: string, text: any, target = entries) => target.push({ role, text: stringify(text), source: id, line: event.sourceLine, timestamp: row.timestamp, turnId });
+      const row = record(event.record), p = record(row.payload);
+      if (typeof p.turn_id === 'string') turnId = p.turn_id;
+      const add = (role: string, text: unknown, target = entries) => target.push({ role, text: stringify(text), source: id, line: event.sourceLine, ...(typeof row.timestamp === 'string' ? { timestamp: row.timestamp } : {}), turnId });
       if (event.agent === 'codex') {
         if (row.type === 'response_item') {
-          if (p.type === 'message' && ['user', 'assistant'].includes(p.role)) add(p.role, p.content);
-          if (['function_call', 'custom_tool_call'].includes(p.type)) add('tool_call', p);
-          if (['function_call_output', 'custom_tool_call_output'].includes(p.type)) add('tool_result', p);
-        } else if (row.type === 'event_msg' && ['user_message', 'agent_message'].includes(p.type)) {
+          if (p.type === 'message' && typeof p.role === 'string' && ['user', 'assistant'].includes(p.role)) add(p.role, p.content);
+          if (typeof p.type === 'string' && ['function_call', 'custom_tool_call'].includes(p.type)) add('tool_call', p);
+          if (typeof p.type === 'string' && ['function_call_output', 'custom_tool_call_output'].includes(p.type)) add('tool_result', p);
+        } else if (row.type === 'event_msg' && typeof p.type === 'string' && ['user_message', 'agent_message'].includes(p.type)) {
           add(p.type === 'user_message' ? 'user' : 'assistant', p.message, fallback);
         }
-      } else if (['user', 'assistant'].includes(row.type)) add(row.type, row.message?.content ?? row.message);
+      } else if (typeof row.type === 'string' && ['user', 'assistant'].includes(row.type)) {
+        const message = record(row.message);
+        add(row.type, message.content ?? row.message);
+      }
     }
-    cursor = page.nextCursor;
+    cursor = page.nextCursor ?? null;
   } while (cursor);
   // Match duplicate mirrors by turn, role, text and occurrence count. Keep event-only turns.
   const key = (entry: ContextEntry) => {
