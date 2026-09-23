@@ -1,12 +1,20 @@
 import path from 'node:path';
-import { mkdir, readFile, readdir, writeFile, rename } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, readFile, readdir, writeFile, rename, realpath, stat } from 'node:fs/promises';
 import { CodexRunner, pickNativeDirectory } from './codexExecution.js';
 import { AcpPreferredRunner, AcpTaskRunner, AgentRunnerSet, configuredAcpAgents } from './acpAgent.js';
-import type { AgentProject, ExecutionControl, TaskCenterData } from '../public/taskTypes.js';
+import { contextPrompt, freezeContext, readContext, type ContextDelivery, type ContextEntry, type SessionContext } from './contextCompiler.js';
+import type { AgentProject, ExecutionControl, PromptImageReference, RemoteContextHandoff, TaskCenterData } from '../public/taskTypes.js';
 
 interface RemoteJob {
   id: string; status?: string; deviceId?: string; projectId?: string; cwd?: string; agent?: string;
+  sessionId?: string | null; threadId?: string | null; output?: string;
   request?: unknown; message?: string; control?: ExecutionControl | null; controlAck?: string; controlError?: string | null;
+  conversationId?: string; contextDigest?: string; remoteContext?: RemoteContextHandoff; userMessage?: string;
+  contextSourceDeviceId?: string;
+  contextTransferError?: string;
+  directoryRequestId?: string;
+  prompt?: string; contextMarkdownPath?: string; promptImages?: PromptImageReference[]; contextSourcePartial?: boolean;
 }
 type Request = (method: string, body?: unknown, endpoint?: string) => unknown;
 interface RemoteRunner {
@@ -24,6 +32,7 @@ interface WorkerOptions {
   workspace: string;
   runnerFactory?: (update: (job: RemoteJob) => void) => unknown;
   directoryPicker?: (workspace: string) => Promise<string>;
+  contextSource?: { catalog(): Promise<{ sessions: Array<{ id: string; sessionId?: string; agent: string; cwd: string }> }>; delivery: ContextDelivery };
 }
 type ErrorLike = Error & { code?: string };
 const asError = (value: unknown): ErrorLike => value instanceof Error ? value as ErrorLike : new Error(String(value));
@@ -32,12 +41,13 @@ const isRemoteJob = (value: unknown): value is RemoteJob => Boolean(value && typ
 // Journals the last known native thread before reconnecting. Uncertain launches
 // are reported for review rather than retried and possibly duplicated.
 export class RemoteCodexWorker {
-  pending: Map<string, RemoteJob>; saved: Map<string, RemoteJob>; queue: Promise<void>; loaded: boolean; storageError: unknown; runner: RemoteRunner; update: (job: RemoteJob) => void;
+  pending: Map<string, RemoteJob>; saved: Map<string, RemoteJob>; published: Set<string>; queue: Promise<void>; loaded: boolean; storageError: unknown; runner: RemoteRunner; update: (job: RemoteJob) => void;
   request: Request; directoryPicker: (workspace: string) => Promise<string>; deviceId: string; directory: string; workspace: string;
+  contextSource?: WorkerOptions['contextSource'];
 
-  constructor({ request, deviceId, directory, workspace, runnerFactory, directoryPicker = pickNativeDirectory }: WorkerOptions) {
-    this.request = request; this.deviceId = deviceId; this.directory = directory; this.workspace = workspace; this.directoryPicker = directoryPicker;
-    this.pending = new Map(); this.saved = new Map(); this.queue = Promise.resolve(); this.loaded = false;
+  constructor({ request, deviceId, directory, workspace, runnerFactory, directoryPicker = pickNativeDirectory, contextSource }: WorkerOptions) {
+    this.request = request; this.deviceId = deviceId; this.directory = directory; this.workspace = workspace; this.directoryPicker = directoryPicker; this.contextSource = contextSource;
+    this.pending = new Map(); this.saved = new Map(); this.published = new Set(); this.queue = Promise.resolve(); this.loaded = false;
     const update = (job: RemoteJob) => {
       this.saved.set(job.id, structuredClone(job)); this.pending.set(job.id, structuredClone(job));
       this.queue = this.queue.then(() => this.persist(job)).catch((error: unknown) => { this.storageError = error; });
@@ -61,6 +71,65 @@ export class RemoteCodexWorker {
     await rename(file + '.pending', file);
   }
   async projects() { return this.runner.projects(this.workspace); }
+  async originalContext(meta: RemoteContextHandoff, conversationId: string, sourceId: string) {
+    if (!/^[a-f0-9]{64}$/.test(meta.sourceFreezeId)) throw new Error('远端来源快照标识无效');
+    const root = path.join(this.directory, 'context');
+    const file = path.join(root, `source-${meta.sourceFreezeId}.json`);
+    const load = async () => {
+      const saved = JSON.parse(await readFile(file, 'utf8')) as { sourceNativeId?: string; sourceAgent?: string; context?: SessionContext };
+      if (saved.sourceNativeId !== meta.sourceNativeId || saved.sourceAgent !== meta.sourceAgent ||
+        !saved.context || !Array.isArray(saved.context.entries) || !Array.isArray(saved.context.sources) || typeof saved.context.partial !== 'boolean' ||
+        saved.context.digest !== createHash('sha256').update(JSON.stringify({ version: 1, entries: saved.context.entries, sources: saved.context.sources, partial: saved.context.partial })).digest('hex')) throw new Error('远端冻结来源校验失败');
+      return saved.context;
+    };
+    try { return await load(); }
+    catch (caught: unknown) { if ((caught as NodeJS.ErrnoException).code !== 'ENOENT') throw caught; }
+    if (meta.sourceFreezeId !== conversationId) throw new Error('远端冻结来源已丢失，不能改读变动后的原会话');
+    if (!this.contextSource) throw new Error('远端历史服务不可用');
+    const original = await readContext(this.contextSource.delivery, sourceId);
+    if (!original.entries.length) throw new Error('远端原始会话没有可读取的记录');
+    const context = freezeContext(original.entries, [sourceId], original.partial);
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    try { await writeFile(file, JSON.stringify({ sourceNativeId: meta.sourceNativeId, sourceAgent: meta.sourceAgent, context }), { flag: 'wx', mode: 0o600 }); }
+    catch (caught: unknown) { if ((caught as NodeJS.ErrnoException).code !== 'EEXIST') throw caught; return load(); }
+    return context;
+  }
+  async sourceSnapshot(job: RemoteJob) {
+    const meta = job.remoteContext;
+    if (!meta || !this.contextSource || !job.conversationId || !job.userMessage || !job.contextDigest ||
+      meta.sourceDeviceId !== this.deviceId || meta.contextDigest !== job.contextDigest || !/^[a-f0-9]{64}$/.test(meta.contextDigest)) throw new Error('远端交接元数据无效');
+    const catalog = await this.contextSource.catalog();
+    const source = catalog.sessions.find(item => item.agent === meta.sourceAgent && item.cwd === (meta.sourceCwd || job.cwd) && (item.sessionId || item.id) === meta.sourceNativeId);
+    if (!source && meta.sourceFreezeId === job.conversationId) throw new Error('远端原始会话不存在，无法生成完整交接文件');
+    const original = await this.originalContext(meta, job.conversationId, source?.id || '');
+    const inherited: ContextEntry[] = [];
+    for (let offset = 0, total = 1; offset < total;) {
+      const page = await this.request('GET', undefined, `/api/conversations/${job.conversationId}/inherited?offset=${offset}`) as { messages?: ContextEntry[]; total?: number; digest?: string };
+      if (page.digest !== meta.contextDigest || !Number.isSafeInteger(page.total) || page.total! < 0 || page.total! > 100000 || !Array.isArray(page.messages)) throw new Error('远端交接快照校验失败');
+      total = page.total!;
+      if (!page.messages.length && offset < total) throw new Error('远端交接快照缺少记录');
+      for (const entry of page.messages) {
+        if (!entry || !['user', 'assistant', 'tool_call', 'tool_result'].includes(entry.role) || typeof entry.text !== 'string' || typeof entry.source !== 'string') throw new Error('远端交接记录格式无效');
+        inherited.push(entry);
+      }
+      offset += page.messages.length;
+    }
+    const supplemental = inherited.filter(entry => entry.source !== meta.sourceSessionId);
+    return freezeContext([...original.entries, ...supplemental], [...original.sources, meta.sourceSessionId, ...new Set(supplemental.map(entry => entry.source))], original.partial);
+  }
+  async prepareContext(job: RemoteJob) {
+    if (!job.conversationId || !job.userMessage) return job;
+    let snapshot: SessionContext;
+    if (job.contextSourceDeviceId && job.contextSourceDeviceId !== this.deviceId) {
+      const result = await this.request('GET', undefined, `/api/conversations/${job.conversationId}/transfer?executionId=${job.id}&deviceId=${this.deviceId}`) as { ready?: boolean; context?: SessionContext };
+      if (!result.ready || !result.context) throw new Error('跨设备交接包尚未送达');
+      snapshot = result.context;
+      if (snapshot.digest !== createHash('sha256').update(JSON.stringify({ version: 1, entries: snapshot.entries, sources: snapshot.sources, partial: snapshot.partial })).digest('hex')) throw new Error('跨设备交接包校验失败');
+    } else if (job.remoteContext) snapshot = await this.sourceSnapshot(job);
+    else return job;
+    const compiled = await contextPrompt(snapshot, job.userMessage, path.join(this.directory, 'context'));
+    return { ...job, prompt: compiled.prompt, promptImages: compiled.images, contextMarkdownPath: compiled.markdownPath, contextSourcePartial: snapshot.partial };
+  }
   async flush() {
     await this.queue; if (this.storageError) throw this.storageError;
     for (const [id, report] of this.pending) {
@@ -84,6 +153,18 @@ export class RemoteCodexWorker {
     }
     await this.flush();
     const snapshot = await this.request('GET') as TaskCenterData;
+    for (const job of snapshot.executions.filter(candidate => candidate.contextSourceDeviceId === this.deviceId && candidate.deviceId !== this.deviceId && candidate.status === 'queued' && candidate.remoteContext && !this.published.has(candidate.id))) {
+      if (!job.conversationId) continue;
+      try {
+        const context = await this.sourceSnapshot(job);
+        await this.request('POST', { executionId: job.id, deviceId: this.deviceId, context }, `/api/conversations/${job.conversationId}/transfer`);
+      } catch (caught: unknown) {
+        const transient = caught as ErrorLike & { status?: number };
+        if (transient.status && transient.status >= 500 || ['AbortError', 'TimeoutError'].includes(transient.name)) throw caught;
+        await this.request('POST', { executionId: job.id, deviceId: this.deviceId, failure: asError(caught).message.slice(0, 2000) }, `/api/conversations/${job.conversationId}/transfer`);
+      }
+      this.published.add(job.id);
+    }
     for (const selection of (snapshot.directoryRequests || []).filter(item => item.deviceId === this.deviceId && item.status === 'pending').slice(0, 1)) {
       await this.request('POST', { action: 'claim', requestId: selection.id }, '/api/task-center/directory-action');
       try {
@@ -97,14 +178,31 @@ export class RemoteCodexWorker {
     for (const job of snapshot.executions.filter(candidate => candidate.deviceId === this.deviceId)) {
       if (!/^[a-f0-9-]{36}$/.test(job.id)) throw new Error('执行标识无效');
       if (job.status === 'queued' && !this.saved.has(job.id)) {
+        if (job.contextSourceDeviceId && job.contextSourceDeviceId !== this.deviceId && !job.contextTransferError) {
+          const transfer = await this.request('GET', undefined, `/api/conversations/${job.conversationId}/transfer?executionId=${job.id}&deviceId=${this.deviceId}&readyOnly=1`) as { ready?: boolean };
+          if (!transfer.ready) continue;
+        }
         const projects = await this.projects();
-        if (!projects.some(project => project.id === job.projectId && project.cwd === job.cwd)) throw new Error('待执行项目不在本机允许的工作目录内');
+        const project = projects.find(item => item.id === job.projectId);
+        const selection = snapshot.directoryRequests?.find(item => item.id === job.directoryRequestId);
+        if (!project || (project.cwd !== job.cwd && (!selection || selection.status !== 'completed' || selection.deviceId !== this.deviceId || selection.projectId !== project.id || selection.cwd !== job.cwd))) throw new Error('待执行项目不在本机允许的工作目录内');
+        if (!job.cwd || !(await stat(await realpath(job.cwd))).isDirectory()) throw new Error('目标工作目录已不可用');
         const claimedResult = await this.request('POST', { action: 'claim', executionId: job.id }, '/api/task-center/execution-action') as { job?: unknown };
         if (!isRemoteJob(claimedResult.job)) throw new Error('领取执行返回无效');
         const claimed = claimedResult.job;
         // Persist the claim before invoking thread/start. A crash here remains unknown.
         this.saved.set(job.id, claimed); await this.persist(claimed);
-        await this.runner.start(claimed);
+        if (claimed.contextTransferError) {
+          this.update({ ...claimed, status: 'failed', request: null, message: `跨设备交接失败：${claimed.contextTransferError}` });
+          continue;
+        }
+        let prepared: RemoteJob;
+        try { prepared = await this.prepareContext(claimed); await this.persist(prepared); this.saved.set(job.id, prepared); }
+        catch (caught: unknown) {
+          this.update({ ...claimed, status: 'failed', request: null, message: `远端交接文件准备失败：${asError(caught).message}` });
+          continue;
+        }
+        await this.runner.start(prepared);
       } else if (['launching', 'running', 'waiting'].includes(job.status) && !this.saved.has(job.id)) {
         this.update({ ...job, status: 'unknown', request: null, message: '本机没有这次执行的运行记录，请核对 Agent 会话' });
       }

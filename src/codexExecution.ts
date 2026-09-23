@@ -356,7 +356,7 @@ export function recordExecution(data: TaskCenterData, job: RunnerJob) {
       const nativeSessionId = job.sessionId || job.threadId;
       if (job.conversationId) {
         const session = data.sessions.find((item) => item.id === job.conversationId);
-        if (session) Object.assign(session, { ...(nativeSessionId ? { nativeId: nativeSessionId } : {}), protocol: job.protocol, status: job.status, updatedAt: job.updatedAt, excerpt: `${job.userMessage || ''}\n\n${job.output || ''}` });
+        if (session) Object.assign(session, { ...(nativeSessionId ? { nativeId: nativeSessionId } : {}), ...(job.contextSourcePartial !== undefined ? { partial: job.contextSourcePartial } : {}), protocol: job.protocol, status: job.status, updatedAt: job.updatedAt, excerpt: `${job.userMessage || ''}\n\n${job.output || ''}` });
       }
       if (nativeSessionId && !job.historySessionId && !job.conversationId) {
         const agent = job.agent || 'codex';
@@ -407,7 +407,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
   })();
   database.mutateTaskCenter(tenantId, (data) => {
     data.executions ||= [];
-    for (const job of data.executions) if (job.deviceId === 'local' && active.has(job.status)) {
+    for (const job of data.executions) if (job.deviceId === 'local' && active.has(job.status) && !(job.status === 'queued' && job.contextSourceDeviceId && job.contextSourceDeviceId !== 'local')) {
       job.status = 'unknown'; job.request = null; job.message = '工作台已重启，请核对原 Agent 会话，避免重复执行';
       const task = data.tasks.find((item) => item.id === job.taskId); if (task) { task.status = 'error'; task.revision++; }
     }
@@ -607,6 +607,10 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
             if (saved.conversationId && report.contextEvents !== undefined) {
               if (!Array.isArray(report.contextEvents) || JSON.stringify(report.contextEvents).length > 4 * 1024 * 1024) throw httpError(400, '工具记录过大');
               patch.contextEvents = report.contextEvents;
+            }
+            if (report.contextSourcePartial !== undefined) {
+              if (typeof report.contextSourcePartial !== 'boolean' || (!saved.remoteContext && !saved.contextSourceDeviceId)) throw httpError(400, '交接来源状态无效');
+              patch.contextSourcePartial = report.contextSourcePartial;
             }
             if (JSON.stringify(report.request || null).length > 64000) throw httpError(400, '交互请求过大');
             recordExecution(data, { ...saved, ...patch, status: reportStatus, request: report.request as InteractionRequest || null, desktopOpened: Boolean(report.desktopOpened), updatedAt: timestamp() });

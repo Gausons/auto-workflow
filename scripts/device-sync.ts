@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createAgentHistory } from '../src/agentHistory/index.js';
+import { createSessionDelivery } from '../src/sessionDelivery/index.js';
 import { RemoteCodexWorker } from '../src/remoteCodexWorker.js';
 import type { AgentProject, TaskCenterData } from '../public/taskTypes.js';
 import type { Environment } from '../src/issueSources/types.js';
@@ -79,12 +80,13 @@ async function main() {
   try { deviceId = (await readFile(path.join(stateDir, 'id'), 'utf8')).trim(); }
   catch (caught: unknown) { const error = asError(caught); if (error.code !== 'ENOENT') throw error; deviceId = randomUUID(); await writeFile(path.join(stateDir, 'id'), deviceId, { flag: 'wx', mode: 0o600 }); }
   const history = createAgentHistory({ environment, workspace: () => environment.CODEX_WORKSPACE_DIR || process.cwd() });
+  const delivery = createSessionDelivery({ history, environment });
   const request: Request = async (method, body, endpoint = '/api/task-center') => {
-    const response = await fetch(new URL(endpoint, base), { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(60000) });
+    const response = await fetch(new URL(endpoint, base), { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(endpoint.includes('/transfer') ? 180000 : 60000) });
     const result = record(await response.json()); if (!response.ok) throw Object.assign(new Error(String(result.message || '请求失败')), { status: response.status }); return result;
   };
   const outputDir = path.join(stateDir, 'inbox');
-  const worker = environment.WORKBENCH_EXECUTE_CODEX === 'true' ? new RemoteCodexWorker({ request, deviceId, directory: path.join(stateDir, 'executions'), workspace: environment.CODEX_WORKSPACE_DIR || process.cwd() }) : null;
+  const worker = environment.WORKBENCH_EXECUTE_CODEX === 'true' ? new RemoteCodexWorker({ request, deviceId, directory: path.join(stateDir, 'executions'), workspace: environment.CODEX_WORKSPACE_DIR || process.cwd(), contextSource: { catalog: () => history.catalog(), delivery } }) : null;
   console.log(`同步设备：${hostname()}；交接包目录：${outputDir}`);
   do {
     try { const result = await syncDeviceOnce({ request, history, deviceId, name: environment.WORKBENCH_DEVICE_NAME || hostname(), outputDir, includeExcerpts: environment.WORKBENCH_SYNC_EXCERPTS === 'true', codexProjects: worker ? await worker.projects() : [] }); if (worker) await worker.sync(); console.log(`同步 ${result.sessions} 个会话，接收 ${result.received} 个交接包`); }

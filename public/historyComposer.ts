@@ -34,10 +34,12 @@ const requestId = () => {
 const busy = new Set(['queued', 'launching', 'running', 'waiting', 'unknown']);
 const names: Record<string, string> = { blocked: '会话被占用 · 未发送', queued: '等待执行', launching: '正在连接 Agent', running: '正在回复', waiting: '等待你处理', completed: '本轮完成', failed: '执行失败', interrupted: '已停止', unknown: '结果待核对' };
 
-export function historyRunConfig(projects: AgentProject[], session: Pick<ComposerSession, 'agent' | 'cwd'>): AgentRunConfig {
-  const exact = projects.findIndex(item => item.cwd === session.cwd && (item.agent || 'codex') === session.agent);
+export function historyRunConfig(projects: AgentProject[], session: Pick<ComposerSession, 'agent' | 'cwd' | 'deviceId'>): AgentRunConfig {
+  const exact = projects.findIndex(item => item.deviceId === (session.deviceId || 'local') && item.cwd === session.cwd && (item.agent || 'codex') === session.agent);
+  const sameDevice = projects.findIndex(item => item.deviceId === (session.deviceId || 'local') && (item.agent || 'codex') === session.agent);
   const sameAgent = projects.findIndex(item => (item.agent || 'codex') === session.agent);
-  return { projects, projectIndex: exact >= 0 ? exact : Math.max(0, sameAgent), cwd: session.cwd || '', model: '', reasoningEffort: '' };
+  const projectIndex = exact >= 0 ? exact : sameDevice >= 0 ? sameDevice : Math.max(0, sameAgent);
+  return { projects, projectIndex, cwd: projects[projectIndex]?.deviceId === (session.deviceId || 'local') ? session.cwd || '' : '', model: '', reasoningEffort: '' };
 }
 
 export function createHistoryComposer({ api, canEdit, refresh, syncHistory, openSession }: ComposerOptions) {
@@ -136,6 +138,7 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
     const container = select<HTMLElement>('.conversation-switch');
     if (!container) return;
     let openBranchAfterLoad = false;
+    let directoryRequestId = '';
     const project = () => newSessionConfig ? selectedAgentProject(newSessionConfig) : undefined;
     const workspaceKey = () => JSON.stringify([project()?.id, project()?.deviceId, newSessionConfig?.cwd || '']);
     const branchMenu = () => project()?.deviceId !== 'local' ? '' : `<details class="tc-config-menu tc-branch-menu" id="history-branch-menu" name="create-config"><summary data-new-session="branches" aria-label="Git 分支"><span aria-hidden="true">⑂</span><span>${escape(branchState?.current || 'Git 分支')}</span><span aria-hidden="true">⌄</span></summary><div class="tc-config-panel">${branchLoading ? '<p role="status">正在读取分支…</p>' : branchSwitching ? `<p role="status">正在切换到 ${escape(branchSwitching)}…</p>` : branchError ? `<p role="alert">${escape(branchError)}</p>` : branchState?.repository ? `<input data-new-session="branch-search" aria-label="搜索分支" placeholder="搜索分支"><p class="tc-create-hint">${branchState.current ? `当前：${escape(branchState.current)}` : '当前为分离 HEAD'} · 未提交：${branchState.changes} 项</p><div class="tc-branch-options">${branchState.branches.map(name => `<button type="button" data-new-session="switch-branch" data-id="${escape(name)}" aria-pressed="${name === branchState?.current}">${escape(name)}${name === branchState?.current ? ' ✓' : ''}</button>`).join('')}</div><label class="tc-create-setting">新分支<input data-new-session="new-branch-name" aria-label="新分支名称" placeholder="输入分支名称" maxlength="200"></label><button type="button" class="button secondary" data-new-session="new-branch">创建并切换</button>` : '<p class="tc-create-hint">展开后读取当前 Git 分支。</p>'}</div></details>`;
@@ -170,9 +173,9 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
     void api('/api/task-center/codex').then(value => {
       const result = value as TargetsResponse;
       if (current !== generation) return;
-      const projects = result.projects.filter(item => item.deviceId === (currentSession.deviceId || 'local'));
+      const projects = result.projects;
       newSessionConfig = historyRunConfig(projects, currentSession);
-      if (!projects.length) newSessionStatus = result.localError || '来源设备上没有可用 Agent';
+      if (!projects.length) newSessionStatus = result.localError || '没有可用 Agent';
       renderSwitch();
       if (projects.length && project()?.deviceId === 'local') void loadBranches();
     }).catch((error: unknown) => { if (current === generation) { newSessionStatus = errorMessage(error); newSessionConfig = { projects: [], projectIndex: 0, cwd: '', model: '', reasoningEffort: '' }; renderSwitch(); } });
@@ -180,7 +183,7 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
       if (!newSessionConfig) return;
       const target = event.target as HTMLInputElement;
       if (target.id === 'tc-create-cwd') {
-        newSessionConfig.cwd = target.value; branchState = null; branchError = '';
+        newSessionConfig.cwd = target.value; directoryRequestId = ''; branchState = null; branchError = '';
         const name = container.querySelector<HTMLElement>('#tc-create-directory-name');
         if (name) {
           name.textContent = runDirectoryName(newSessionConfig.cwd || project()?.cwd || '');
@@ -193,7 +196,7 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
     container.onchange = event => {
       if (!newSessionConfig) return;
       const target = event.target as HTMLSelectElement;
-      if (target.id === 'tc-create-project') { newSessionConfig.projectIndex = Number(target.value) || 0; newSessionConfig.cwd = ''; newSessionConfig.model = ''; newSessionConfig.reasoningEffort = ''; branchState = null; branchError = ''; }
+      if (target.id === 'tc-create-project') { newSessionConfig.projectIndex = Number(target.value) || 0; newSessionConfig.cwd = ''; directoryRequestId = ''; newSessionConfig.model = ''; newSessionConfig.reasoningEffort = ''; branchState = null; branchError = ''; }
       else if (target.id === 'tc-create-model') { newSessionConfig.model = target.value; newSessionConfig.reasoningEffort = ''; }
       else if (target.id === 'tc-create-effort') newSessionConfig.reasoningEffort = target.value;
       else return;
@@ -214,17 +217,17 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
       if (!button || !newSessionConfig) return;
       event.stopPropagation();
       const action = button.dataset.newSession || button.dataset.tc;
-      if (action === 'create-directory') { newSessionConfig.cwd = project()?.commonDirectories?.[Number(button.dataset.id)] || ''; branchState = null; branchError = ''; renderSwitch(); return; }
-      if (action === 'create-clear-directory') { newSessionConfig.cwd = ''; branchState = null; branchError = ''; renderSwitch(); return; }
+      if (action === 'create-directory') { newSessionConfig.cwd = project()?.commonDirectories?.[Number(button.dataset.id)] || ''; directoryRequestId = ''; branchState = null; branchError = ''; renderSwitch(); return; }
+      if (action === 'create-clear-directory') { newSessionConfig.cwd = ''; directoryRequestId = ''; branchState = null; branchError = ''; renderSwitch(); return; }
       if (action === 'create-pick-directory') {
         const selected = project(); if (!selected) return; button.disabled = true;
         try {
           const response = await api('/api/task-center/directory-picker', { method: 'POST', body: JSON.stringify({ deviceId: selected.deviceId, projectId: selected.id }) }) as DirectoryPickerResult;
-          if (response.status === 'completed') { newSessionConfig.cwd = response.cwd || ''; branchState = null; branchError = ''; }
+          if (response.status === 'completed') { newSessionConfig.cwd = response.cwd || ''; directoryRequestId = response.requestId || ''; branchState = null; branchError = ''; }
           else for (let attempt = 0; attempt < 300; attempt++) {
             await new Promise(resolve => setTimeout(resolve, 1000));
             const status = await api(`/api/task-center/directory-picker?requestId=${encodeURIComponent(response.requestId)}`) as DirectoryPickerResult;
-            if (status.status === 'completed') { newSessionConfig.cwd = status.cwd || ''; branchState = null; branchError = ''; break; }
+            if (status.status === 'completed') { newSessionConfig.cwd = status.cwd || ''; directoryRequestId = response.requestId; branchState = null; branchError = ''; break; }
             if (status.status === 'cancelled') throw new Error('已取消选择目录');
             if (status.status === 'failed') throw new Error(status.message || '无法选择目录');
             if (attempt === 299) throw new Error('等待目录选择超时');
@@ -250,12 +253,15 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
       }
       if (action !== 'create' || sending || branchSwitching || !project()) return;
       const message = draft().text.trim(), selected = project()!;
-      const signature = JSON.stringify([selected.deviceId, selected.id, newSessionConfig.cwd, newSessionConfig.model, newSessionConfig.reasoningEffort, message]);
+      if (selected.deviceId !== (currentSession.deviceId || 'local') && !newSessionConfig.cwd.trim()) {
+        newSessionStatus = '跨设备交接请先在目标设备明确选择工作目录。'; renderSwitch(); return;
+      }
+      const signature = JSON.stringify([selected.deviceId, selected.id, newSessionConfig.cwd, directoryRequestId, newSessionConfig.model, newSessionConfig.reasoningEffort, message]);
       let attempt = newRequests.get(id);
       if (!attempt || attempt.signature !== signature) { attempt = { signature, requestId: requestId() }; newRequests.set(id, attempt); }
       sending = true; newSessionStatus = '正在带上上下文…'; renderSwitch(); update();
       try {
-        const result = await api(`/api/sessions/${id}/continue-as-new`, { method: 'POST', body: JSON.stringify({ targetAgent: selected.agent || 'codex', projectId: selected.id, cwd: newSessionConfig.cwd.trim(), model: newSessionConfig.model, reasoningEffort: newSessionConfig.reasoningEffort, message, requestId: attempt.requestId }) }) as NewSessionResponse;
+        const result = await api(`/api/sessions/${id}/continue-as-new`, { method: 'POST', body: JSON.stringify({ targetAgent: selected.agent || 'codex', deviceId: selected.deviceId, projectId: selected.id, cwd: newSessionConfig.cwd.trim(), directoryRequestId: directoryRequestId || undefined, model: newSessionConfig.model, reasoningEffort: newSessionConfig.reasoningEffort, message, requestId: attempt.requestId }) }) as NewSessionResponse;
         drafts.get(id)!.text = ''; newRequests.delete(id);
         if (current === generation) await openSession(result.sessionId);
       } catch (error: unknown) { if (current === generation) newSessionStatus = `${errorMessage(error)}。再次点击可重试，输入已保留。`; }

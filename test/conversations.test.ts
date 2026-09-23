@@ -9,6 +9,8 @@ import { createAgentHistory } from '../src/agentHistory/index.js';
 import { createSessionDelivery } from '../src/sessionDelivery/index.js';
 import { createConversations } from '../src/conversations.js';
 import { createCodexExecution } from '../src/codexExecution.js';
+import { createTaskCenter } from '../src/taskCenter.js';
+import { RemoteCodexWorker } from '../src/remoteCodexWorker.js';
 import { contextPrompt, freezeContext, readContext } from '../src/contextCompiler.js';
 import { permissionForRoute } from '../src/rbac.js';
 type ExecutionOptions = Parameters<typeof createCodexExecution>[0];
@@ -127,6 +129,7 @@ test('frozen context survives new service instances and source edits; tenant can
   assert.doesNotMatch(await readFile(f.launched[0].contextMarkdownPath!, 'utf8'), /交接后新增的消息/);
   const foreign = createConversations({ ...f.options, tenantId: 'other', history: { catalog: async () => ({ sessions: [] }) } });
   assert.throws(() => foreign.detail(created.sessionId), { statusCode: 404 });
+  assert.throws(() => foreign.inherited(created.sessionId), { statusCode: 404 });
   await assert.rejects(foreign.create(created.sessionId, { requestId: randomUUID(), targetAgent: 'codex' }), { statusCode: 404 });
   assert.equal(f.database.readSessionContext('other', f.service.detail(created.sessionId).session.contextId), null);
 });
@@ -200,10 +203,198 @@ test('inherited context removes runtime envelopes while retaining user text and 
   assert.doesNotMatch(f.launched.at(-1)?.prompt || '', /data:image\/png/);
 });
 
+test('remote connector builds a full Markdown handoff from its original session and keeps original image bytes', async t => {
+  const f = await fixture(t);
+  const remoteRecords = path.join(f.root, 'remote-records'); await mkdir(remoteRecords);
+  const remoteFile = path.join(remoteRecords, 'session.jsonl');
+  const imageBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+  const image = `data:image/png;base64,${imageBytes.toString('base64')}`;
+  await writeFile(remoteFile, line({ type: 'session_meta', payload: { id: 'remote-native', cwd: f.root } }) +
+    line({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '远端完整原文' }, { type: 'input_image', image_url: image }] } }) +
+    line(message('远端答复', 'assistant')));
+  const remoteHistory = createAgentHistory({ environment: { IDE_HISTORY_CODEX_DIR: remoteRecords, IDE_HISTORY_CLAUDE_DIR: path.join(f.root, 'absent') }, workspace: () => f.root });
+  const delivery = createSessionDelivery({ history: remoteHistory });
+  const center = createTaskCenter({ database: f.database, tenantId: 'default', history: f.history });
+  const owner = { id: 'remote-owner' };
+  await center.command({ action: 'heartbeat', deviceId: 'remote', name: '远端设备', agents: ['codex'], codexProjects: [{ id: 'remote-project', name: '远端项目', cwd: f.root, agent: 'codex' }],
+    sessions: [{ nativeId: 'remote-native', agent: 'codex', title: '远端会话', cwd: f.root, status: 'completed', excerpt: '', updatedAt: new Date().toISOString() }] }, owner);
+  const source = (await center.snapshot()).sessions.find(session => session.deviceId === 'remote' && session.nativeId === 'remote-native');
+  assert.ok(source);
+  const created = await f.service.create(source.id, { requestId: randomUUID(), targetAgent: 'codex', projectId: 'remote-project', message: '继续远端任务' });
+  const queued = f.database.readTaskCenter('default').executions.find(job => job.conversationId === created.sessionId);
+  assert.ok(queued?.remoteContext); assert.equal(queued.contextMarkdownPath, undefined);
+  const launchedJobs: Array<{ prompt?: string; contextMarkdownPath?: string; promptImages?: Array<{ path: string }> }> = [];
+  const worker = new RemoteCodexWorker({ deviceId: 'remote', workspace: f.root, directory: path.join(f.root, 'remote-journal'),
+    contextSource: { catalog: () => remoteHistory.catalog(), delivery },
+    request: (method, body, endpoint) => {
+      if (method === 'GET' && endpoint?.startsWith('/api/conversations/')) {
+        const url = new URL(endpoint, 'http://localhost'); return f.service.inherited(url.pathname.split('/')[3]!, url.searchParams);
+      }
+      return method === 'GET' ? center.snapshot() : f.execution.action(body as Parameters<typeof f.execution.action>[0], owner);
+    },
+    runnerFactory: update => ({ projects: async () => [{ id: 'remote-project', cwd: f.root, agent: 'codex' }],
+      start: async (job: RunnerJob) => { launchedJobs.push(job); update({ ...job, status: 'completed', sessionId: `remote-result-${launchedJobs.length}` }); },
+      respond: async () => {}, stop: async () => {}, reconcile: async () => {}, close() {} }) });
+  t.after(() => worker.close());
+  await worker.sync();
+  const launched = launchedJobs[0];
+  assert.ok(launched?.contextMarkdownPath);
+  assert.match(launched.prompt || '', /Markdown 交接文件/); assert.doesNotMatch(launched.prompt || '', /远端完整原文/);
+  const markdown = await readFile(launched.contextMarkdownPath, 'utf8');
+  assert.match(markdown, /远端完整原文|远端答复/); assert.match(markdown, /data:image\/png;base64,/);
+  assert.ok(markdown.includes(imageBytes.toString('base64')));
+  assert.equal(launched.promptImages?.length, 1);
+  assert.deepEqual(await readFile(launched.promptImages![0]!.path), imageBytes);
+  await worker.sync();
+  assert.equal(f.database.readTaskCenter('default').executions.find(job => job.conversationId === created.sessionId)?.status, 'completed');
+  assert.equal(f.service.detail(created.sessionId).session.partial, false);
+  await appendFile(remoteFile, line(message('冻结后新增内容')));
+  const switched = await f.service.create(created.sessionId, { requestId: randomUUID(), targetAgent: 'codex', projectId: 'remote-project', message: '切换后继续' });
+  await worker.sync();
+  const switchedJob = launchedJobs[1];
+  assert.ok(switchedJob?.contextMarkdownPath);
+  const switchedMarkdown = await readFile(switchedJob.contextMarkdownPath, 'utf8');
+  assert.match(switchedMarkdown, /远端完整原文|继续远端任务/);
+  assert.doesNotMatch(switchedMarkdown, /冻结后新增内容/);
+  assert.equal(f.database.readTaskCenter('default').executions.find(job => job.conversationId === switched.sessionId)?.status, 'completed');
+  await rm(path.join(f.root, 'remote-journal', 'context', `source-${created.sessionId}.json`));
+  const lost = await f.service.create(switched.sessionId, { requestId: randomUUID(), targetAgent: 'codex', projectId: 'remote-project', message: '继续冻结链' });
+  await worker.sync();
+  assert.equal(launchedJobs.length, 2);
+  assert.match(f.database.readTaskCenter('default').executions.find(job => job.conversationId === lost.sessionId)?.message || '', /冻结来源已丢失/);
+  await center.command({ action: 'heartbeat', deviceId: 'remote', name: '远端设备', agents: ['codex'],
+    sessions: [{ nativeId: 'missing-native', agent: 'codex', title: '已丢失的会话', cwd: f.root, status: 'completed', excerpt: '仅有不完整摘要', updatedAt: new Date().toISOString() }] }, owner);
+  const missing = (await center.snapshot()).sessions.find(session => session.deviceId === 'remote' && session.nativeId === 'missing-native');
+  assert.ok(missing);
+  const failed = await f.service.create(missing.id, { requestId: randomUUID(), targetAgent: 'codex', projectId: 'remote-project', message: '不要用摘要冒充原始记录' });
+  await worker.sync();
+  assert.equal(launchedJobs.length, 2);
+  const failedJob = f.database.readTaskCenter('default').executions.find(job => job.conversationId === failed.sessionId);
+  assert.equal(failedJob?.status, 'failed'); assert.match(failedJob?.message || '', /原始会话不存在/);
+  await worker.sync(); assert.equal(launchedJobs.length, 2);
+});
+
+test('cross-device A to B waits for the source packet and runs in B selected directory with original image bytes', async t => {
+  const f = await fixture(t), dirA = path.join(f.root, 'device-a'), dirB = path.join(f.root, 'device-b');
+  await mkdir(dirA); await mkdir(dirB);
+  const records = path.join(f.root, 'device-a-records'); await mkdir(records);
+  const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+  await writeFile(path.join(records, 'session.jsonl'), line({ type: 'session_meta', payload: { id: 'a-native', cwd: dirA } }) +
+    line({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'A 的完整需求' }, { type: 'input_image', image_url: `data:image/png;base64,${bytes.toString('base64')}` }] } }) +
+    line(message('A 的回复', 'assistant')));
+  const historyA = createAgentHistory({ environment: { IDE_HISTORY_CODEX_DIR: records, IDE_HISTORY_CLAUDE_DIR: path.join(f.root, 'absent') }, workspace: () => dirA });
+  const deliveryA = createSessionDelivery({ history: historyA });
+  const center = createTaskCenter({ database: f.database, tenantId: 'default', history: f.history });
+  const actorA = { id: 'connector-a' }, actorB = { id: 'connector-b' };
+  for (const [deviceId, actor, cwd] of [['A', actorA, dirA], ['B', actorB, dirB]] as const) {
+    await center.command({ action: 'heartbeat', deviceId, name: deviceId, agents: ['codex'], codexProjects: [{ id: `project-${deviceId}`, name: deviceId, cwd, agent: 'codex' }],
+      sessions: deviceId === 'A' ? [{ nativeId: 'a-native', agent: 'codex', title: 'A 的会话', cwd, status: 'completed', excerpt: '', updatedAt: new Date().toISOString() }] : [] }, actor);
+  }
+  const source = (await center.snapshot()).sessions.find(session => session.deviceId === 'A' && session.nativeId === 'a-native');
+  assert.ok(source);
+  await assert.rejects(f.service.create(source.id, { requestId: randomUUID(), targetAgent: 'codex', deviceId: 'B', projectId: 'project-B', message: 'B 继续' }), { statusCode: 400 });
+  const created = await f.service.create(source.id, { requestId: randomUUID(), targetAgent: 'codex', deviceId: 'B', projectId: 'project-B', cwd: dirB, message: 'B 继续' });
+  const queued = f.database.readTaskCenter('default').executions.find(job => job.conversationId === created.sessionId);
+  assert.ok(queued); assert.equal(queued.contextSourceDeviceId, 'A'); assert.equal(queued.deviceId, 'B');
+  const route = (actor: { id: string }, deviceId: string) => (method: string, body?: unknown, endpoint?: string) => {
+    if (endpoint?.includes('/transfer')) {
+      const url = new URL(endpoint, 'http://localhost');
+      const input = method === 'POST' ? body as Record<string, unknown> : { deviceId, readyOnly: url.searchParams.get('readyOnly') };
+      return f.service.transfer(url.pathname.split('/')[3]!, String(method === 'POST' ? input.executionId : url.searchParams.get('executionId')), method === 'POST' ? 'upload' : 'read', actor, input);
+    }
+    if (method === 'GET' && endpoint?.includes('/inherited')) {
+      const url = new URL(endpoint, 'http://localhost'); return f.service.inherited(url.pathname.split('/')[3]!, url.searchParams);
+    }
+    return method === 'GET' ? center.snapshot() : f.execution.action(body as Parameters<typeof f.execution.action>[0], actor);
+  };
+  const launched: RunnerJob[] = [], launchedA: RunnerJob[] = [];
+  const workerA = new RemoteCodexWorker({ deviceId: 'A', workspace: dirA, directory: path.join(f.root, 'journal-a'), contextSource: { catalog: () => historyA.catalog(), delivery: deliveryA }, request: route(actorA, 'A'),
+    runnerFactory: update => ({ projects: async () => [{ id: 'project-A', cwd: dirA, agent: 'codex' }], start: async (job: RunnerJob) => { launchedA.push(job); update({ ...job, status: 'completed', sessionId: 'a-result' }); }, respond: async () => {}, stop: async () => {}, reconcile: async () => {}, close() {} }) });
+  const workerB = new RemoteCodexWorker({ deviceId: 'B', workspace: dirB, directory: path.join(f.root, 'journal-b'), request: route(actorB, 'B'),
+    runnerFactory: update => ({ projects: async () => [{ id: 'project-B', cwd: dirB, agent: 'codex' }], start: async (job: RunnerJob) => { launched.push(job); update({ ...job, status: 'completed', sessionId: 'b-native' }); }, respond: async () => {}, stop: async () => {}, reconcile: async () => {}, close() {} }) });
+  t.after(() => { workerA.close(); workerB.close(); });
+  await workerB.sync(); assert.equal(launched.length, 0);
+  assert.deepEqual(f.service.transfer(created.sessionId, queued.id, 'read', actorB, { deviceId: 'B', readyOnly: '1' }), { ready: false });
+  assert.throws(() => f.service.transfer(created.sessionId, queued.id, 'read', actorA, { deviceId: 'B' }), { statusCode: 403 });
+  assert.throws(() => f.service.transfer(created.sessionId, queued.id, 'upload', actorB, { deviceId: 'A' }), { statusCode: 403 });
+  await workerA.sync(); await workerB.sync();
+  assert.equal(launched.length, 1, JSON.stringify(f.database.readTaskCenter('default').executions.find(job => job.id === queued.id))); assert.equal(launched[0]!.cwd, dirB);
+  const foreign = createConversations({ ...f.options, tenantId: 'other' });
+  assert.throws(() => foreign.transfer(created.sessionId, queued.id, 'read', actorB, { deviceId: 'B' }), { statusCode: 404 });
+  const savedPacket = f.service.transfer(created.sessionId, queued.id, 'read', actorB, { deviceId: 'B' });
+  assert.ok('context' in savedPacket && savedPacket.context);
+  const changed = freezeContext([...savedPacket.context.entries, { role: 'assistant', text: '伪造变更', source: source.id }], savedPacket.context.sources);
+  assert.throws(() => f.service.transfer(created.sessionId, queued.id, 'upload', actorA, { deviceId: 'A', context: changed }), { statusCode: 409 });
+  assert.match(launched[0]!.prompt, /Markdown 交接文件/);
+  const markdown = await readFile(launched[0]!.contextMarkdownPath!, 'utf8');
+  assert.match(markdown, /A 的完整需求/); assert.ok(markdown.includes(bytes.toString('base64')));
+  assert.deepEqual(await readFile(launched[0]!.promptImages![0]!.path), bytes);
+  await workerA.sync(); await workerB.sync(); assert.equal(launched.length, 1);
+  assert.equal(f.database.readTaskCenter('default').executions.find(job => job.id === queued.id)?.status, 'completed');
+  await rm(path.join(records, 'session.jsonl'));
+  const returned = await f.service.create(created.sessionId, { requestId: randomUUID(), targetAgent: 'codex', deviceId: 'A', projectId: 'project-A', cwd: dirA, message: '带上 B 的结果返回 A' });
+  const returnJob = f.database.readTaskCenter('default').executions.find(job => job.conversationId === returned.sessionId);
+  assert.equal(returnJob?.contextSourceDeviceId, 'local');
+  await workerA.sync(); assert.equal(launchedA.length, 1);
+  assert.match(await readFile(launchedA[0]!.contextMarkdownPath!, 'utf8'), /A 的完整需求|B 继续/);
+  await center.command({ action: 'heartbeat', deviceId: 'A', name: 'A', agents: ['codex'], sessions: [{ nativeId: 'missing-native', agent: 'codex', title: '不可读取来源', cwd: dirA, status: 'completed', excerpt: '', updatedAt: new Date().toISOString() }] }, actorA);
+  const missingSource = (await center.snapshot()).sessions.find(item => item.deviceId === 'A' && item.nativeId === 'missing-native'); assert.ok(missingSource);
+  const failed = await f.service.create(missingSource.id, { requestId: randomUUID(), targetAgent: 'codex', deviceId: 'B', projectId: 'project-B', cwd: dirB, message: '不得用摘要代替' });
+  await workerA.sync(); await workerB.sync();
+  const failedJob = f.database.readTaskCenter('default').executions.find(item => item.conversationId === failed.sessionId);
+  assert.equal(failedJob?.status, 'failed'); assert.match(failedJob.message || '', /原始会话不存在/); assert.equal(launched.length, 1);
+});
+
+test('local source can hand its frozen context to a remote device without copying the repository', async t => {
+  const f = await fixture(t), target = path.join(f.root, 'target'), selected = path.join(f.root, 'selected-repo'); await mkdir(target); await mkdir(selected);
+  const center = createTaskCenter({ database: f.database, tenantId: 'default', history: f.history }), actor = { id: 'connector-b' }, requester = { id: 'requester' };
+  await center.command({ action: 'heartbeat', deviceId: 'B', name: 'B', agents: ['codex'], codexProjects: [{ id: 'codex', name: 'B', cwd: target, agent: 'codex' }], sessions: [] }, actor);
+  await assert.rejects(f.service.create(f.source, { requestId: randomUUID(), targetAgent: 'codex', deviceId: 'B', projectId: 'codex', cwd: selected, message: '在 B 上继续' }, requester), { statusCode: 409 });
+  const choice = await f.execution.pickDirectory({ deviceId: 'B', projectId: 'codex' }, requester);
+  assert.equal(choice.status, 'pending'); assert.ok('requestId' in choice);
+  await f.execution.directoryAction({ action: 'claim', requestId: choice.requestId }, actor);
+  await f.execution.directoryAction({ action: 'report', requestId: choice.requestId, cwd: selected }, actor);
+  await assert.rejects(f.service.create(f.source, { requestId: randomUUID(), targetAgent: 'codex', deviceId: 'B', projectId: 'codex', cwd: selected, directoryRequestId: choice.requestId, message: '在 B 上继续' }, { id: 'other' }), { statusCode: 409 });
+  const created = await f.service.create(f.source, { requestId: randomUUID(), targetAgent: 'codex', deviceId: 'B', projectId: 'codex', cwd: selected, directoryRequestId: choice.requestId, message: '在 B 上继续' }, requester);
+  const job = f.database.readTaskCenter('default').executions.find(item => item.conversationId === created.sessionId);
+  assert.ok(job); assert.equal(job.contextSourceDeviceId, 'local'); assert.equal(job.deviceId, 'B');
+  const packet = f.service.transfer(created.sessionId, job.id, 'read', actor, { deviceId: 'B' });
+  assert.equal(packet.ready, true); assert.match(JSON.stringify(packet), /保持原接口兼容/);
+  const launched: RunnerJob[] = [];
+  const worker = new RemoteCodexWorker({ deviceId: 'B', workspace: selected, directory: path.join(f.root, 'journal-b'),
+    request: (method, body, endpoint) => endpoint?.includes('/transfer') ? f.service.transfer(created.sessionId, job.id, 'read', actor, { deviceId: 'B', readyOnly: new URL(endpoint, 'http://localhost').searchParams.get('readyOnly') }) : method === 'GET' ? center.snapshot() : f.execution.action(body as Parameters<typeof f.execution.action>[0], actor),
+    runnerFactory: update => ({ projects: async () => [{ id: 'codex', cwd: target, agent: 'codex' }], start: async (item: RunnerJob) => { launched.push(item); update({ ...item, status: 'completed', sessionId: 'b-native' }); }, respond: async () => {}, stop: async () => {}, reconcile: async () => {}, close() {} }) });
+  t.after(() => worker.close()); await worker.sync();
+  assert.equal(launched.length, 1); assert.equal(launched[0]!.cwd, selected); assert.match(await readFile(launched[0]!.contextMarkdownPath!, 'utf8'), /保持原接口兼容/);
+});
+
+test('remote source to workbench device waits for upload before launching once', async t => {
+  const f = await fixture(t), records = path.join(f.root, 'remote-source'); await mkdir(records);
+  await writeFile(path.join(records, 'session.jsonl'), line({ type: 'session_meta', payload: { id: 'remote-native', cwd: f.root } }) + line(message('A 设备原文')));
+  const historyA = createAgentHistory({ environment: { IDE_HISTORY_CODEX_DIR: records, IDE_HISTORY_CLAUDE_DIR: path.join(f.root, 'absent') }, workspace: () => f.root });
+  const center = createTaskCenter({ database: f.database, tenantId: 'default', history: f.history }), actorA = { id: 'connector-a' };
+  await center.command({ action: 'heartbeat', deviceId: 'A', name: 'A', agents: ['codex'], codexProjects: [{ id: 'project-A', name: 'A', cwd: f.root, agent: 'codex' }],
+    sessions: [{ nativeId: 'remote-native', agent: 'codex', title: 'A 的会话', cwd: f.root, status: 'completed', excerpt: '', updatedAt: new Date().toISOString() }] }, actorA);
+  const source = (await center.snapshot()).sessions.find(item => item.deviceId === 'A' && item.nativeId === 'remote-native'); assert.ok(source);
+  const created = await f.service.create(source.id, { requestId: randomUUID(), targetAgent: 'codex', deviceId: 'local', projectId: 'codex', cwd: f.root, message: '在工作台设备继续' });
+  assert.equal(f.launched.length, 0); await f.service.preparePending(); assert.equal(f.launched.length, 0);
+  const worker = new RemoteCodexWorker({ deviceId: 'A', workspace: f.root, directory: path.join(f.root, 'journal-a'), contextSource: { catalog: () => historyA.catalog(), delivery: createSessionDelivery({ history: historyA }) },
+    request: (method, body, endpoint) => {
+      if (endpoint?.includes('/transfer')) return f.service.transfer(created.sessionId, String((body as Record<string, unknown>).executionId), 'upload', actorA, body as Record<string, unknown>);
+      if (method === 'GET' && endpoint?.includes('/inherited')) return f.service.inherited(created.sessionId, new URL(endpoint, 'http://localhost').searchParams);
+      return center.snapshot();
+    }, runnerFactory: () => ({ projects: async () => [{ id: 'project-A', cwd: f.root, agent: 'codex' }], start: async () => {}, respond: async () => {}, stop: async () => {}, reconcile: async () => {}, close() {} }) });
+  t.after(() => worker.close()); await worker.sync(); await f.service.preparePending(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.launched.length, 1); assert.match(await readFile(f.launched[0]!.contextMarkdownPath!, 'utf8'), /A 设备原文/);
+  await f.service.preparePending(); assert.equal(f.launched.length, 1);
+});
+
 test('new routes explicitly separate execution and read permissions', () => {
   const id = 'a'.repeat(64);
   assert.equal(permissionForRoute('POST', `/api/sessions/${id}/continue-as-new`), 'work.execute');
   assert.equal(permissionForRoute('GET', `/api/conversations/${id}/inherited`), 'read');
+  assert.equal(permissionForRoute('GET', `/api/conversations/${id}/transfer`), 'work.execute');
+  assert.equal(permissionForRoute('POST', `/api/conversations/${id}/transfer`), 'work.execute');
   assert.equal(permissionForRoute('GET', '/api/conversations'), 'read');
 });
 

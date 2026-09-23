@@ -116,10 +116,16 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
 
   async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
     const newConversation = /^\/api\/sessions\/([a-f0-9]{64})\/continue-as-new$/.exec(url.pathname);
-    if (newConversation && req.method === 'POST') { sendJson(res, 202, await conversations.create(newConversation[1], await readJson(req))); return; }
+    if (newConversation && req.method === 'POST') { sendJson(res, 202, await conversations.create(newConversation[1], await readJson(req), requestIdentity.getStore()!.user)); return; }
     if (url.pathname === '/api/conversations' && req.method === 'GET') { sendJson(res, 200, { sessions: conversations.list() }); return; }
     const inherited = /^\/api\/conversations\/([a-f0-9]{64})\/inherited$/.exec(url.pathname);
     if (inherited && req.method === 'GET') { sendJson(res, 200, conversations.inherited(inherited[1], url.searchParams)); return; }
+    const transfer = /^\/api\/conversations\/([a-f0-9]{64})\/transfer$/.exec(url.pathname);
+    if (transfer && ['GET', 'POST'].includes(req.method || '')) {
+      const body = req.method === 'POST' ? await readJson(req, 85_000_000) : { executionId: url.searchParams.get('executionId'), deviceId: url.searchParams.get('deviceId'), readyOnly: url.searchParams.get('readyOnly') };
+      if (typeof body.executionId !== 'string' || !/^[a-f0-9-]{36}$/.test(body.executionId)) throw Object.assign(new Error('执行标识无效'), { statusCode: 400 });
+      sendJson(res, 200, conversations.transfer(transfer[1], body.executionId, req.method === 'POST' ? 'upload' : 'read', requestIdentity.getStore()!.user, body)); return;
+    }
     if (url.pathname === '/api/task-center/git' && req.method === 'POST') { sendJson(res, 200, await codexExecution.git(await readJson(req))); return; }
     if (url.pathname === '/api/task-center/directory-picker') {
       const actor = requestIdentity.getStore()!.user;

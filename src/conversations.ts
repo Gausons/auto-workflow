@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { taskContent } from '../public/taskContent.js';
-import type { AgentProject, Execution, HistoryMessage, Session, TaskCenterData } from '../public/taskTypes.js';
+import type { AgentProject, Execution, HistoryMessage, RemoteContextHandoff, Session, TaskCenterData } from '../public/taskTypes.js';
 import { cleanContextEntries, contextPrompt, freezeContext, readContext, type ContextDelivery, type ContextEntry, type SessionContext } from './contextCompiler.js';
 import type { SummaryResult } from './contextModelSummary.js';
 import type { Environment } from './issueSources/types.js';
@@ -44,8 +44,10 @@ interface ConversationInput {
   requestId?: unknown;
   message?: unknown;
   targetAgent?: unknown;
+  deviceId?: unknown;
   projectId?: unknown;
   cwd?: unknown;
+  directoryRequestId?: unknown;
   model?: unknown;
   reasoningEffort?: unknown;
 }
@@ -72,6 +74,24 @@ const messageText = (value: unknown, optional = false) => {
 export function createConversations({ database, tenantId, history, delivery, execution, contextRoot, summarize, environment = {} }: ConversationServices) {
   const read = () => database.readTaskCenter(tenantId);
   const managed = (id: string, data = read()) => data.sessions.find((session): session is ManagedSession => session.id === id && session.source === 'conversation');
+  const remoteSource = (session: ManagedSession, data: TaskCenterData): RemoteContextHandoff => {
+    let id = session.sourceSessionId;
+    let sourceFreezeId = session.id;
+    const seen = new Set<string>();
+    while (id && !seen.has(id)) {
+      seen.add(id);
+      const source = data.sessions.find(item => item.id === id);
+      if (!source) break;
+      if (source.source !== 'conversation') {
+        if (source.deviceId !== (session.contextSourceDeviceId || session.deviceId) || !source.nativeId) break;
+        return { sourceNativeId: source.nativeId, sourceAgent: source.agent, sourceDeviceId: source.deviceId,
+          sourceCwd: source.cwd, sourceSessionId: source.id, sourceFreezeId, contextDigest: '' };
+      }
+      sourceFreezeId = source.id;
+      id = source.sourceSessionId || '';
+    }
+    throw httpError(409, '远端原始会话来源不可核对，无法生成完整交接文件');
+  };
   const jobsFor = (data: TaskCenterData, id: string) => data.executions.filter(job => job.conversationId === id);
   const clean = (value: unknown): Record<string, unknown> => {
     const record = deliverRecord('context', value, environment).record;
@@ -103,8 +123,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
     }
     const saved = data.sessions.find(session => session.id === id);
     if (saved?.deviceId && saved.deviceId !== 'local') {
-      if (!saved.excerpt) throw httpError(409, '来源设备尚未同步会话正文，请先启用正文同步');
-      return { session: saved, entries: [{ role: 'reference', text: String(clean({ text: saved.excerpt })?.text || ''), source: id }], sources: [id], partial: true, aliases: [id] };
+      return { session: saved, entries: [{ role: 'reference', text: saved.excerpt ? String(clean({ text: saved.excerpt })?.text || '') : '完整原始会话将在来源设备的连接器上读取', source: id }], sources: [id], partial: true, aliases: [id] };
     }
     const catalog = await history.catalog();
     const original = catalog.sessions.find(session => session.id === id || (saved && session.sessionId === saved.nativeId && session.agent === saved.agent));
@@ -156,7 +175,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
       const messages = currentMessages(data, id), context = database.readSessionContext(tenantId, session.contextId);
       const inheritedCount = context ? cleanContextEntries(context.entries).length : 0;
       return { session: { ...session, managed: true, sessionId: session.nativeId }, messages: messages.slice(offset, offset + limit), total: messages.length, offset, limit,
-        inherited: { sourceSessionId: session.sourceSessionId, count: inheritedCount, partial: context?.partial || false, digest: context?.digest } };
+        inherited: { sourceSessionId: session.sourceSessionId, count: inheritedCount, partial: session.deviceId !== 'local' ? session.partial || false : context?.partial || false, digest: context?.digest } };
     },
     inherited(id: string, params = new URLSearchParams()) {
       const session = managed(id);
@@ -166,7 +185,47 @@ export function createConversations({ database, tenantId, history, delivery, exe
       const offset = Number(params.get('offset') || 0);
       if (!Number.isSafeInteger(offset) || offset < 0) throw httpError(400, '分页参数无效');
       const entries = cleanContextEntries(context.entries);
-      return { messages: entries.slice(offset, offset + 100).map(entry => ({ ...entry, role: ['user', 'assistant', 'tool_call', 'tool_result'].includes(entry.role) ? entry.role : 'tool_result' })), total: entries.length, offset };
+      return { messages: entries.slice(offset, offset + 100).map(entry => ({ ...entry, role: ['user', 'assistant', 'tool_call', 'tool_result'].includes(entry.role) ? entry.role : 'tool_result' })), total: entries.length, offset, digest: context.digest };
+    },
+    transfer(id: string, executionId: string, action: 'read' | 'upload', actor: { id?: string }, input?: { deviceId?: unknown; context?: unknown; readyOnly?: unknown; failure?: unknown }) {
+      const data = read(), job = data.executions?.find(item => item.id === executionId && item.conversationId === id);
+      if (!job || !job.contextSourceDeviceId || job.contextSourceDeviceId === job.deviceId || !managed(id, data)) throw httpError(404, '跨设备交接不存在');
+      const deviceId = action === 'upload' ? job.contextSourceDeviceId : job.deviceId;
+      const device = data.devices.find(item => item.id === deviceId);
+      if (deviceId === 'local' || !actor.id || !device || device.owner !== actor.id || input?.deviceId !== deviceId) throw httpError(403, '当前账号无权访问该设备的交接包');
+      if (action === 'upload' && (!job.remoteContext || job.remoteContext.sourceDeviceId !== deviceId)) throw httpError(409, '交接来源不在该设备');
+      const contextId = job.contextSourceDeviceId === 'local' ? job.contextId! : job.id;
+      if (action === 'upload') {
+        if (job.status !== 'queued' && !database.readSessionContext(tenantId, contextId)) throw httpError(409, '执行已不再等待交接包');
+        if (typeof input?.failure === 'string') {
+          if (!input.failure || input.failure.length > 2000) throw httpError(400, '交接失败信息无效');
+          if (database.readSessionContext(tenantId, contextId)) return { ready: true };
+          database.mutateTaskCenter(tenantId, current => {
+            const saved = current.executions.find(item => item.id === executionId);
+            if (saved && saved.status === 'queued') saved.contextTransferError = input.failure as string;
+          });
+          return { ready: false, failed: true };
+        }
+        const value = input?.context as SessionContext | undefined;
+        if (!value || value.version !== 1 || !Array.isArray(value.entries) || value.entries.length > 100000 ||
+          !Array.isArray(value.sources) || value.sources.length > 10000 || typeof value.partial !== 'boolean' ||
+          value.entries.some(entry => !entry || !['user', 'assistant', 'tool_call', 'tool_result', 'reference'].includes(entry.role) || typeof entry.text !== 'string' || typeof entry.source !== 'string') ||
+          value.sources.some(source => typeof source !== 'string') ||
+          createHash('sha256').update(JSON.stringify({ version: 1, entries: value.entries, sources: value.sources, partial: value.partial })).digest('hex') !== value.digest) throw httpError(400, '交接快照校验失败');
+        if (!value.sources.includes(job.remoteContext!.sourceSessionId)) throw httpError(400, '交接快照缺少原始来源');
+        const existing = database.readSessionContext(tenantId, contextId);
+        if (existing && existing.digest !== value.digest) throw httpError(409, '交接快照已冻结，不能覆盖');
+        if (!existing) database.saveSessionContext(tenantId, { ...value, id: contextId });
+        database.mutateTaskCenter(tenantId, current => {
+          const session = managed(id, current);
+          if (session && session.contextId === job.contextId) { session.contextId = contextId; session.contextTransferred = true; session.partial = value.partial; session.updatedAt = now(); }
+          const saved = current.executions.find(item => item.id === executionId);
+          if (saved && saved.status === 'queued') delete saved.contextTransferError;
+        });
+        return { ready: true, digest: value.digest };
+      }
+      const snapshot = database.readSessionContext(tenantId, contextId);
+      return snapshot && (job.contextSourceDeviceId === 'local' || snapshot.id === job.id) ? { ready: true, ...(input?.readyOnly === '1' ? {} : { context: snapshot }) } : { ready: false };
     },
     status(id: string) {
       if (!managed(id)) throw httpError(404, '会话不存在');
@@ -177,19 +236,23 @@ export function createConversations({ database, tenantId, history, delivery, exe
       if (unresolved) return { executions, execution: { ...unresolved, message: '来源执行结果待核对，确认结束后将自动继续准备上下文', prompt: '' } };
       return { executions, execution: session.preparationError ? { status: 'failed', message: session.preparationError, prompt: session.pendingMessage || '' } : session.status === 'preparing' ? { status: 'queued', message: '等待来源本轮结束，随后自动带上上下文', prompt: '' } : executions.at(-1) || null };
     },
-    async create(id: string, input: ConversationInput) {
+    async create(id: string, input: ConversationInput, actor: { id?: string } = {}) {
       const requestId = requestKey(input), message = messageText(input.message, true);
       if (typeof input.targetAgent !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(input.targetAgent)) throw httpError(400, '请选择目标 Agent');
       const targetAgent = input.targetAgent;
+      if (input.deviceId !== undefined && (typeof input.deviceId !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(input.deviceId))) throw httpError(400, '目标设备格式无效');
       if (input.projectId !== undefined && (typeof input.projectId !== 'string' || input.projectId.length > 500)) throw httpError(400, '执行目标格式无效');
       if (input.cwd !== undefined && (typeof input.cwd !== 'string' || input.cwd.length > 2000)) throw httpError(400, '工作目录格式无效');
+      if (input.directoryRequestId !== undefined && (typeof input.directoryRequestId !== 'string' || !/^[a-f0-9-]{36}$/.test(input.directoryRequestId))) throw httpError(400, '目录选择标识无效');
       if (input.model !== undefined && (typeof input.model !== 'string' || input.model.length > 200)) throw httpError(400, '模型格式无效');
       if (input.reasoningEffort !== undefined && (typeof input.reasoningEffort !== 'string' || input.reasoningEffort.length > 80)) throw httpError(400, '思考强度格式无效');
       const projectId = typeof input.projectId === 'string' ? input.projectId : '';
+      const targetDeviceId = typeof input.deviceId === 'string' ? input.deviceId : '';
       const requestedCwd = typeof input.cwd === 'string' ? input.cwd.trim() : '';
+      const directoryRequestId = typeof input.directoryRequestId === 'string' ? input.directoryRequestId : '';
       const model = typeof input.model === 'string' ? input.model.trim() : '';
       const reasoningEffort = typeof input.reasoningEffort === 'string' ? input.reasoningEffort.trim() : '';
-      const fingerprint = createHash('sha256').update(JSON.stringify([id, targetAgent, projectId, requestedCwd, model, reasoningEffort, message])).digest('hex');
+      const fingerprint = createHash('sha256').update(JSON.stringify([id, targetAgent, targetDeviceId, projectId, requestedCwd, directoryRequestId, model, reasoningEffort, message])).digest('hex');
       const repeated = read().sessions.find(session => session.createRequestId === requestId);
       if (repeated) {
         if (repeated.createFingerprint !== fingerprint) throw httpError(409, '发送标识已用于另一请求');
@@ -197,21 +260,26 @@ export function createConversations({ database, tenantId, history, delivery, exe
         return { sessionId: repeated.id, taskId: repeated.taskId };
       }
       const origin = await source(id);
-      // Keep code and attachments at the same location. Cross-device copying is not implicit.
-      const deviceId = origin.session.deviceId || 'local';
-      const projects = (await execution.targets()).projects.filter(project => project.deviceId === deviceId && (project.agent || 'codex') === targetAgent);
-      const project = (projectId ? projects.find(project => project.id === projectId) : undefined) || projects.find(project => project.cwd === origin.session.cwd) || projects[0];
-      if (!project) throw httpError(422, `来源设备上没有可用的 ${targetAgent}，请配置该 Agent 后重试`);
-      if (projectId && project.id !== projectId) throw httpError(400, '请选择来源设备上的可用执行目标');
+      const originDeviceId = origin.session.deviceId || 'local';
+      const allProjects = (await execution.targets()).projects.filter(project => (project.agent || 'codex') === targetAgent && project.deviceId === (targetDeviceId || originDeviceId));
+      const project = projectId ? allProjects.find(item => item.id === projectId) : allProjects.find(item => item.cwd === origin.session.cwd) || allProjects[0];
+      if (!project) throw httpError(projectId ? 400 : 422, projectId ? '请选择可用执行目标' : `来源设备上没有可用的 ${targetAgent}，请配置该 Agent 后重试`);
+      const deviceId = project.deviceId || 'local';
+      const sourceDeviceId = originDeviceId;
+      const contextSourceDeviceId = origin.session.source === 'conversation' && (origin.session.contextTransferred || origin.session.contextSourceDeviceId === 'local') ? 'local' : sourceDeviceId;
+      if (deviceId !== sourceDeviceId && !requestedCwd) throw httpError(400, '跨设备交接请明确选择目标设备的工作目录');
       const selectedModel = (project.models || []).find(item => item.id === model);
       if (model && !selectedModel) throw httpError(400, '所选模型不属于目标 Agent');
       const efforts = Array.isArray(selectedModel?.reasoningEfforts) ? selectedModel.reasoningEfforts : project.reasoningEfforts || [];
       if (reasoningEffort && !efforts.some(item => item.id === reasoningEffort)) throw httpError(400, '所选思考强度不受当前模型支持');
-      let cwd = requestedCwd || origin.session.cwd || project.cwd;
-      if (deviceId !== 'local' && cwd !== project.cwd) throw httpError(409, '来源目录尚未注册为目标设备的可执行项目');
+      let cwd = requestedCwd || (deviceId === sourceDeviceId ? origin.session.cwd : '') || project.cwd;
+      if (deviceId !== 'local' && cwd !== project.cwd) {
+        const selection = read().directoryRequests?.find(item => item.id === directoryRequestId);
+        if (!selection || selection.status !== 'completed' || selection.requestedBy !== actor.id || selection.deviceId !== deviceId || selection.projectId !== project.id || selection.cwd !== cwd) throw httpError(409, '请在目标设备重新选择工作目录');
+      }
       if (deviceId === 'local') {
         try { cwd = await realpath(cwd); if (!(await stat(cwd)).isDirectory()) throw new Error(); }
-        catch { throw httpError(409, '原会话工作目录已不可用'); }
+        catch { throw httpError(409, '目标工作目录已不可用'); }
       }
       let snapshot = freezeContext(origin.entries, origin.sources, origin.partial);
       const result = database.mutateTaskCenter(tenantId, data => {
@@ -236,9 +304,9 @@ export function createConversations({ database, tenantId, history, delivery, exe
         if (!task) throw httpError(409, '会话关联任务不存在');
         database.saveSessionContext(tenantId, snapshot);
         const sessionId = createHash('sha256').update(randomUUID()).digest('hex');
-        data.sessions.push({ id: sessionId, source: 'conversation', managed: true, taskId: task.id, sourceSessionId: id, contextId: snapshot.id, createRequestId: requestId, createFingerprint: fingerprint,
+        data.sessions.push({ id: sessionId, source: 'conversation', managed: true, taskId: task.id, sourceSessionId: id, contextSourceDeviceId, contextId: snapshot.id, createRequestId: requestId, createFingerprint: fingerprint,
           agent: targetAgent, agentLabel: targetAgent === 'codex' ? 'Codex' : targetAgent === 'claude' ? 'Claude Code' : targetAgent, model: model || undefined, reasoningEffort: reasoningEffort || undefined,
-          deviceId, projectId: project.id, appServerProjectId: project.appServerProjectId, protocol: project.protocol || 'legacy', cwd, nativeId: null,
+          deviceId, projectId: project.id, directoryRequestId: directoryRequestId || undefined, appServerProjectId: project.appServerProjectId, protocol: project.protocol || 'legacy', cwd, nativeId: null,
           title: origin.session.title, status: waiting ? 'preparing' : 'ready', pendingMessage: message, pendingRequestId: requestId, partial: snapshot.partial, createdAt: now(), updatedAt: now(), excerpt: '' });
         task.sessionIds.push(sessionId); task.revision++; task.updatedAt = now();
         task.events.unshift({ id: randomUUID(), at: now(), message: `带上下文新开 ${targetAgent} 会话` });
@@ -263,8 +331,9 @@ export function createConversations({ database, tenantId, history, delivery, exe
       const snapshot = database.readSessionContext(tenantId, session.contextId);
       if (!snapshot) throw httpError(409, '继承上下文不可用');
       const first = !session.nativeId;
-      if (first && session.deviceId !== 'local' && JSON.stringify(snapshot.entries).length > 100000) throw httpError(422, '远端上下文过长，暂无法在目标设备提供完整历史文件');
-      const compiled = first ? await contextPrompt(snapshot, message, contextRoot, 120000, session.deviceId === 'local', summarize) : { prompt: message, compacted: false, images: [], markdownPath: '' };
+      const crossDevice = first && Boolean(session.contextSourceDeviceId && session.contextSourceDeviceId !== session.deviceId);
+      const compiled = first && session.deviceId === 'local' && !crossDevice ? await contextPrompt(snapshot, message, contextRoot, 120000, true, summarize) : { prompt: message, compacted: false, images: [], markdownPath: '' };
+      const remote = first && (session.contextSourceDeviceId || session.deviceId) !== 'local' ? remoteSource(session, data) : null;
       const job = database.mutateTaskCenter(tenantId, current => {
         const duplicate = current.executions.find(candidate => candidate.requestId === requestId);
         if (duplicate) {
@@ -277,23 +346,51 @@ export function createConversations({ database, tenantId, history, delivery, exe
         if (!task) throw httpError(409, '会话关联任务不存在');
         if (busy(current, task.id)) throw httpError(409, '请等待当前执行完成，结果未知时先核对原会话');
         if (s.nativeId !== session.nativeId) throw httpError(409, '会话已更新，请重试');
-        const j: Execution = { id: randomUUID(), requestId, conversationId: id, sourceSessionId: s.sourceSessionId, contextId: s.contextId, contextDigest: snapshot.digest,
+        const j: Execution = { id: randomUUID(), requestId, conversationId: id, sourceSessionId: s.sourceSessionId, contextSourceDeviceId: s.contextSourceDeviceId, contextId: s.contextId, contextDigest: snapshot.digest,
           contextCompacted: compiled.compacted, taskId: task.id, contextVersion: task.contextVersion, userMessage: message, prompt: compiled.prompt,
           ...(s.deviceId === 'local' && compiled.markdownPath ? { contextMarkdownPath: compiled.markdownPath } : {}),
+          ...(remote ? { remoteContext: { ...remote, contextDigest: snapshot.digest } } : {}),
           ...(compiled.images.length ? { promptImages: compiled.images } : {}),
-          agent: s.agent, agentLabel: s.agentLabel, deviceId: s.deviceId, cwd: s.cwd, projectId: s.projectId, appServerProjectId: s.appServerProjectId, protocol: s.protocol, model: s.model || null, reasoningEffort: s.reasoningEffort || null,
+          agent: s.agent, agentLabel: s.agentLabel, deviceId: s.deviceId, cwd: s.cwd, projectId: s.projectId, directoryRequestId: s.directoryRequestId, appServerProjectId: s.appServerProjectId, protocol: s.protocol, model: s.model || null, reasoningEffort: s.reasoningEffort || null,
           ...(s.nativeId ? s.protocol === 'acp' ? { resumeSessionId: s.nativeId } : { resumeThreadId: s.nativeId } : {}),
           title: s.title, status: 'queued', createdAt: now(), updatedAt: now(), output: '', message: '已提交消息', sessionId: null, threadId: null, turnId: null };
         (current.executions ||= []).push(j); s.pendingMessage = ''; s.pendingRequestId = null; s.status = 'queued'; s.updatedAt = now(); task.status = 'running'; task.revision++;
         return j;
       });
-      if (!job.replay) execution.launch(job);
+      if (!job.replay && !(job.deviceId === 'local' && crossDevice)) execution.launch(job);
       return { executionId: job.id, taskId: session.taskId };
     },
     async preparePending() {
       if (preparing || closed) return;
       preparing = true;
       try {
+        for (const job of read().executions.filter(item => item.deviceId === 'local' && item.contextSourceDeviceId && item.contextSourceDeviceId !== 'local' && item.status === 'queued')) {
+          if (closed || !job.conversationId) return;
+          const transferred = database.readSessionContext(tenantId, job.id);
+          if (!transferred && !job.contextTransferError) continue;
+          try {
+            if (job.contextTransferError) throw new Error(job.contextTransferError);
+            if (!transferred) throw new Error('跨设备交接包不可用');
+            const compiled = await contextPrompt(transferred, job.userMessage || '', contextRoot, 120000, true, summarize);
+            const ready = database.mutateTaskCenter(tenantId, data => {
+              const saved = data.executions.find(item => item.id === job.id);
+              if (!saved || saved.status !== 'queued') return null;
+              Object.assign(saved, { prompt: compiled.prompt, promptImages: compiled.images, contextMarkdownPath: compiled.markdownPath, contextSourcePartial: transferred.partial,
+                status: 'launching', message: '交接包已送达，正在启动本机 Agent', updatedAt: now() });
+              return structuredClone(saved);
+            });
+            if (ready) execution.launch(ready);
+          } catch (caught: unknown) {
+            database.mutateTaskCenter(tenantId, data => {
+              const saved = data.executions.find(item => item.id === job.id);
+              if (saved?.status === 'queued') { saved.status = 'failed'; saved.message = `跨设备交接失败：${caught instanceof Error ? caught.message : String(caught)}`; saved.updatedAt = now(); }
+              const session = managed(job.conversationId!, data);
+              if (session && saved?.status === 'failed') { session.status = 'error'; session.preparationError = saved.message; }
+              const task = data.tasks.find(item => item.id === job.taskId);
+              if (task && saved?.status === 'failed') { task.status = 'error'; task.revision++; task.updatedAt = now(); }
+            });
+          }
+        }
         for (const pending of read().sessions.filter((session): session is ManagedSession => session.source === 'conversation' && (session.status === 'preparing' || (session.status === 'ready' && Boolean(session.pendingMessage))))) {
           if (busy(read(), pending.taskId)) continue;
           try {
@@ -311,7 +408,9 @@ export function createConversations({ database, tenantId, history, delivery, exe
               if (!session) return false;
               if (session.status !== 'preparing' || busy(data, session.taskId)) return false;
               database.saveSessionContext(tenantId, updated);
-              session.contextId = updated.id; session.status = 'ready'; session.updatedAt = now();
+              session.contextId = updated.id;
+              if (origin.session.source === 'conversation' && (origin.session.contextTransferred || origin.session.contextSourceDeviceId === 'local')) session.contextSourceDeviceId = 'local';
+              session.status = 'ready'; session.updatedAt = now();
               return true;
             });
             if (ready && pending.pendingMessage) await service.send(pending.id, { message: pending.pendingMessage, requestId: pending.pendingRequestId });

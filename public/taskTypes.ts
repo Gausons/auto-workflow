@@ -82,11 +82,14 @@ export interface Session {
   historyId?: string;
   source?: string;
   sourceSessionId?: string;
+  contextSourceDeviceId?: string;
+  contextTransferred?: boolean;
   taskId?: string;
   contextId?: string;
   createRequestId?: string;
   createFingerprint?: string;
   projectId?: string;
+  directoryRequestId?: string;
   appServerProjectId?: string | null;
   agent: string;
   agentLabel?: string;
@@ -135,16 +138,31 @@ export interface PromptImageReference {
   size: number;
 }
 
+export interface RemoteContextHandoff {
+  sourceNativeId: string;
+  sourceAgent: string;
+  sourceDeviceId: string;
+  sourceCwd: string;
+  sourceSessionId: string;
+  sourceFreezeId: string;
+  contextDigest: string;
+}
+
 export interface Execution {
   id: string;
   requestId?: string;
   historySessionId?: string;
   conversationId?: string;
   sourceSessionId?: string | null;
+  contextSourceDeviceId?: string;
+  contextTransferError?: string;
+  directoryRequestId?: string;
   contextId?: string;
   contextDigest?: string;
   contextCompacted?: boolean;
+  contextSourcePartial?: boolean;
   contextMarkdownPath?: string;
+  remoteContext?: RemoteContextHandoff;
   taskId: string;
   contextVersion: number;
   deviceId: string;
