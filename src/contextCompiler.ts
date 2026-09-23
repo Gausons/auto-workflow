@@ -1,8 +1,10 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { PromptImageReference } from '../public/taskTypes.js';
 import { cleanUserContext } from './agentHistory/adapters.js';
+import { SourceRegistry, freezeSnapshot } from '@auto-workflow/context-engine';
+import { sessionDeliverySource, type SessionDelivery } from '@auto-workflow/context-adapters/session-delivery';
 import { renderContextMarkdown } from './contextMarkdown.js';
 import type { SummaryResult } from './contextModelSummary.js';
 import { httpError } from './rbac.js';
@@ -12,12 +14,7 @@ export interface SessionContext {
   id: string; version: 1; digest: string; entries: ContextEntry[]; sources: string[];
   partial: boolean; createdAt: string;
 }
-interface DeliveryEvent { kind: string; href?: string; sourceLine?: number; agent?: string; record?: unknown }
-interface DeliveryPage { coverage: { pendingBytes: number }; events: Array<DeliveryEvent | null>; nextCursor?: string | null }
-export interface ContextDelivery {
-  detail(id: string, params?: URLSearchParams): Promise<unknown>;
-  record(id: string, params?: URLSearchParams): Promise<unknown>;
-}
+export type ContextDelivery = SessionDelivery;
 export interface CompiledContext {
   prompt: string;
   compacted: boolean;
@@ -52,64 +49,16 @@ const cleanEntry = (entry: ContextEntry): ContextEntry | null => {
 };
 export const cleanContextEntries = (entries: ContextEntry[]): ContextEntry[] => entries.map(cleanEntry).filter((entry): entry is ContextEntry => Boolean(entry));
 
-// Use delivery records, not the history preview (which truncates individual messages).
+// The adapter owns vendor row decoding. The engine owns capture validation and freezing.
 export async function readContext(delivery: ContextDelivery, id: string): Promise<{ entries: ContextEntry[]; partial: boolean }> {
-  const entries: ContextEntry[] = [], fallback: ContextEntry[] = [];
-  let cursor: string | null = null, partial = false, turnId: string | undefined;
-  do {
-    const page = await delivery.detail(id, new URLSearchParams({ limit: '200', ...(cursor ? { cursor } : {}) })) as DeliveryPage;
-    partial ||= page.coverage.pendingBytes > 0;
-    for (let event of page.events) {
-      if (!event) { partial = true; continue; }
-      if (event.kind === 'reference') {
-        const ref = new URL(event.href || '', 'http://localhost').searchParams.get('ref');
-        const resolved = (await delivery.record(id, new URLSearchParams({ ref: ref || "" })) as { event?: DeliveryEvent | null }).event;
-        if (!resolved) { partial = true; continue; }
-        event = resolved;
-      }
-      if (event.kind === 'unavailable') { partial = true; continue; }
-      if (!event.record || event.kind === 'omitted') continue;
-      const row = record(event.record), p = record(row.payload);
-      if (typeof p.turn_id === 'string') turnId = p.turn_id;
-      const add = (role: string, text: unknown, target = entries) => {
-        const content = role === 'user' ? userContent(text) : text;
-        if (!hasContent(content)) return;
-        target.push({ role, text: stringify(content), source: id, line: event.sourceLine, ...(typeof row.timestamp === 'string' ? { timestamp: row.timestamp } : {}), turnId });
-      };
-      if (event.agent === 'codex') {
-        if (row.type === 'response_item') {
-          if (p.type === 'message' && typeof p.role === 'string' && ['user', 'assistant'].includes(p.role)) add(p.role, p.content);
-          if (typeof p.type === 'string' && ['function_call', 'custom_tool_call'].includes(p.type)) add('tool_call', p);
-          if (typeof p.type === 'string' && ['function_call_output', 'custom_tool_call_output'].includes(p.type)) add('tool_result', p);
-        } else if (row.type === 'event_msg' && typeof p.type === 'string' && ['user_message', 'agent_message'].includes(p.type)) {
-          add(p.type === 'user_message' ? 'user' : 'assistant', p.message, fallback);
-        }
-      } else if (typeof row.type === 'string' && ['user', 'assistant'].includes(row.type)) {
-        const message = record(row.message);
-        add(row.type, message.content ?? row.message);
-      }
-    }
-    cursor = page.nextCursor ?? null;
-  } while (cursor);
-  // Match duplicate mirrors by turn, role, text and occurrence count. Keep event-only turns.
-  const key = (entry: ContextEntry) => {
-    let text = entry.text;
-    try { const blocks = JSON.parse(text); if (Array.isArray(blocks)) text = blocks.filter(b => ['text', 'input_text', 'output_text'].includes(b.type)).map(b => b.text || '').join('\n'); } catch { /* Plain event text. */ }
-    return JSON.stringify([entry.turnId || '', entry.role, text]);
-  };
-  const mirrors = new Map<string, number>();
-  for (const entry of entries) if (['user', 'assistant'].includes(entry.role)) mirrors.set(key(entry), (mirrors.get(key(entry)) || 0) + 1);
-  for (const entry of fallback) {
-    const k = key(entry), count = mirrors.get(k) || 0;
-    if (count) mirrors.set(k, count - 1); else entries.push(entry);
-  }
-  entries.sort((a, b) => (a.line || 0) - (b.line || 0));
-  return { entries, partial };
+  const sources = new SourceRegistry();
+  sources.register(sessionDeliverySource(delivery, userContent));
+  const capture = await sources.capture('agent-session', id);
+  return { entries: capture.events, partial: capture.partial };
 }
 
 export function freezeContext(entries: ContextEntry[], sources: string[], partial = false): SessionContext {
-  const body = { version: 1 as const, entries: cleanContextEntries(entries), sources: [...new Set(sources)], partial };
-  return { ...body, id: randomUUID(), digest: createHash('sha256').update(JSON.stringify(body)).digest('hex'), createdAt: new Date().toISOString() };
+  return freezeSnapshot(cleanContextEntries(entries), sources, partial);
 }
 
 const imageTypes = new Map([

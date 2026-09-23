@@ -1,9 +1,9 @@
 import path from 'node:path';
-import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile, rename, realpath, stat } from 'node:fs/promises';
 import { CodexRunner, pickNativeDirectory } from './codexExecution.js';
 import { AcpPreferredRunner, AcpTaskRunner, AgentRunnerSet, configuredAcpAgents } from './acpAgent.js';
 import { contextPrompt, freezeContext, readContext, type ContextDelivery, type ContextEntry, type SessionContext } from './contextCompiler.js';
+import { packSnapshot, verifyBundle, verifySnapshot } from '@auto-workflow/context-engine';
 import type { AgentProject, ExecutionControl, PromptImageReference, RemoteContextHandoff, TaskCenterData } from '../public/taskTypes.js';
 
 interface RemoteJob {
@@ -77,10 +77,8 @@ export class RemoteCodexWorker {
     const file = path.join(root, `source-${meta.sourceFreezeId}.json`);
     const load = async () => {
       const saved = JSON.parse(await readFile(file, 'utf8')) as { sourceNativeId?: string; sourceAgent?: string; context?: SessionContext };
-      if (saved.sourceNativeId !== meta.sourceNativeId || saved.sourceAgent !== meta.sourceAgent ||
-        !saved.context || !Array.isArray(saved.context.entries) || !Array.isArray(saved.context.sources) || typeof saved.context.partial !== 'boolean' ||
-        saved.context.digest !== createHash('sha256').update(JSON.stringify({ version: 1, entries: saved.context.entries, sources: saved.context.sources, partial: saved.context.partial })).digest('hex')) throw new Error('远端冻结来源校验失败');
-      return saved.context;
+      if (saved.sourceNativeId !== meta.sourceNativeId || saved.sourceAgent !== meta.sourceAgent) throw new Error('远端冻结来源校验失败');
+      try { return verifySnapshot(saved.context); } catch { throw new Error('远端冻结来源校验失败'); }
     };
     try { return await load(); }
     catch (caught: unknown) { if ((caught as NodeJS.ErrnoException).code !== 'ENOENT') throw caught; }
@@ -121,10 +119,10 @@ export class RemoteCodexWorker {
     if (!job.conversationId || !job.userMessage) return job;
     let snapshot: SessionContext;
     if (job.contextSourceDeviceId && job.contextSourceDeviceId !== this.deviceId) {
-      const result = await this.request('GET', undefined, `/api/conversations/${job.conversationId}/transfer?executionId=${job.id}&deviceId=${this.deviceId}`) as { ready?: boolean; context?: SessionContext };
-      if (!result.ready || !result.context) throw new Error('跨设备交接包尚未送达');
-      snapshot = result.context;
-      if (snapshot.digest !== createHash('sha256').update(JSON.stringify({ version: 1, entries: snapshot.entries, sources: snapshot.sources, partial: snapshot.partial })).digest('hex')) throw new Error('跨设备交接包校验失败');
+      const result = await this.request('GET', undefined, `/api/conversations/${job.conversationId}/transfer?executionId=${job.id}&deviceId=${this.deviceId}&format=bundle-v2`) as { ready?: boolean; context?: SessionContext; bundle?: unknown };
+      if (!result.ready || (!result.context && !result.bundle)) throw new Error('跨设备交接包尚未送达');
+      try { snapshot = result.bundle ? verifyBundle(result.bundle).snapshot : verifySnapshot(result.context); }
+      catch { throw new Error('跨设备交接包校验失败'); }
     } else if (job.remoteContext) snapshot = await this.sourceSnapshot(job);
     else return job;
     const compiled = await contextPrompt(snapshot, job.userMessage, path.join(this.directory, 'context'));
@@ -157,7 +155,7 @@ export class RemoteCodexWorker {
       if (!job.conversationId) continue;
       try {
         const context = await this.sourceSnapshot(job);
-        await this.request('POST', { executionId: job.id, deviceId: this.deviceId, context }, `/api/conversations/${job.conversationId}/transfer`);
+        await this.request('POST', { executionId: job.id, deviceId: this.deviceId, bundle: packSnapshot(context) }, `/api/conversations/${job.conversationId}/transfer`);
       } catch (caught: unknown) {
         const transient = caught as ErrorLike & { status?: number };
         if (transient.status && transient.status >= 500 || ['AbortError', 'TimeoutError'].includes(transient.name)) throw caught;

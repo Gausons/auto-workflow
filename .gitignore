@@ -9,9 +9,11 @@
 !/docs/desktop-continuation-validation.md
 !/docs/agent-context-handoff-plan.md
 !/docs/frontend-web-technology-selection.md
+!/docs/context-transfer-engine-design.md
 !/LICENSE
 !/package.json
 !/pnpm-lock.yaml
+!/pnpm-workspace.yaml
 !/server.ts
 !/tsconfig.json
 !/tsconfig.client.json
@@ -23,6 +25,7 @@
 !/scripts/
 !/test/
 !/migrations/
+!/packages/
 
 # Private configuration, runtime data and local tools (at every depth).
 .env

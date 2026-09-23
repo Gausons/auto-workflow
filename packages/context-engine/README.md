@@ -1,0 +1,14 @@
+# Context Engine
+
+这个工作区包负责数据源捕获结果校验、不可变快照、数据包完整性和便携目录包。无工作台、HTTP、SQLite、Agent 厂商依赖。
+
+入口：
+
+- `SourceRegistry.register/capture`：按来源 ID 注册并读取标准化事件。
+- `freezeSnapshot/verifySnapshot`：生成与验证 `SessionContext v1` 兼容快照。
+- `packSnapshot/verifyBundle`：生成与验证 v2 传输包；manifest 绑定快照身份、摘要和对象摘要。
+- `writeBundleDirectory/readBundleDirectory`：原子写入与校验目录包。
+
+`@auto-workflow/context-adapters` 包含当前 Codex/Claude 会话交付适配器和受授权目录限制的 Markdown 适配器。新增数据源实现 `SourceAdapter` 即可复用上述流程。插件代码必须由宿主显式注册；来源材料和 Agent 输出均是不可信数据。
+
+当前 HTTP 兼容层仍在工作台中，v2 数据包与旧 `SessionContext v1` 同时可读。图片的原生输入和 Markdown 呈现由现有工作台模块完成。协议版本改变时需新增版本及契约测试，不得原地改变 v1 摘要计算规则。

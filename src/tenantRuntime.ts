@@ -122,7 +122,7 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     if (inherited && req.method === 'GET') { sendJson(res, 200, conversations.inherited(inherited[1], url.searchParams)); return; }
     const transfer = /^\/api\/conversations\/([a-f0-9]{64})\/transfer$/.exec(url.pathname);
     if (transfer && ['GET', 'POST'].includes(req.method || '')) {
-      const body = req.method === 'POST' ? await readJson(req, 85_000_000) : { executionId: url.searchParams.get('executionId'), deviceId: url.searchParams.get('deviceId'), readyOnly: url.searchParams.get('readyOnly') };
+      const body = req.method === 'POST' ? await readJson(req, 85_000_000) : { executionId: url.searchParams.get('executionId'), deviceId: url.searchParams.get('deviceId'), readyOnly: url.searchParams.get('readyOnly'), format: url.searchParams.get('format') };
       if (typeof body.executionId !== 'string' || !/^[a-f0-9-]{36}$/.test(body.executionId)) throw Object.assign(new Error('执行标识无效'), { statusCode: 400 });
       sendJson(res, 200, conversations.transfer(transfer[1], body.executionId, req.method === 'POST' ? 'upload' : 'read', requestIdentity.getStore()!.user, body)); return;
     }

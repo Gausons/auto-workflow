@@ -296,10 +296,12 @@ test('cross-device A to B waits for the source packet and runs in B selected dir
   const created = await f.service.create(source.id, { requestId: randomUUID(), targetAgent: 'codex', deviceId: 'B', projectId: 'project-B', cwd: dirB, message: 'B 继续' });
   const queued = f.database.readTaskCenter('default').executions.find(job => job.conversationId === created.sessionId);
   assert.ok(queued); assert.equal(queued.contextSourceDeviceId, 'A'); assert.equal(queued.deviceId, 'B');
+  let uploadedManifestDigest = '';
   const route = (actor: { id: string }, deviceId: string) => (method: string, body?: unknown, endpoint?: string) => {
     if (endpoint?.includes('/transfer')) {
       const url = new URL(endpoint, 'http://localhost');
-      const input = method === 'POST' ? body as Record<string, unknown> : { deviceId, readyOnly: url.searchParams.get('readyOnly') };
+      const input = method === 'POST' ? body as Record<string, unknown> : { deviceId, readyOnly: url.searchParams.get('readyOnly'), format: url.searchParams.get('format') };
+      if (method === 'POST' && 'bundle' in input) uploadedManifestDigest = String((input.bundle as { manifestDigest?: unknown }).manifestDigest || '');
       return f.service.transfer(url.pathname.split('/')[3]!, String(method === 'POST' ? input.executionId : url.searchParams.get('executionId')), method === 'POST' ? 'upload' : 'read', actor, input);
     }
     if (method === 'GET' && endpoint?.includes('/inherited')) {
@@ -323,6 +325,10 @@ test('cross-device A to B waits for the source packet and runs in B selected dir
   assert.throws(() => foreign.transfer(created.sessionId, queued.id, 'read', actorB, { deviceId: 'B' }), { statusCode: 404 });
   const savedPacket = f.service.transfer(created.sessionId, queued.id, 'read', actorB, { deviceId: 'B' });
   assert.ok('context' in savedPacket && savedPacket.context);
+  const v2Packet = f.service.transfer(created.sessionId, queued.id, 'read', actorB, { deviceId: 'B', format: 'bundle-v2' });
+  assert.ok('bundle' in v2Packet && v2Packet.bundle);
+  assert.equal('context' in v2Packet, false);
+  assert.equal(v2Packet.bundle.manifestDigest, uploadedManifestDigest);
   const changed = freezeContext([...savedPacket.context.entries, { role: 'assistant', text: '伪造变更', source: source.id }], savedPacket.context.sources);
   assert.throws(() => f.service.transfer(created.sessionId, queued.id, 'upload', actorA, { deviceId: 'A', context: changed }), { statusCode: 409 });
   assert.match(launched[0]!.prompt, /Markdown 交接文件/);

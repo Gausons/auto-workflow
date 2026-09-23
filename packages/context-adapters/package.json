@@ -1,0 +1,16 @@
+{
+  "name": "@auto-workflow/context-adapters",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./session-delivery": "./src/sources/session-delivery.ts",
+    "./markdown": "./src/sources/markdown.ts"
+  },
+  "dependencies": {
+    "@auto-workflow/context-engine": "workspace:*"
+  },
+  "engines": {
+    "node": ">=22.16.0"
+  }
+}

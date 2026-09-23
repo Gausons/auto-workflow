@@ -7,6 +7,7 @@ import type { SummaryResult } from './contextModelSummary.js';
 import type { Environment } from './issueSources/types.js';
 import { deliverRecord } from './sessionDelivery/records.js';
 import { httpError } from './rbac.js';
+import { verifyBundle, verifySnapshot } from '@auto-workflow/context-engine';
 
 type Database = ReturnType<typeof import('./database.js').openDatabase>;
 type ManagedSession = Session & {
@@ -187,7 +188,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
       const entries = cleanContextEntries(context.entries);
       return { messages: entries.slice(offset, offset + 100).map(entry => ({ ...entry, role: ['user', 'assistant', 'tool_call', 'tool_result'].includes(entry.role) ? entry.role : 'tool_result' })), total: entries.length, offset, digest: context.digest };
     },
-    transfer(id: string, executionId: string, action: 'read' | 'upload', actor: { id?: string }, input?: { deviceId?: unknown; context?: unknown; readyOnly?: unknown; failure?: unknown }) {
+    transfer(id: string, executionId: string, action: 'read' | 'upload', actor: { id?: string }, input?: { deviceId?: unknown; context?: unknown; bundle?: unknown; format?: unknown; readyOnly?: unknown; failure?: unknown }) {
       const data = read(), job = data.executions?.find(item => item.id === executionId && item.conversationId === id);
       if (!job || !job.contextSourceDeviceId || job.contextSourceDeviceId === job.deviceId || !managed(id, data)) throw httpError(404, '跨设备交接不存在');
       const deviceId = action === 'upload' ? job.contextSourceDeviceId : job.deviceId;
@@ -200,22 +201,25 @@ export function createConversations({ database, tenantId, history, delivery, exe
         if (typeof input?.failure === 'string') {
           if (!input.failure || input.failure.length > 2000) throw httpError(400, '交接失败信息无效');
           if (database.readSessionContext(tenantId, contextId)) return { ready: true };
+          database.recordContextTransferFailure(tenantId, executionId, job.contextSourceDeviceId, job.deviceId, contextId, job.contextDigest || '', input.failure);
           database.mutateTaskCenter(tenantId, current => {
             const saved = current.executions.find(item => item.id === executionId);
             if (saved && saved.status === 'queued') saved.contextTransferError = input.failure as string;
           });
           return { ready: false, failed: true };
         }
-        const value = input?.context as SessionContext | undefined;
-        if (!value || value.version !== 1 || !Array.isArray(value.entries) || value.entries.length > 100000 ||
-          !Array.isArray(value.sources) || value.sources.length > 10000 || typeof value.partial !== 'boolean' ||
-          value.entries.some(entry => !entry || !['user', 'assistant', 'tool_call', 'tool_result', 'reference'].includes(entry.role) || typeof entry.text !== 'string' || typeof entry.source !== 'string') ||
-          value.sources.some(source => typeof source !== 'string') ||
-          createHash('sha256').update(JSON.stringify({ version: 1, entries: value.entries, sources: value.sources, partial: value.partial })).digest('hex') !== value.digest) throw httpError(400, '交接快照校验失败');
+        let value: SessionContext;
+        try {
+          value = input?.bundle ? verifyBundle(input.bundle).snapshot : verifySnapshot(input?.context);
+          if (input?.bundle && input.context && verifySnapshot(input.context).digest !== value.digest) throw new Error('交接包和旧版快照不一致');
+        } catch { throw httpError(400, '交接快照校验失败'); }
         if (!value.sources.includes(job.remoteContext!.sourceSessionId)) throw httpError(400, '交接快照缺少原始来源');
         const existing = database.readSessionContext(tenantId, contextId);
         if (existing && existing.digest !== value.digest) throw httpError(409, '交接快照已冻结，不能覆盖');
-        if (!existing) database.saveSessionContext(tenantId, { ...value, id: contextId });
+        try {
+          database.recordContextTransfer(tenantId, executionId, job.contextSourceDeviceId, job.deviceId, existing || value, contextId);
+        }
+        catch { throw httpError(409, '交接记录已冻结，不能覆盖'); }
         database.mutateTaskCenter(tenantId, current => {
           const session = managed(id, current);
           if (session && session.contextId === job.contextId) { session.contextId = contextId; session.contextTransferred = true; session.partial = value.partial; session.updatedAt = now(); }
@@ -225,7 +229,9 @@ export function createConversations({ database, tenantId, history, delivery, exe
         return { ready: true, digest: value.digest };
       }
       const snapshot = database.readSessionContext(tenantId, contextId);
-      return snapshot && (job.contextSourceDeviceId === 'local' || snapshot.id === job.id) ? { ready: true, ...(input?.readyOnly === '1' ? {} : { context: snapshot }) } : { ready: false };
+      if (!snapshot) return { ready: false };
+      const bundle = database.recordContextTransfer(tenantId, executionId, job.contextSourceDeviceId, job.deviceId, snapshot);
+      return { ready: true, ...(input?.readyOnly === '1' ? {} : input?.format === 'bundle-v2' ? { bundle } : { context: snapshot }) };
     },
     status(id: string) {
       if (!managed(id)) throw httpError(404, '会话不存在');

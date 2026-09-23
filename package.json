@@ -13,6 +13,7 @@
     "kill:port": "node --import tsx scripts/kill-port.ts",
     "kill:4173": "node --import tsx scripts/kill-4173.ts",
     "device:sync": "node --import tsx scripts/device-sync.ts",
+    "context:bundle": "node --import tsx scripts/context-bundle.ts",
     "pretest": "pnpm build:client",
     "test": "pnpm test:web && node --import tsx --test test/*.test.ts",
     "test:web": "vitest run",
@@ -25,6 +26,8 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@auto-workflow/context-adapters": "workspace:*",
+    "@auto-workflow/context-engine": "workspace:*",
     "@agentclientprotocol/sdk": "1.4.0",
     "@tanstack/react-query": "^5.103.2",
     "react": "^19.3.0",

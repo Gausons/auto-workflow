@@ -8,6 +8,7 @@ import type { IssueState } from './issueStore.js';
 import type { WorkIssue } from './issueSources/types.js';
 import type { TaskCenterData } from '../public/taskTypes.js';
 import type { SessionContext } from './contextCompiler.js';
+import { packSnapshot, verifySnapshot, type ContextBundle } from '@auto-workflow/context-engine';
 
 export interface Tenant { id: string; name: string; createdAt?: string }
 export interface TenantSettings { config: Record<string, unknown>; assignmentPeople: unknown[] }
@@ -23,7 +24,7 @@ export function openDatabase(filename: string) {
   const db = new DatabaseSync(filename);
   db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
   const version = Number(db.prepare('PRAGMA user_version').get()?.user_version || 0);
-  if (version > 5) { db.close(); throw new Error('数据库版本高于当前程序支持的版本'); }
+  if (version > 6) { db.close(); throw new Error('数据库版本高于当前程序支持的版本'); }
   if (version === 0) {
     transaction(() => {
       db.exec(readFileSync(new URL('../migrations/001_initial.sql', import.meta.url), 'utf8'));
@@ -54,6 +55,12 @@ export function openDatabase(filename: string) {
     transaction(() => {
       db.exec(readFileSync(new URL('../migrations/005_session_context.sql', import.meta.url), 'utf8'));
       db.exec('PRAGMA user_version = 5');
+    });
+  }
+  if (version < 6) {
+    transaction(() => {
+      db.exec(readFileSync(new URL('../migrations/006_context_transfers.sql', import.meta.url), 'utf8'));
+      db.exec('PRAGMA user_version = 6');
     });
   }
 
@@ -155,6 +162,40 @@ export function openDatabase(filename: string) {
     saveSessionContext: (tenantId: string, snapshot: SessionContext) => {
       db.prepare('INSERT INTO session_contexts VALUES (?, ?, ?) ON CONFLICT(tenant_id, id) DO NOTHING').run(tenantId, snapshot.id, JSON.stringify(snapshot));
     },
+    recordContextTransfer: (tenantId: string, executionId: string, sourceDeviceId: string, targetDeviceId: string, snapshot: SessionContext, storageKey?: string): ContextBundle => {
+      const bundle = packSnapshot(verifySnapshot(snapshot));
+      transaction(() => {
+        if (storageKey) {
+          const existing = db.prepare('SELECT payload FROM session_contexts WHERE tenant_id = ? AND id = ?').get(tenantId, storageKey) as { payload: string } | undefined;
+          if (existing && existing.payload !== JSON.stringify(snapshot)) throw new Error('交接快照已冻结，不能覆盖');
+          if (!existing) db.prepare('INSERT INTO session_contexts VALUES (?, ?, ?)').run(tenantId, storageKey, JSON.stringify(snapshot));
+        }
+        const prior = db.prepare('SELECT source_device_id AS sourceDeviceId, target_device_id AS targetDeviceId, snapshot_digest AS snapshotDigest, manifest_digest AS manifestDigest, status FROM context_transfers WHERE tenant_id = ? AND execution_id = ?')
+          .get(tenantId, executionId) as { sourceDeviceId: string; targetDeviceId: string; snapshotDigest: string; manifestDigest: string; status: string } | undefined;
+        if (prior && (prior.sourceDeviceId !== sourceDeviceId || prior.targetDeviceId !== targetDeviceId || prior.status === 'available' && (prior.snapshotDigest !== snapshot.digest || prior.manifestDigest !== bundle.manifestDigest))) throw new Error('交接记录已冻结，不能覆盖');
+        if (!prior) {
+          const at = new Date().toISOString();
+          db.prepare('INSERT INTO context_transfers(tenant_id, execution_id, source_device_id, target_device_id, snapshot_id, snapshot_digest, manifest_digest, status, failure, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)')
+            .run(tenantId, executionId, sourceDeviceId, targetDeviceId, snapshot.id, snapshot.digest, bundle.manifestDigest, 'available', at, at);
+        }
+        else if (prior.status === 'failed') db.prepare('UPDATE context_transfers SET snapshot_id = ?, snapshot_digest = ?, manifest_digest = ?, status = ?, failure = NULL, revision = revision + 1, updated_at = ? WHERE tenant_id = ? AND execution_id = ?')
+          .run(snapshot.id, snapshot.digest, bundle.manifestDigest, 'available', new Date().toISOString(), tenantId, executionId);
+      });
+      return bundle;
+    },
+    recordContextTransferFailure: (tenantId: string, executionId: string, sourceDeviceId: string, targetDeviceId: string, snapshotId: string, snapshotDigest: string, failure: string): void => {
+      transaction(() => {
+        const prior = db.prepare('SELECT source_device_id AS sourceDeviceId, target_device_id AS targetDeviceId, status FROM context_transfers WHERE tenant_id = ? AND execution_id = ?')
+          .get(tenantId, executionId) as { sourceDeviceId: string; targetDeviceId: string; status: string } | undefined;
+        if (prior && (prior.sourceDeviceId !== sourceDeviceId || prior.targetDeviceId !== targetDeviceId)) throw new Error('交接记录设备不匹配');
+        if (prior?.status === 'available') return;
+        const at = new Date().toISOString();
+        db.prepare('INSERT INTO context_transfers(tenant_id, execution_id, source_device_id, target_device_id, snapshot_id, snapshot_digest, manifest_digest, status, failure, revision, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?) ON CONFLICT(tenant_id, execution_id) DO UPDATE SET failure = excluded.failure, revision = context_transfers.revision + 1, updated_at = excluded.updated_at')
+          .run(tenantId, executionId, sourceDeviceId, targetDeviceId, snapshotId, snapshotDigest, '', 'failed', failure, at, at);
+      });
+    },
+    readContextTransfer: (tenantId: string, executionId: string) => db.prepare('SELECT source_device_id AS sourceDeviceId, target_device_id AS targetDeviceId, snapshot_id AS snapshotId, snapshot_digest AS snapshotDigest, manifest_digest AS manifestDigest, status, failure, revision FROM context_transfers WHERE tenant_id = ? AND execution_id = ?').get(tenantId, executionId) as
+      { sourceDeviceId: string; targetDeviceId: string; snapshotId: string; snapshotDigest: string; manifestDigest: string; status: string; failure: string | null; revision: number } | undefined,
     readTaskCenter: (tenantId: string) => parseTaskCenter((db.prepare('SELECT payload FROM task_centers WHERE tenant_id = ?').get(tenantId) as { payload?: string } | undefined)?.payload),
     mutateTaskCenter: <T>(tenantId: string, update: (data: TaskCenterData) => T): T => transaction(() => {
       const data = parseTaskCenter((db.prepare('SELECT payload FROM task_centers WHERE tenant_id = ?').get(tenantId) as { payload?: string } | undefined)?.payload);

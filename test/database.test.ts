@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { openDatabase } from '../src/database.js';
+import { freezeSnapshot } from '@auto-workflow/context-engine';
+import { DatabaseSync } from 'node:sqlite';
 
 const tokenA = 'a'.repeat(43), tokenB = 'b'.repeat(43);
 const snapshot = (title: string) => ({ bugs: [{ id: 'same-bug', title }] });
@@ -59,4 +61,51 @@ test('legacy import supports the old doubled users directory, is atomic and does
     await writeFile(path.join(dir, 'state.json'), JSON.stringify(snapshot('fixed')));
     assert.equal(db.importLegacy(root, 'other').users, 1);
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('transfer receipt survives reopen, stays tenant-scoped and cannot change a sealed digest', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'context-receipt-'));
+  const filename = path.join(root, 'workflow.sqlite');
+  let db = openDatabase(filename);
+  try {
+    db.createTenant({ id: 'a', token: tokenA }); db.createTenant({ id: 'b', token: tokenB });
+    const context = freezeSnapshot([{ role: 'user', text: '保留证据', source: 's' }], ['s']);
+    db.recordContextTransferFailure('a', 'execution', 'device-a', 'device-b', context.id, context.digest, '来源暂时不可用');
+    assert.equal(db.readContextTransfer('a', 'execution')?.status, 'failed');
+    const bundle = db.recordContextTransfer('a', 'execution', 'device-a', 'device-b', context);
+    assert.equal(db.readContextTransfer('a', 'execution')?.revision, 2);
+    assert.equal(db.readContextTransfer('b', 'execution'), undefined);
+    db.close(); db = openDatabase(filename);
+    assert.equal(db.readContextTransfer('a', 'execution')?.manifestDigest, bundle.manifestDigest);
+    assert.equal(db.recordContextTransfer('a', 'execution', 'device-a', 'device-b', context).manifestDigest, bundle.manifestDigest);
+    const changed = freezeSnapshot([{ role: 'user', text: '不同内容', source: 's' }], ['s']);
+    assert.throws(() => db.recordContextTransfer('a', 'execution', 'device-a', 'device-b', changed), /不能覆盖/);
+    assert.throws(() => db.recordContextTransfer('a', 'execution', 'device-a', 'device-b', changed, 'new-context-key'), /不能覆盖/);
+    assert.equal(db.readSessionContext('a', 'new-context-key'), null);
+    assert.throws(() => db.recordContextTransfer('a', 'execution', 'device-a', 'device-c', context), /不能覆盖/);
+    assert.equal(db.readContextTransfer('a', 'execution')?.revision, 2);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('migration 006 upgrades an existing v5 database without changing its session snapshots', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'context-upgrade-'));
+  const filename = path.join(root, 'workflow.sqlite');
+  try {
+    const first = openDatabase(filename);
+    first.createTenant({ id: 'a', token: tokenA });
+    const context = freezeSnapshot([{ role: 'user', text: '升级前记录', source: 's' }], ['s']);
+    first.saveSessionContext('a', context);
+    first.close();
+    const old = new DatabaseSync(filename);
+    old.exec('DROP TABLE context_transfers; PRAGMA user_version = 5;');
+    old.close();
+    const upgraded = openDatabase(filename);
+    try {
+      assert.deepEqual(upgraded.readSessionContext('a', context.id), context);
+      assert.equal(upgraded.readContextTransfer('a', 'missing'), undefined);
+      const check = new DatabaseSync(filename);
+      try { assert.equal(check.prepare('PRAGMA user_version').get()?.user_version, 6); }
+      finally { check.close(); }
+    } finally { upgraded.close(); }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

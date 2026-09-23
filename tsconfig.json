@@ -15,6 +15,7 @@
     "server.ts",
     "src/**/*.ts",
     "scripts/**/*.ts",
+    "packages/**/*.ts",
     "test/**/*.ts"
   ]
 }
