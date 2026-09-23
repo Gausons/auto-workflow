@@ -143,7 +143,8 @@ test('delivery reads all pages and avoids duplicate Codex event messages', async
 });
 
 test('inherited context removes runtime envelopes while retaining user text and images', async t => {
-  const f = await fixture(t), image = 'data:image/png;base64,aGVsbG8=';
+  const f = await fixture(t), imageBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+  const image = `data:image/png;base64,${imageBytes.toString('base64')}`;
   await appendFile(f.file,
     line({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '<recommended_plugins>internal plugin catalog</recommended_plugins><environment_context>private runtime context</environment_context>' }] } }) +
     line({ type: 'response_item', payload: { type: 'message', role: 'user', content: [
@@ -162,7 +163,24 @@ test('inherited context removes runtime envelopes while retaining user text and 
   ]) }], [f.source]);
   const compiled = await contextPrompt({ ...legacy, entries: [{ ...legacy.entries[0]!, text: legacy.entries[0]!.text.replace('旧快照中的真实请求', '<environment_context>legacy environment</environment_context>旧快照中的真实请求') }] }, '继续', path.join(f.root, 'context'));
   assert.doesNotMatch(compiled.prompt, /recommended_plugins|environment_context|legacy catalog|legacy environment/);
-  assert.match(compiled.prompt, /旧快照中的真实请求/); assert.match(compiled.prompt, /data:image\/png/);
+  assert.match(compiled.prompt, /旧快照中的真实请求/); assert.doesNotMatch(compiled.prompt, /data:image\/png/);
+  assert.match(compiled.prompt, /image_reference/); assert.equal(compiled.images.length, 1);
+  assert.equal(compiled.images[0]!.mimeType, 'image/png'); assert.deepEqual(await readFile(compiled.images[0]!.path), imageBytes);
+
+  const variants = freezeContext([{ role: 'user', source: f.source, text: JSON.stringify([
+    { type: 'input_image', image_url: { url: image } },
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: imageBytes.toString('base64') } }
+  ]) }], [f.source]);
+  const deduplicated = await contextPrompt(variants, '继续', path.join(f.root, 'context'));
+  assert.equal(deduplicated.images.length, 1);
+  assert.equal(deduplicated.prompt.match(/image_reference/g)?.length, 2);
+  assert.doesNotMatch(deduplicated.prompt, /data:image\/png|iVBORw0KGgo/);
+
+  const created = await f.service.create(f.source, { requestId: randomUUID(), targetAgent: 'claude' });
+  await f.service.send(created.sessionId, { requestId: randomUUID(), message: '继续检查图片' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.launched.at(-1)?.promptImages?.length, 1);
+  assert.doesNotMatch(f.launched.at(-1)?.prompt || '', /data:image\/png/);
 });
 
 test('new routes explicitly separate execution and read permissions', () => {

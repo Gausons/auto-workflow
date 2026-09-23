@@ -5,7 +5,7 @@ import type { AgentProject, HistoryMessage, InteractionRequest } from './taskTyp
 
 interface ComposerSession {
   id: string; agent: string; agentLabel?: string; deviceId?: string; sessionId?: string | null;
-  archived?: boolean; managed?: boolean; model?: string; cwd?: string;
+  archived?: boolean; managed?: boolean; model?: string; cwd?: string; branch?: string;
 }
 interface ComposerJob {
   id: string; status: string; prompt: string; message?: string; output?: string; turnId?: string | null;
@@ -33,6 +33,12 @@ const requestId = () => {
 };
 const busy = new Set(['queued', 'launching', 'running', 'waiting', 'unknown']);
 const names: Record<string, string> = { blocked: '会话被占用 · 未发送', queued: '等待执行', launching: '正在连接 Agent', running: '正在回复', waiting: '等待你处理', completed: '本轮完成', failed: '执行失败', interrupted: '已停止', unknown: '结果待核对' };
+
+export function historyRunConfig(projects: AgentProject[], session: Pick<ComposerSession, 'agent' | 'cwd'>): AgentRunConfig {
+  const exact = projects.findIndex(item => item.cwd === session.cwd && (item.agent || 'codex') === session.agent);
+  const sameAgent = projects.findIndex(item => (item.agent || 'codex') === session.agent);
+  return { projects, projectIndex: exact >= 0 ? exact : Math.max(0, sameAgent), cwd: session.cwd || '', model: '', reasoningEffort: '' };
+}
 
 export function createHistoryComposer({ api, canEdit, refresh, syncHistory, openSession }: ComposerOptions) {
   let canSendNative = false;
@@ -129,7 +135,9 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
     const currentSession = session, current = generation, id = currentSession.id;
     const container = select<HTMLElement>('.conversation-switch');
     if (!container) return;
+    let openBranchAfterLoad = false;
     const project = () => newSessionConfig ? selectedAgentProject(newSessionConfig) : undefined;
+    const workspaceKey = () => JSON.stringify([project()?.id, project()?.deviceId, newSessionConfig?.cwd || '']);
     const branchMenu = () => project()?.deviceId !== 'local' ? '' : `<details class="tc-config-menu tc-branch-menu" id="history-branch-menu" name="create-config"><summary data-new-session="branches" aria-label="Git 分支"><span aria-hidden="true">⑂</span><span>${escape(branchState?.current || 'Git 分支')}</span><span aria-hidden="true">⌄</span></summary><div class="tc-config-panel">${branchLoading ? '<p role="status">正在读取分支…</p>' : branchSwitching ? `<p role="status">正在切换到 ${escape(branchSwitching)}…</p>` : branchError ? `<p role="alert">${escape(branchError)}</p>` : branchState?.repository ? `<input data-new-session="branch-search" aria-label="搜索分支" placeholder="搜索分支"><p class="tc-create-hint">${branchState.current ? `当前：${escape(branchState.current)}` : '当前为分离 HEAD'} · 未提交：${branchState.changes} 项</p><div class="tc-branch-options">${branchState.branches.map(name => `<button type="button" data-new-session="switch-branch" data-id="${escape(name)}" aria-pressed="${name === branchState?.current}">${escape(name)}${name === branchState?.current ? ' ✓' : ''}</button>`).join('')}</div><label class="tc-create-setting">新分支<input data-new-session="new-branch-name" aria-label="新分支名称" placeholder="输入分支名称" maxlength="200"></label><button type="button" class="button secondary" data-new-session="new-branch">创建并切换</button>` : '<p class="tc-create-hint">展开后读取当前 Git 分支。</p>'}</div></details>`;
     const renderSwitch = () => {
       if (current !== generation || !newSessionConfig) return;
@@ -144,20 +152,35 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
       if (controls) controls.innerHTML = `${renderRunModel(newSessionConfig, disabled)}<button type="button" class="button secondary conversation-new-button" data-new-session="create" ${disabled ? 'disabled' : ''}>带上下文新开会话 →</button>`;
       if (status) status.textContent = newSessionStatus;
     };
+    const loadBranches = async (open = false) => {
+      if (!newSessionConfig || project()?.deviceId !== 'local') return;
+      if (branchLoading) { openBranchAfterLoad ||= open; return; }
+      const key = workspaceKey();
+      branchLoading = true; branchError = ''; openBranchAfterLoad ||= open; renderSwitch();
+      try {
+        const result = await api('/api/task-center/git', { method: 'POST', body: JSON.stringify({ action: 'list', projectId: project()?.id, deviceId: project()?.deviceId, cwd: newSessionConfig.cwd }) }) as BranchState;
+        if (workspaceKey() === key) branchState = result;
+      } catch (error: unknown) { if (workspaceKey() === key) branchError = errorMessage(error); }
+      finally {
+        branchLoading = false; renderSwitch();
+        if (workspaceKey() === key && openBranchAfterLoad) { const menu = container.querySelector<HTMLDetailsElement>('#history-branch-menu'); if (menu) menu.open = true; }
+        openBranchAfterLoad = false;
+      }
+    };
     void api('/api/task-center/codex').then(value => {
       const result = value as TargetsResponse;
       if (current !== generation) return;
       const projects = result.projects.filter(item => item.deviceId === (currentSession.deviceId || 'local'));
-      const matching = projects.findIndex(item => item.cwd === currentSession.cwd && (item.agent || 'codex') === currentSession.agent);
-      newSessionConfig = { projects, projectIndex: Math.max(0, matching), cwd: '', model: '', reasoningEffort: '' };
+      newSessionConfig = historyRunConfig(projects, currentSession);
       if (!projects.length) newSessionStatus = result.localError || '来源设备上没有可用 Agent';
       renderSwitch();
+      if (projects.length && project()?.deviceId === 'local') void loadBranches();
     }).catch((error: unknown) => { if (current === generation) { newSessionStatus = errorMessage(error); newSessionConfig = { projects: [], projectIndex: 0, cwd: '', model: '', reasoningEffort: '' }; renderSwitch(); } });
     container.oninput = event => {
       if (!newSessionConfig) return;
       const target = event.target as HTMLInputElement;
       if (target.id === 'tc-create-cwd') {
-        newSessionConfig.cwd = target.value;
+        newSessionConfig.cwd = target.value; branchState = null; branchError = '';
         const name = container.querySelector<HTMLElement>('#tc-create-directory-name');
         if (name) {
           name.textContent = runDirectoryName(newSessionConfig.cwd || project()?.cwd || '');
@@ -191,17 +214,17 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
       if (!button || !newSessionConfig) return;
       event.stopPropagation();
       const action = button.dataset.newSession || button.dataset.tc;
-      if (action === 'create-directory') { newSessionConfig.cwd = project()?.commonDirectories?.[Number(button.dataset.id)] || ''; renderSwitch(); return; }
-      if (action === 'create-clear-directory') { newSessionConfig.cwd = ''; renderSwitch(); return; }
+      if (action === 'create-directory') { newSessionConfig.cwd = project()?.commonDirectories?.[Number(button.dataset.id)] || ''; branchState = null; branchError = ''; renderSwitch(); return; }
+      if (action === 'create-clear-directory') { newSessionConfig.cwd = ''; branchState = null; branchError = ''; renderSwitch(); return; }
       if (action === 'create-pick-directory') {
         const selected = project(); if (!selected) return; button.disabled = true;
         try {
           const response = await api('/api/task-center/directory-picker', { method: 'POST', body: JSON.stringify({ deviceId: selected.deviceId, projectId: selected.id }) }) as DirectoryPickerResult;
-          if (response.status === 'completed') newSessionConfig.cwd = response.cwd || '';
+          if (response.status === 'completed') { newSessionConfig.cwd = response.cwd || ''; branchState = null; branchError = ''; }
           else for (let attempt = 0; attempt < 300; attempt++) {
             await new Promise(resolve => setTimeout(resolve, 1000));
             const status = await api(`/api/task-center/directory-picker?requestId=${encodeURIComponent(response.requestId)}`) as DirectoryPickerResult;
-            if (status.status === 'completed') { newSessionConfig.cwd = status.cwd || ''; break; }
+            if (status.status === 'completed') { newSessionConfig.cwd = status.cwd || ''; branchState = null; branchError = ''; break; }
             if (status.status === 'cancelled') throw new Error('已取消选择目录');
             if (status.status === 'failed') throw new Error(status.message || '无法选择目录');
             if (attempt === 299) throw new Error('等待目录选择超时');
@@ -210,10 +233,8 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
         renderSwitch(); return;
       }
       if (action === 'branches') {
-        if (branchLoading || branchState) return; branchLoading = true; renderSwitch();
-        try { branchState = await api('/api/task-center/git', { method: 'POST', body: JSON.stringify({ action: 'list', projectId: project()?.id, deviceId: project()?.deviceId, cwd: newSessionConfig.cwd }) }) as BranchState; }
-        catch (error: unknown) { branchError = errorMessage(error); }
-        finally { branchLoading = false; renderSwitch(); container.querySelector<HTMLDetailsElement>('#history-branch-menu')!.open = true; }
+        if (branchState && !branchError) return;
+        await loadBranches(true);
         return;
       }
       if (action === 'switch-branch' || action === 'new-branch') {

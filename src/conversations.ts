@@ -262,7 +262,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
       if (!snapshot) throw httpError(409, '继承上下文不可用');
       const first = !session.nativeId;
       if (first && session.deviceId !== 'local' && JSON.stringify(snapshot.entries).length > 100000) throw httpError(422, '远端上下文过长，暂无法在目标设备提供完整历史文件');
-      const compiled = first ? await contextPrompt(snapshot, message, contextRoot) : { prompt: message, compacted: false };
+      const compiled = first ? await contextPrompt(snapshot, message, contextRoot) : { prompt: message, compacted: false, images: [] };
       const job = database.mutateTaskCenter(tenantId, current => {
         const duplicate = current.executions.find(candidate => candidate.requestId === requestId);
         if (duplicate) {
@@ -277,6 +277,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
         if (s.nativeId !== session.nativeId) throw httpError(409, '会话已更新，请重试');
         const j: Execution = { id: randomUUID(), requestId, conversationId: id, sourceSessionId: s.sourceSessionId, contextId: s.contextId, contextDigest: snapshot.digest,
           contextCompacted: compiled.compacted, taskId: task.id, contextVersion: task.contextVersion, userMessage: message, prompt: compiled.prompt,
+          ...(compiled.images.length ? { promptImages: compiled.images } : {}),
           agent: s.agent, agentLabel: s.agentLabel, deviceId: s.deviceId, cwd: s.cwd, projectId: s.projectId, appServerProjectId: s.appServerProjectId, protocol: s.protocol, model: s.model || null, reasoningEffort: s.reasoningEffort || null,
           ...(s.nativeId ? s.protocol === 'acp' ? { resumeSessionId: s.nativeId } : { resumeThreadId: s.nativeId } : {}),
           title: s.title, status: 'queued', createdAt: now(), updatedAt: now(), output: '', message: '已提交消息', sessionId: null, threadId: null, turnId: null };

@@ -127,6 +127,14 @@ export interface ExecutionControl {
   answers?: Record<string, FormDataEntryValue | null>;
 }
 
+export interface PromptImageReference {
+  id: string;
+  path: string;
+  mimeType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+  sha256: string;
+  size: number;
+}
+
 export interface Execution {
   id: string;
   requestId?: string;
@@ -146,6 +154,8 @@ export interface Execution {
   reasoningEffort?: string | null;
   title: string;
   prompt: string;
+  promptImages?: PromptImageReference[];
+  contextImageDelivery?: 'native' | 'file-reference';
   userMessage?: string;
   status: ExecutionStatus;
   createdAt: string;

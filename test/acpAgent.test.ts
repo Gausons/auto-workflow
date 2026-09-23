@@ -48,7 +48,7 @@ test('performs a real ACP v1 initialize, session/new, session/prompt and update 
       { id: 'effort', name: 'Effort', category: 'thought_level', type: 'select', currentValue: 'low', options: [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }] }
     ];
     acp.agent({ name: 'fixture' })
-      .onRequest(acp.methods.agent.initialize, () => ({ protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: {}, authMethods: [], agentInfo: { name: 'fixture', version: '1' } }))
+      .onRequest(acp.methods.agent.initialize, () => ({ protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { promptCapabilities: { image: true } }, authMethods: [], agentInfo: { name: 'fixture', version: '1' } }))
       .onRequest(acp.methods.agent.session.new, () => ({ sessionId: 'session-fixture', configOptions }))
       .onRequest(acp.methods.agent.session.setConfigOption, () => ({ configOptions }))
       .onRequest(acp.methods.agent.session.prompt, async ctx => {
@@ -58,7 +58,8 @@ test('performs a real ACP v1 initialize, session/new, session/prompt and update 
           options: [{ optionId: 'yes', name: '允许一次', kind: 'allow_once' }, { optionId: 'no', name: '拒绝', kind: 'reject_once' }]
         });
         const selected = permission.outcome.outcome === 'selected' ? permission.outcome.optionId : 'cancelled';
-        await ctx.client.notify(acp.methods.client.session.update, { sessionId: ctx.params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'ACP 完成:' + selected } } });
+        const kinds = ctx.params.prompt.map(block => block.type).join(',');
+        await ctx.client.notify(acp.methods.client.session.update, { sessionId: ctx.params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'ACP 完成:' + selected + ':' + kinds } } });
         return { stopReason: 'end_turn' };
       })
       .onNotification(acp.methods.agent.session.cancel, () => {})
@@ -72,8 +73,11 @@ test('performs a real ACP v1 initialize, session/new, session/prompt and update 
   assert.equal(initialized.protocolVersion, 1);
   const session = await connection.newSession(root); assert.equal(session.sessionId, 'session-fixture');
   await connection.configure(session, 'm2', 'high');
-  assert.deepEqual(await connection.prompt('执行'), { stopReason: 'end_turn' });
-  assert.equal(updates[0].update.content.text, 'ACP 完成:yes');
+  const imageBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+  const image = path.join(root, 'history.png'); await writeFile(image, imageBytes);
+  const sha256 = (await import('node:crypto')).createHash('sha256').update(imageBytes).digest('hex');
+  assert.deepEqual(await connection.prompt('执行', [{ id: 'image-1', path: image, mimeType: 'image/png', sha256, size: imageBytes.length }]), { stopReason: 'end_turn' });
+  assert.equal(updates[0].update.content.text, 'ACP 完成:yes:text,text,image');
 
 });
 
@@ -106,11 +110,12 @@ test('ACP preferred runner only falls back when ACP is unavailable', async () =>
 test('Codex ACP task sessions are named and opened in the desktop client', async () => {
   const nativeId = '12345678-1234-1234-1234-123456789abc';
   class FakeConnection extends EventEmitter {
-    promptStarted = false; closed = false; configured?: [string | undefined, string | undefined];
+    promptStarted = false; closed = false; configured?: [string | undefined, string | undefined]; promptImages = 0;
     async initialize() { return { protocolVersion: 1 }; }
     async newSession() { return { sessionId: nativeId }; }
     async configure(_session: unknown, model?: string, effort?: string) { this.configured = [model, effort]; return []; }
-    async prompt() { this.promptStarted = true; return { stopReason: 'end_turn' }; }
+    supportsImages() { return false; }
+    async prompt(_text: string, images: unknown[] = []) { this.promptStarted = true; this.promptImages = images.length; return { stopReason: 'end_turn' }; }
     close() { this.closed = true; }
   }
   const named: Array<[string, string]> = [], opened: Array<[string]> = [], updates: Execution[] = [], fake = new FakeConnection();
@@ -118,10 +123,12 @@ test('Codex ACP task sessions are named and opened in the desktop client', async
     agent: 'codex', environment: {}, connectionFactory: () => fake, onUpdate: job => updates.push(job),
     threadNamer: async (threadId: string, name: string) => { named.push([threadId, name]); }, desktopOpener: async (threadId: string) => { opened.push([threadId]); }
   });
-  await runner.start({ id: 'job', agent: 'codex', agentLabel: 'Codex', title: '桌面任务', cwd: process.cwd(), prompt: '执行', model: 'm2', reasoningEffort: 'high', status: 'queued' });
+  await runner.start({ id: 'job', agent: 'codex', agentLabel: 'Codex', title: '桌面任务', cwd: process.cwd(), prompt: '执行', promptImages: [{ id: 'image-1', path: '/tmp/image.png', mimeType: 'image/png', sha256: 'a'.repeat(64), size: 5 }], model: 'm2', reasoningEffort: 'high', status: 'queued' });
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(named, [[nativeId, '桌面任务']]); assert.deepEqual(opened, [[nativeId]]);
   assert.deepEqual(fake.configured, ['m2', 'high']);
+  assert.equal(fake.promptImages, 1);
+  assert.equal(updates.some(job => job.contextImageDelivery === 'file-reference'), true);
   assert.equal(updates.some(job => job.desktopOpened === true), true);
 });
 

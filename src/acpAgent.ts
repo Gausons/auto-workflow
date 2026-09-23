@@ -1,11 +1,12 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { Readable, Writable } from 'node:stream';
-import { realpath } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import * as acp from '@agentclientprotocol/sdk';
 import { httpError } from './rbac.js';
-import type { AgentProject, Execution, ExecutionStatus } from '../public/taskTypes.js';
+import type { AgentProject, Execution, ExecutionStatus, PromptImageReference } from '../public/taskTypes.js';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { Environment } from './issueSources/types.js';
 
@@ -16,6 +17,7 @@ interface RunnerJob {
   title?: string; cwd?: string; prompt?: string; resumeSessionId?: string; sessionId?: string | null;
   model?: string | null; reasoningEffort?: string | null; conversationId?: string; output?: string;
   contextEvents?: unknown[]; request?: unknown; desktopOpened?: boolean; desktopMessage?: string; updatedAt?: string;
+  promptImages?: PromptImageReference[];
   [key: string]: unknown;
 }
 type RunnerProject = Partial<AgentProject> & { id: string };
@@ -39,7 +41,8 @@ interface ConnectionLike extends EventEmitter {
   configure(session: acp.NewSessionResponse, modelId?: string | null, reasoningEffort?: string | null): Promise<acp.SessionConfigOption[]>;
   catalog(session: acp.NewSessionResponse): Promise<Catalog>;
   closeSession(): Promise<void>;
-  prompt(text: string): Promise<acp.PromptResponse>;
+  prompt(text: string, images?: PromptImageReference[]): Promise<acp.PromptResponse>;
+  supportsImages?(): boolean;
   respond(decision: string): void;
   cancel(): Promise<void>;
   close(): void;
@@ -222,11 +225,20 @@ export class AcpAgentConnection extends EventEmitter {
     if (this.sessionId) await this.context!.request(acp.methods.agent.session.close, { sessionId: this.sessionId });
   }
 
-  prompt(text: string) {
+  supportsImages() { return this.capabilities.promptCapabilities?.image === true; }
+
+  async prompt(text: string, images: PromptImageReference[] = []) {
     if (!this.sessionId) throw new Error('ACP 会话尚未创建');
     this.promptStarted = true;
+    const prompt: acp.ContentBlock[] = [{ type: 'text', text }];
+    if (this.supportsImages()) for (const image of images) {
+      const bytes = await readFile(image.path);
+      if (bytes.length !== image.size || createHash('sha256').update(bytes).digest('hex') !== image.sha256) throw new Error(`历史图片 ${image.id} 完整性校验失败`);
+      prompt.push({ type: 'text', text: `历史图片 ${image.id}（${image.mimeType}，SHA-256 ${image.sha256}）` });
+      prompt.push({ type: 'image', data: bytes.toString('base64'), mimeType: image.mimeType });
+    }
     return this.context!.request(acp.methods.agent.session.prompt, {
-      sessionId: this.sessionId, prompt: [{ type: 'text', text }]
+      sessionId: this.sessionId, prompt
     });
   }
 
@@ -360,9 +372,9 @@ export class AcpTaskRunner {
         catch { this.publish(job, { desktopOpened: false, desktopMessage: 'Codex 会话已创建，但无法自动在客户端打开。' }); }
       }
       acceptingUpdates = true; promptDispatched = true;
-      void connection.prompt(job.prompt!).then((result) => {
+      void connection.prompt(job.prompt!, job.promptImages).then((result) => {
         const status = result.stopReason === 'end_turn' ? 'completed' : result.stopReason === 'cancelled' ? 'interrupted' : 'failed';
-        this.publish(job, { status, request: null, message: status === 'completed' ? 'ACP 本轮执行完成' : `ACP 执行结束：${result.stopReason}` });
+        this.publish(job, { status, request: null, ...(job.promptImages?.length ? { contextImageDelivery: connection.supportsImages?.() ? 'native' : 'file-reference' } : {}), message: status === 'completed' ? 'ACP 本轮执行完成' : `ACP 执行结束：${result.stopReason}` });
         this.connections.delete(job.id);
         if (job.conversationId) this.retained.set(session.sessionId, connection); else connection.close();
       }).catch((error: unknown) => {
