@@ -10,8 +10,8 @@ test('explicit executable wins without silently falling back to another installa
   assert.equal(resolveCodexExecutable({ environment: { CODEX_EXECUTABLE: '/custom/missing-codex' }, usable: () => false }), '/custom/missing-codex');
   assert.equal(resolveCodexExecutable({ executable: '/explicit/codex', environment: { CODEX_EXECUTABLE: '/other/codex' } }), '/explicit/codex');
 });
-test('PATH installation wins, user-installed app is supported, and non-mac hosts avoid mac paths', () => {
-  assert.equal(resolveCodexExecutable({ environment: { PATH: '/tools:/usr/bin' }, platform: 'darwin', usable: () => true }), '/tools/codex');
+test('desktop installation wins over PATH, user-installed app is supported, and non-mac hosts avoid mac paths', () => {
+  assert.equal(resolveCodexExecutable({ environment: { PATH: '/tools:/usr/bin' }, platform: 'darwin', usable: () => true }), '/Applications/Codex.app/Contents/Resources/codex');
   assert.equal(resolveCodexExecutable({ environment: { PATH: '/usr/bin', HOME: '/Users/test' }, platform: 'darwin', usable: f => f === '/Users/test/Applications/Codex.app/Contents/Resources/codex' }), '/Users/test/Applications/Codex.app/Contents/Resources/codex');
   assert.equal(resolveCodexExecutable({ environment: {}, platform: 'linux', usable: () => true }), 'codex');
 });

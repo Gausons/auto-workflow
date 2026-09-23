@@ -144,6 +144,7 @@ export interface Execution {
   contextId?: string;
   contextDigest?: string;
   contextCompacted?: boolean;
+  contextMarkdownPath?: string;
   taskId: string;
   contextVersion: number;
   deviceId: string;

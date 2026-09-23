@@ -8,6 +8,7 @@ import { createAgentHistory } from './agentHistory/index.js';
 import { createTaskCenter } from './taskCenter.js';
 import { createCodexExecution } from './codexExecution.js';
 import { createConversations } from './conversations.js';
+import { createContextModelSummarizer } from './contextModelSummary.js';
 import { applyAssignmentBusinessRules, buildAssignmentJsonSchema, buildAssignmentSystemPrompt, buildAssignmentUserPayload, isAssignmentCandidate, normalizeAssignmentPeople, normalizeAssignmentRecommendation } from './assignmentEngine.js';
 import { createIssueSource, issueSourceConfig, issueSourceId, sourceStorageKey, syncCheckpoint } from './issueSources/index.ts';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -612,7 +613,11 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
   const sessionDelivery = createSessionDelivery({ history: agentHistory, environment });
   const taskCenter = createTaskCenter({ database, tenantId: tenant.id, history: agentHistory });
   const codexExecution = createCodexExecution({ database, attachmentRoot: path.join(rootDir, '.workflow-data', 'attachments', createHash('sha256').update(tenant.id).digest('hex')), tenantId: tenant.id, workspace: () => state.config.codexWorkspaceDir, history: agentHistory, environment });
+  const summarize = parseBooleanConfig(undefined, environment.ENABLE_CONTEXT_SUMMARY, Boolean(environment.OPENAI_API_KEY))
+    ? createContextModelSummarizer({ apiKey: environment.OPENAI_API_KEY, baseUrl: state.config.openaiBaseUrl, model: environment.CONTEXT_SUMMARY_MODEL || state.config.aiAssignmentModel, timeoutMs: state.config.openaiTimeoutMs })
+    : undefined;
   const conversations = createConversations({ database, tenantId: tenant.id, history: agentHistory, delivery: sessionDelivery, execution: codexExecution, environment,
+    summarize,
     contextRoot: path.join(rootDir, '.workflow-data', 'context', createHash('sha256').update(tenant.id).digest('hex')) });
   const conversationTimer = setInterval(() => { void conversations.preparePending().catch(() => {}); }, 1500);
   conversationTimer.unref();

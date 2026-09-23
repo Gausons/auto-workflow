@@ -35,7 +35,10 @@ interface ProtocolClient {
   close(): void | boolean | Promise<void | boolean>;
   on(event: string, listener: (message: ProtocolMessage) => void): unknown;
 }
-interface CodexModelResponse { data?: Array<{ id: string; displayName?: string; description?: string; hidden?: boolean; defaultReasoningEffort?: string; supportedReasoningEfforts?: Array<{ reasoningEffort: string; description?: string }> }> }
+interface CodexModelResponse {
+  data?: Array<{ id: string; displayName?: string; description?: string; hidden?: boolean; isDefault?: boolean; defaultReasoningEffort?: string; supportedReasoningEfforts?: Array<{ reasoningEffort: string; description?: string }> }>;
+  nextCursor?: string;
+}
 interface CodexProjectResponse { data?: Array<{ id: string; name?: string; roots?: Array<{ path: string }> }>; nextCursor?: string }
 interface CodexTurnItem { type?: string; text?: string; clientUserMessageId?: string; clientId?: string }
 interface CodexTurn { id: string; status: string; items?: CodexTurnItem[] }
@@ -122,6 +125,7 @@ export class CodexRunner {
   client: ProtocolClient | null = null;
   desktopOpener: (threadId: string) => Promise<unknown>;
   modelCatalog: AgentModel[] | undefined = undefined;
+  defaultModel = '';
   desktopBridgeFactory: ((reader: ProtocolClient, threadId: string) => Promise<ProtocolClient | null>) | null;
   jobClients = new Map<string, ProtocolClient>();
   releases = new Map<string, Promise<void>>();
@@ -167,13 +171,20 @@ export class CodexRunner {
   async models() {
     if (this.modelCatalog !== undefined) return this.modelCatalog;
     try {
-      const result = await (await this.connect()).call('model/list', {}) as CodexModelResponse;
-      this.modelCatalog = (result.data || []).filter((model) => !model.hidden).map((model) => ({
+      const client = await this.connect(), catalog: NonNullable<CodexModelResponse['data']> = [];
+      let cursor: string | undefined;
+      do {
+        const result = await client.call('model/list', { ...(cursor ? { cursor } : {}) }) as CodexModelResponse;
+        catalog.push(...(result.data || []));
+        cursor = result.nextCursor;
+      } while (cursor);
+      this.defaultModel = catalog.find((model) => model.isDefault && !model.hidden)?.id || '';
+      this.modelCatalog = catalog.filter((model) => !model.hidden).map((model) => ({
         id: model.id, name: model.displayName || model.id, description: model.description || '',
         reasoningEfforts: (model.supportedReasoningEfforts || []).map((effort) => ({ id: effort.reasoningEffort, name: effort.reasoningEffort, description: effort.description || '' })),
         defaultReasoningEffort: model.defaultReasoningEffort || ''
       }));
-    } catch { this.modelCatalog = []; }
+    } catch { this.modelCatalog = []; this.defaultModel = ''; }
     return this.modelCatalog;
   }
   async projects(allowedRoot: string): Promise<AgentProject[]> {
@@ -186,7 +197,7 @@ export class CodexRunner {
       do {
         const result = await client.call('project/list', { ...(cursor ? { cursor } : {}) }) as CodexProjectResponse;
         for (const project of result.data || []) for (const entry of project.roots || []) {
-          try { const cwd = await realpath(entry.path); if (inside(root, cwd)) projects.push({ id: project.id, appServerProjectId: project.id, name: project.name, cwd, protocol: 'legacy', agent: 'codex', models }); } catch { /* Removed project roots aren't executable. */ }
+          try { const cwd = await realpath(entry.path); if (inside(root, cwd)) projects.push({ id: project.id, appServerProjectId: project.id, name: project.name, cwd, protocol: 'legacy', agent: 'codex', models, defaultModel: this.defaultModel }); } catch { /* Removed project roots aren't executable. */ }
         }
         cursor = result.nextCursor;
       } while (cursor);
@@ -195,7 +206,7 @@ export class CodexRunner {
       // Codex 0.144 removed project/list. A cwd-only thread remains supported,
       // so expose the tenant's already validated workspace as the target.
       if (error.code !== -32601 && !/(project\/list.*(not found|unknown|unsupported|supported methods)|(not found|unknown|unsupported).*project\/list)/i.test(error.message || '')) throw error;
-      return [{ id: `workspace:${createHash('sha256').update(root).digest('hex').slice(0, 16)}`, appServerProjectId: null, name: path.basename(root) || root, cwd: root, protocol: 'legacy', agent: 'codex', models }];
+      return [{ id: `workspace:${createHash('sha256').update(root).digest('hex').slice(0, 16)}`, appServerProjectId: null, name: path.basename(root) || root, cwd: root, protocol: 'legacy', agent: 'codex', models, defaultModel: this.defaultModel }];
     }
     return projects;
   }
@@ -380,7 +391,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
       agent: 'codex', environment: runnerEnvironment, onUpdate: update,
       threadNamer: async (threadId: string, name: string) => (await fallback.connect()).call('thread/name/set', { threadId, name })
     });
-    const entries: [string, ExecutionRunner][] = [['codex', new AcpPreferredRunner({ primary: codex, fallback }) as ExecutionRunner]];
+    const entries: [string, ExecutionRunner][] = [['codex', new AcpPreferredRunner({ primary: codex, fallback, synchronizeModels: true }) as ExecutionRunner]];
     for (const agent of configuredAcpAgents(runnerEnvironment)) {
       if (agent !== 'codex') entries.push([agent, new AcpTaskRunner({ agent, environment: runnerEnvironment, onUpdate: update }) as ExecutionRunner]);
     }

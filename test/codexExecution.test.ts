@@ -160,6 +160,35 @@ test('uses the configured workspace when newer Codex removes project/list', asyn
   runner.close();
 });
 
+test('mirrors the complete Codex model catalog and its default model', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'codex-model-catalog-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const client = new FakeClient();
+  const originalCall = client.call.bind(client);
+  client.call = async (method, params) => {
+    if (method === 'account/read') return { account: { type: 'chatgpt' } };
+    if (method === 'model/list') {
+      client.calls.push({ method, params });
+      if (!params?.cursor) return {
+        data: [
+          { id: 'gpt-6-astra', displayName: '6 Astra', description: 'Frontier model', hidden: false, supportedReasoningEfforts: [{ reasoningEffort: 'high', description: 'Deep reasoning' }] },
+          { id: 'hidden-model', displayName: 'Hidden', hidden: true }
+        ],
+        nextCursor: 'page-2'
+      };
+      return { data: [{ id: 'gpt-5.6-sol', displayName: '5.6 Sol', hidden: false, isDefault: true, defaultReasoningEffort: 'low' }], nextCursor: null };
+    }
+    if (method === 'project/list') return { data: [{ id: 'project', name: 'Repo', roots: [{ path: root }] }], nextCursor: null };
+    return originalCall(method, params);
+  };
+  const runner = new CodexRunner({ clientFactory: () => client, desktopOpener: async () => {} });
+  const [target] = await runner.projects(root);
+  assert.equal(target.defaultModel, 'gpt-5.6-sol');
+  assert.deepEqual(target.models?.map(model => model.id), ['gpt-6-astra', 'gpt-5.6-sol']);
+  assert.equal(target.models?.[0]?.reasoningEfforts?.[0]?.id, 'high');
+  assert.deepEqual(client.calls.filter(call => call.method === 'model/list').map(call => call.params?.cursor), [undefined, 'page-2']);
+  runner.close();
+});
+
 test('durable execution reservations isolate tenants, reject duplicates, and recover restart as unknown', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'codex-execution-')); t.after(() => rm(root, { recursive: true, force: true }));
   const alternative = path.join(root, 'another-project'); await mkdir(alternative);

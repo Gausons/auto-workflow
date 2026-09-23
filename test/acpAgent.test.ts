@@ -107,6 +107,32 @@ test('ACP preferred runner only falls back when ACP is unavailable', async () =>
   assert.equal(started?.protocol, 'legacy'); assert.equal(started?.projectId, undefined);
 });
 
+test('Codex ACP uses the desktop model catalog and routes unsupported new models through App Server', async () => {
+  const primaryStarts: TestJob[] = [], fallbackStarts: TestJob[] = [];
+  const preferred = new AcpPreferredRunner({
+    synchronizeModels: true,
+    primary: {
+      projects: async () => [{ id: 'acp:codex', cwd: '/repo', protocol: 'acp', models: [{ id: 'gpt-6-astra', name: '6 Astra' }], defaultModel: 'gpt-5.6-sol' }],
+      start: async (job: TestJob) => { primaryStarts.push(job); }, close() {}
+    },
+    fallback: {
+      projects: async () => [{ id: 'workspace:repo', cwd: '/repo', protocol: 'legacy', appServerProjectId: null, models: [{ id: 'gpt-6-astra', name: 'GPT-6-Astra' }, { id: 'gpt-6-sol', name: 'GPT-6-Sol' }], defaultModel: 'gpt-6-astra' }],
+      start: async (job: TestJob) => { fallbackStarts.push(job); }, close() {}
+    }
+  });
+  const [project] = await preferred.projects('/repo');
+  assert.equal(project.id, 'acp:codex');
+  assert.equal(project.defaultModel, 'gpt-6-astra');
+  assert.deepEqual(project.models?.map(model => model.id), ['gpt-6-astra', 'gpt-6-sol']);
+
+  await preferred.start({ id: 'default-model', protocol: 'acp', projectId: project.id, model: '', agent: 'codex' });
+  assert.equal(primaryStarts[0]?.model, 'gpt-6-astra', 'ACP receives the synchronized desktop default explicitly');
+  await preferred.start({ id: 'new-model', protocol: 'acp', projectId: project.id, model: 'gpt-6-sol', agent: 'codex' });
+  assert.equal(fallbackStarts[0]?.protocol, 'legacy');
+  assert.equal(fallbackStarts[0]?.projectId, undefined);
+  assert.equal(fallbackStarts[0]?.model, 'gpt-6-sol');
+});
+
 test('Codex ACP task sessions are named and opened in the desktop client', async () => {
   const nativeId = '12345678-1234-1234-1234-123456789abc';
   class FakeConnection extends EventEmitter {

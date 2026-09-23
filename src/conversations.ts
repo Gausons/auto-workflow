@@ -2,7 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { taskContent } from '../public/taskContent.js';
 import type { AgentProject, Execution, HistoryMessage, Session, TaskCenterData } from '../public/taskTypes.js';
-import { cleanContextEntries, contextPrompt, freezeContext, readContext, type ContextDelivery, type ContextEntry } from './contextCompiler.js';
+import { cleanContextEntries, contextPrompt, freezeContext, readContext, type ContextDelivery, type ContextEntry, type SessionContext } from './contextCompiler.js';
+import type { SummaryResult } from './contextModelSummary.js';
 import type { Environment } from './issueSources/types.js';
 import { deliverRecord } from './sessionDelivery/records.js';
 import { httpError } from './rbac.js';
@@ -36,6 +37,7 @@ interface ConversationServices {
     launch(job: Execution): void;
   };
   contextRoot: string;
+  summarize?: (snapshot: SessionContext, entries: ContextEntry[], root: string) => Promise<SummaryResult>;
   environment?: Environment;
 }
 interface ConversationInput {
@@ -67,7 +69,7 @@ const messageText = (value: unknown, optional = false) => {
   return value.trim();
 };
 
-export function createConversations({ database, tenantId, history, delivery, execution, contextRoot, environment = {} }: ConversationServices) {
+export function createConversations({ database, tenantId, history, delivery, execution, contextRoot, summarize, environment = {} }: ConversationServices) {
   const read = () => database.readTaskCenter(tenantId);
   const managed = (id: string, data = read()) => data.sessions.find((session): session is ManagedSession => session.id === id && session.source === 'conversation');
   const jobsFor = (data: TaskCenterData, id: string) => data.executions.filter(job => job.conversationId === id);
@@ -262,7 +264,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
       if (!snapshot) throw httpError(409, '继承上下文不可用');
       const first = !session.nativeId;
       if (first && session.deviceId !== 'local' && JSON.stringify(snapshot.entries).length > 100000) throw httpError(422, '远端上下文过长，暂无法在目标设备提供完整历史文件');
-      const compiled = first ? await contextPrompt(snapshot, message, contextRoot) : { prompt: message, compacted: false, images: [] };
+      const compiled = first ? await contextPrompt(snapshot, message, contextRoot, 120000, session.deviceId === 'local', summarize) : { prompt: message, compacted: false, images: [], markdownPath: '' };
       const job = database.mutateTaskCenter(tenantId, current => {
         const duplicate = current.executions.find(candidate => candidate.requestId === requestId);
         if (duplicate) {
@@ -277,6 +279,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
         if (s.nativeId !== session.nativeId) throw httpError(409, '会话已更新，请重试');
         const j: Execution = { id: randomUUID(), requestId, conversationId: id, sourceSessionId: s.sourceSessionId, contextId: s.contextId, contextDigest: snapshot.digest,
           contextCompacted: compiled.compacted, taskId: task.id, contextVersion: task.contextVersion, userMessage: message, prompt: compiled.prompt,
+          ...(s.deviceId === 'local' && compiled.markdownPath ? { contextMarkdownPath: compiled.markdownPath } : {}),
           ...(compiled.images.length ? { promptImages: compiled.images } : {}),
           agent: s.agent, agentLabel: s.agentLabel, deviceId: s.deviceId, cwd: s.cwd, projectId: s.projectId, appServerProjectId: s.appServerProjectId, protocol: s.protocol, model: s.model || null, reasoningEffort: s.reasoningEffort || null,
           ...(s.nativeId ? s.protocol === 'acp' ? { resumeSessionId: s.nativeId } : { resumeThreadId: s.nativeId } : {}),

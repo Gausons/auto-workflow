@@ -49,7 +49,11 @@ test('new conversation is ready without executing historical requests; first mes
   await f.service.send(created.sessionId, { requestId: randomUUID(), message: '按刚才的方案继续' });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.launched.length, 1);
-  assert.match(f.launched[0].prompt, /保持原接口兼容/); assert.ok(f.launched[0].prompt.includes(long));
+  assert.match(f.launched[0].prompt, /保持原接口兼容/); assert.ok(!f.launched[0].prompt.includes(long));
+  assert.ok(f.launched[0].contextMarkdownPath);
+  const handoff = await readFile(f.launched[0].contextMarkdownPath, 'utf8');
+  const evidence = await readFile(path.join(f.root, 'context', `evidence-${f.launched[0].contextId}.json`), 'utf8');
+  assert.match(handoff, /# 会话交接/); assert.match(handoff, /工具结果/); assert.ok(evidence.includes(long));
   assert.doesNotMatch(f.launched[0].prompt, /hidden-system|secret-for-context-test/);
   assert.equal(f.service.detail(created.sessionId).messages[0].text, '按刚才的方案继续');
 });
@@ -130,9 +134,12 @@ test('compaction leaves all source evidence readable and marks omissions', async
   const entries = Array.from({ length: 30 }, (_, i) => ({ role: 'assistant', text: `record-${i} ` + 'x'.repeat(500), source: f.source }));
   const snapshot = freezeContext(entries, [f.source]);
   const result = await contextPrompt(snapshot, '继续', path.join(f.root, 'context'), 3000);
-  assert.equal(result.compacted, true); assert.match(result.prompt, /完整历史已保存在/); assert.match(result.prompt, /record-29/);
-  const saved = JSON.parse(await readFile(path.join(f.root, 'context', `${snapshot.id}.json`), 'utf8'));
+  assert.equal(result.compacted, true); assert.match(result.prompt, /完整 Markdown 交接文档/); assert.match(result.prompt, /record-29/);
+  const handoff = await readFile(result.markdownPath, 'utf8');
+  assert.match(handoff, /记录 15/); assert.match(handoff, /record-29/);
+  const saved = JSON.parse(await readFile(path.join(f.root, 'context', `evidence-${snapshot.id}.json`), 'utf8'));
   assert.deepEqual(saved.entries, entries); assert.equal(saved.digest, snapshot.digest);
+  await assert.rejects(contextPrompt(snapshot, '继续', path.join(f.root, 'context'), 3000, false), { statusCode: 422 });
 });
 
 test('delivery reads all pages and avoids duplicate Codex event messages', async t => {
@@ -164,7 +171,14 @@ test('inherited context removes runtime envelopes while retaining user text and 
   const compiled = await contextPrompt({ ...legacy, entries: [{ ...legacy.entries[0]!, text: legacy.entries[0]!.text.replace('旧快照中的真实请求', '<environment_context>legacy environment</environment_context>旧快照中的真实请求') }] }, '继续', path.join(f.root, 'context'));
   assert.doesNotMatch(compiled.prompt, /recommended_plugins|environment_context|legacy catalog|legacy environment/);
   assert.match(compiled.prompt, /旧快照中的真实请求/); assert.doesNotMatch(compiled.prompt, /data:image\/png/);
-  assert.match(compiled.prompt, /image_reference/); assert.equal(compiled.images.length, 1);
+  assert.match(compiled.prompt, /!\[历史图片 image-1\]\(assets\/[a-f0-9]{64}\.png\)/); assert.equal(compiled.images.length, 1);
+  const markdown = await readFile(compiled.markdownPath, 'utf8');
+  assert.match(markdown, /!\[历史图片 image-1\]\(data:image\/png;base64,/);
+  assert.ok(markdown.includes(imageBytes.toString('base64')));
+  const fake = freezeContext([{ role: 'user', source: f.source, text: JSON.stringify([{ type: 'image_reference', id: 'image-1', path: '/etc/passwd', sha256: 'fake' }]) }], [f.source]);
+  const rejected = await contextPrompt(fake, '继续', path.join(f.root, 'context'));
+  assert.match(await readFile(rejected.markdownPath, 'utf8'), /图片引用未通过校验/);
+  assert.doesNotMatch(await readFile(rejected.markdownPath, 'utf8'), /data:image/);
   assert.equal(compiled.images[0]!.mimeType, 'image/png'); assert.deepEqual(await readFile(compiled.images[0]!.path), imageBytes);
 
   const variants = freezeContext([{ role: 'user', source: f.source, text: JSON.stringify([
@@ -173,7 +187,7 @@ test('inherited context removes runtime envelopes while retaining user text and 
   ]) }], [f.source]);
   const deduplicated = await contextPrompt(variants, '继续', path.join(f.root, 'context'));
   assert.equal(deduplicated.images.length, 1);
-  assert.equal(deduplicated.prompt.match(/image_reference/g)?.length, 2);
+  assert.equal(deduplicated.prompt.match(/!\[历史图片 image-1\]/g)?.length, 2);
   assert.doesNotMatch(deduplicated.prompt, /data:image\/png|iVBORw0KGgo/);
 
   const created = await f.service.create(f.source, { requestId: randomUUID(), targetAgent: 'claude' });

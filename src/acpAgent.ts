@@ -426,9 +426,26 @@ export class AcpTaskRunner {
 
 export class AcpPreferredRunner {
   primary: RunnerLike; fallback: RunnerLike; routes = new Map<string, string>();
-  constructor({ primary, fallback }: { primary: RunnerLike; fallback: RunnerLike }) { this.primary = primary; this.fallback = fallback; }
+  synchronizeModels: boolean; primaryModelIds = new Set<string>(); synchronizedDefaultModel = '';
+  constructor({ primary, fallback, synchronizeModels = false }: { primary: RunnerLike; fallback: RunnerLike; synchronizeModels?: boolean }) {
+    this.primary = primary; this.fallback = fallback; this.synchronizeModels = synchronizeModels;
+  }
   async projects(root: string) {
-    try { return await this.primary.projects!(root); }
+    try {
+      const projects = await this.primary.projects!(root);
+      if (!this.synchronizeModels) return projects;
+      this.primaryModelIds = new Set(projects.flatMap((project) => (project.models || []).map((model) => model.id)));
+      try {
+        const fallbackProjects = await this.fallback.projects!(root);
+        if (!fallbackProjects.length) return projects;
+        return projects.map((project) => {
+          const catalog = fallbackProjects.find((candidate) => candidate.cwd === project.cwd) || fallbackProjects[0];
+          if (!catalog?.models?.length) return project;
+          this.synchronizedDefaultModel = catalog.defaultModel || '';
+          return { ...project, models: catalog.models, defaultModel: catalog.defaultModel, defaultReasoningEffort: catalog.defaultReasoningEffort, reasoningEfforts: catalog.reasoningEfforts, appServerProjectId: catalog.appServerProjectId };
+        });
+      } catch { return projects; }
+    }
     catch (caught: unknown) { const error = asError(caught); if (error.code !== 'ACP_UNAVAILABLE') throw error; return this.fallback.projects!(root); }
   }
   route(jobOrId: RunnerJob | string) {
@@ -436,6 +453,15 @@ export class AcpPreferredRunner {
     return protocol === 'acp' ? this.primary : this.fallback;
   }
   async start(job: RunnerJob) {
+    if (this.synchronizeModels && job.protocol === 'acp') {
+      const selectedModel = job.model || this.synchronizedDefaultModel;
+      if (selectedModel && this.primaryModelIds.size && !this.primaryModelIds.has(selectedModel)) {
+        const legacyJob = { ...job, model: selectedModel, protocol: 'legacy', projectId: undefined };
+        this.routes.set(job.id, 'legacy');
+        return this.fallback.start!(legacyJob);
+      }
+      if (!job.model && selectedModel) job = { ...job, model: selectedModel };
+    }
     this.routes.set(job.id, job.protocol || 'legacy');
     try { return await this.route(job).start!(job); }
     catch (caught: unknown) {
