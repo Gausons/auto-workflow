@@ -5,7 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { SourceRegistry, freezeSnapshot, packSnapshot, verifyBundle, verifySnapshot } from '@auto-workflow/context-engine';
 import { markdownSource } from '@auto-workflow/context-adapters/markdown';
+import { issueRecordSource } from '@auto-workflow/context-adapters/issue';
 import { readBundleDirectory, writeBundleDirectory } from '@auto-workflow/context-engine/directory-bundle';
+import { detachSnapshot, restoreDetachedSnapshot, verifyDetachedManifest } from '@auto-workflow/context-engine/detached-bundle';
 
 test('a new source enters the same capture, snapshot and bundle flow', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'context-engine-'));
@@ -51,4 +53,36 @@ test('portable directory bundle survives a fresh read and detects damaged object
   await assert.rejects(writeBundleDirectory(bundle, root, 'handoff'), { code: 'INVALID_BUNDLE' });
   await writeFile(path.join(directory, 'objects', bundle.objects[0]!.digest), '损坏');
   await assert.rejects(readBundleDirectory(directory), { code: 'INVALID_BUNDLE' });
+});
+
+test('detached transfer preserves the exact v1 snapshot and deduplicates original image bytes', () => {
+  const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+  const uri = `data:image/png;base64,${bytes.toString('base64')}`;
+  const snapshot = freezeSnapshot([
+    { role: 'user', source: 'session-a', text: JSON.stringify([{ type: 'input_text', text: '看图片' }, { type: 'input_image', image_url: uri }]) },
+    { role: 'assistant', source: 'session-a', text: `已看到 ${uri}` }
+  ], ['session-a']);
+  const detached = detachSnapshot(snapshot);
+  assert.equal(detached.objects.length, 1);
+  assert.doesNotMatch(JSON.stringify(detached.manifest), /iVBORw0KGgo/);
+  assert.deepEqual(restoreDetachedSnapshot(detached.manifest, new Map(detached.objects.map(item => [item.digest, item.data]))), snapshot);
+  assert.throws(() => verifyDetachedManifest({ ...detached.manifest, events: [] }), { code: 'INVALID_BUNDLE' });
+  assert.throws(() => restoreDetachedSnapshot(detached.manifest, new Map()), { code: 'INVALID_BUNDLE' });
+  assert.throws(() => restoreDetachedSnapshot(detached.manifest, new Map([[detached.objects[0]!.digest, Buffer.from('tampered')]])), { code: 'INVALID_BUNDLE' });
+});
+
+test('issue source captures authorized records through the common engine without mutating provider state', async () => {
+  let reads = 0;
+  const registry = new SourceRegistry();
+  registry.register(issueRecordSource(async id => {
+    reads++;
+    return id === 'BUG-1' ? { id, source: 'jira', code: id, title: '修复登录', description: '复现步骤',
+      attachments: [{ name: '截图.png', url: 'https://example.test/screenshot.png', contentType: 'image/png' }] } : null;
+  }));
+  const captured = await registry.capture('issue', 'BUG-1');
+  assert.equal(reads, 1); assert.equal(captured.events.length, 2); assert.equal(captured.partial, true);
+  const snapshot = freezeSnapshot(captured.events, captured.sources, captured.partial);
+  assert.deepEqual(verifyBundle(packSnapshot(snapshot)).snapshot, snapshot);
+  assert.match(captured.events[1]!.text, /reference_only/);
+  await assert.rejects(registry.capture('issue', 'BUG-2'), /不存在/);
 });

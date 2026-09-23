@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { openDatabase } from '../src/database.js';
 import { freezeSnapshot } from '@auto-workflow/context-engine';
+import { detachSnapshot } from '@auto-workflow/context-engine/detached-bundle';
 import { DatabaseSync } from 'node:sqlite';
 
 const tokenA = 'a'.repeat(43), tokenB = 'b'.repeat(43);
@@ -87,7 +88,7 @@ test('transfer receipt survives reopen, stays tenant-scoped and cannot change a 
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
 });
 
-test('migration 006 upgrades an existing v5 database without changing its session snapshots', async () => {
+test('migrations 006 and 007 upgrade an existing v5 database without changing its session snapshots', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'context-upgrade-'));
   const filename = path.join(root, 'workflow.sqlite');
   try {
@@ -97,15 +98,59 @@ test('migration 006 upgrades an existing v5 database without changing its sessio
     first.saveSessionContext('a', context);
     first.close();
     const old = new DatabaseSync(filename);
-    old.exec('DROP TABLE context_transfers; PRAGMA user_version = 5;');
+    old.exec('DROP TABLE context_transfer_manifests; DROP TABLE context_transfer_objects; DROP TABLE context_transfers; PRAGMA user_version = 5;');
     old.close();
     const upgraded = openDatabase(filename);
     try {
       assert.deepEqual(upgraded.readSessionContext('a', context.id), context);
       assert.equal(upgraded.readContextTransfer('a', 'missing'), undefined);
       const check = new DatabaseSync(filename);
-      try { assert.equal(check.prepare('PRAGMA user_version').get()?.user_version, 6); }
+      try { assert.equal(check.prepare('PRAGMA user_version').get()?.user_version, 7); }
       finally { check.close(); }
+    } finally { upgraded.close(); }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('detached objects and manifest survive restart, remain tenant scoped, and reject changed bytes', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'context-objects-'));
+  const filename = path.join(root, 'workflow.sqlite');
+  let db = openDatabase(filename);
+  try {
+    db.createTenant({ id: 'a', token: tokenA }); db.createTenant({ id: 'b', token: tokenB });
+    const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+    const snapshot = freezeSnapshot([{ role: 'user', text: `data:image/png;base64,${image.toString('base64')}`, source: 's' }], ['s']);
+    const detached = detachSnapshot(snapshot), object = detached.objects[0]!;
+    assert.ok(object);
+    assert.throws(() => db.saveContextObject('a', 'job', object.digest, object.mimeType, Buffer.from('changed')), /摘要无效/);
+    db.saveContextObject('a', 'job', object.digest, object.mimeType, object.data);
+    db.saveContextObject('a', 'job', object.digest, object.mimeType, object.data);
+    db.recordContextTransfer('a', 'job', 'A', 'B', snapshot, 'job', detached.manifest);
+    assert.equal(db.readContextManifest('a', 'job')?.manifestDigest, detached.manifest.manifestDigest);
+    assert.equal(db.readContextObject('b', 'job', object.digest), null);
+    db.close(); db = openDatabase(filename);
+    assert.deepEqual(Buffer.from(db.readContextObject('a', 'job', object.digest)!.bytes), image);
+    assert.deepEqual(db.readSessionContext('a', 'job'), snapshot);
+    assert.throws(() => db.saveContextObject('a', 'job', '0'.repeat(64), 'image/png', image), /摘要无效/);
+    assert.equal(db.readContextManifest('a', 'job')?.manifestDigest, detached.manifest.manifestDigest);
+  } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('migration 007 upgrades a v6 database with existing transfer receipts', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'context-v6-upgrade-'));
+  const filename = path.join(root, 'workflow.sqlite');
+  try {
+    const first = openDatabase(filename);
+    first.createTenant({ id: 'a', token: tokenA });
+    const snapshot = freezeSnapshot([{ role: 'user', text: '原交接', source: 's' }], ['s']);
+    first.recordContextTransfer('a', 'job', 'A', 'B', snapshot);
+    first.close();
+    const old = new DatabaseSync(filename);
+    old.exec('DROP TABLE context_transfer_manifests; DROP TABLE context_transfer_objects; PRAGMA user_version = 6;');
+    old.close();
+    const upgraded = openDatabase(filename);
+    try {
+      assert.equal(upgraded.readContextTransfer('a', 'job')?.snapshotDigest, snapshot.digest);
+      assert.equal(upgraded.readContextManifest('a', 'job'), null);
     } finally { upgraded.close(); }
   } finally { await rm(root, { recursive: true, force: true }); }
 });

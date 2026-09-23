@@ -8,6 +8,7 @@ import type { Environment } from './issueSources/types.js';
 import { deliverRecord } from './sessionDelivery/records.js';
 import { httpError } from './rbac.js';
 import { verifyBundle, verifySnapshot } from '@auto-workflow/context-engine';
+import { detachSnapshot, restoreDetachedSnapshot, verifyDetachedManifest, type DetachedManifest } from '@auto-workflow/context-engine/detached-bundle';
 
 type Database = ReturnType<typeof import('./database.js').openDatabase>;
 type ManagedSession = Session & {
@@ -94,6 +95,15 @@ export function createConversations({ database, tenantId, history, delivery, exe
     throw httpError(409, '远端原始会话来源不可核对，无法生成完整交接文件');
   };
   const jobsFor = (data: TaskCenterData, id: string) => data.executions.filter(job => job.conversationId === id);
+  function checkedTransfer(id: string, executionId: string, action: 'read' | 'upload', actor: { id?: string }, selectedDeviceId: unknown) {
+    const data = read(), job = data.executions?.find(item => item.id === executionId && item.conversationId === id);
+    if (!job || !job.contextSourceDeviceId || job.contextSourceDeviceId === job.deviceId || !managed(id, data)) throw httpError(404, '跨设备交接不存在');
+    const deviceId = action === 'upload' ? job.contextSourceDeviceId : job.deviceId;
+    const device = data.devices.find(item => item.id === deviceId);
+    if (deviceId === 'local' || !actor.id || !device || device.owner !== actor.id || selectedDeviceId !== deviceId) throw httpError(403, '当前账号无权访问该设备的交接包');
+    if (action === 'upload' && (!job.remoteContext || job.remoteContext.sourceDeviceId !== deviceId)) throw httpError(409, '交接来源不在该设备');
+    return job as Execution & { contextSourceDeviceId: string };
+  }
   const clean = (value: unknown): Record<string, unknown> => {
     const record = deliverRecord('context', value, environment).record;
     return record && typeof record === 'object' && !Array.isArray(record) ? record as Record<string, unknown> : {};
@@ -188,13 +198,8 @@ export function createConversations({ database, tenantId, history, delivery, exe
       const entries = cleanContextEntries(context.entries);
       return { messages: entries.slice(offset, offset + 100).map(entry => ({ ...entry, role: ['user', 'assistant', 'tool_call', 'tool_result'].includes(entry.role) ? entry.role : 'tool_result' })), total: entries.length, offset, digest: context.digest };
     },
-    transfer(id: string, executionId: string, action: 'read' | 'upload', actor: { id?: string }, input?: { deviceId?: unknown; context?: unknown; bundle?: unknown; format?: unknown; readyOnly?: unknown; failure?: unknown }) {
-      const data = read(), job = data.executions?.find(item => item.id === executionId && item.conversationId === id);
-      if (!job || !job.contextSourceDeviceId || job.contextSourceDeviceId === job.deviceId || !managed(id, data)) throw httpError(404, '跨设备交接不存在');
-      const deviceId = action === 'upload' ? job.contextSourceDeviceId : job.deviceId;
-      const device = data.devices.find(item => item.id === deviceId);
-      if (deviceId === 'local' || !actor.id || !device || device.owner !== actor.id || input?.deviceId !== deviceId) throw httpError(403, '当前账号无权访问该设备的交接包');
-      if (action === 'upload' && (!job.remoteContext || job.remoteContext.sourceDeviceId !== deviceId)) throw httpError(409, '交接来源不在该设备');
+    transfer(id: string, executionId: string, action: 'read' | 'upload', actor: { id?: string }, input?: { deviceId?: unknown; context?: unknown; bundle?: unknown; manifest?: unknown; format?: unknown; readyOnly?: unknown; failure?: unknown }) {
+      const job = checkedTransfer(id, executionId, action, actor, input?.deviceId);
       const contextId = job.contextSourceDeviceId === 'local' ? job.contextId! : job.id;
       if (action === 'upload') {
         if (job.status !== 'queued' && !database.readSessionContext(tenantId, contextId)) throw httpError(409, '执行已不再等待交接包');
@@ -209,15 +214,21 @@ export function createConversations({ database, tenantId, history, delivery, exe
           return { ready: false, failed: true };
         }
         let value: SessionContext;
+        let manifest: DetachedManifest | null = null;
         try {
-          value = input?.bundle ? verifyBundle(input.bundle).snapshot : verifySnapshot(input?.context);
+          if (input?.manifest) {
+            manifest = verifyDetachedManifest(input.manifest);
+            const objects = new Map(manifest.objects.map(item => [item.digest, database.readContextObject(tenantId, executionId, item.digest)?.bytes]));
+            if ([...objects.values()].some(item => !item)) throw new Error('交接对象尚未上传完整');
+            value = restoreDetachedSnapshot(manifest, objects as Map<string, Uint8Array>);
+          } else value = input?.bundle ? verifyBundle(input.bundle).snapshot : verifySnapshot(input?.context);
           if (input?.bundle && input.context && verifySnapshot(input.context).digest !== value.digest) throw new Error('交接包和旧版快照不一致');
         } catch { throw httpError(400, '交接快照校验失败'); }
         if (!value.sources.includes(job.remoteContext!.sourceSessionId)) throw httpError(400, '交接快照缺少原始来源');
         const existing = database.readSessionContext(tenantId, contextId);
         if (existing && existing.digest !== value.digest) throw httpError(409, '交接快照已冻结，不能覆盖');
         try {
-          database.recordContextTransfer(tenantId, executionId, job.contextSourceDeviceId, job.deviceId, existing || value, contextId);
+          database.recordContextTransfer(tenantId, executionId, job.contextSourceDeviceId, job.deviceId, existing || value, contextId, manifest || undefined);
         }
         catch { throw httpError(409, '交接记录已冻结，不能覆盖'); }
         database.mutateTaskCenter(tenantId, current => {
@@ -231,7 +242,32 @@ export function createConversations({ database, tenantId, history, delivery, exe
       const snapshot = database.readSessionContext(tenantId, contextId);
       if (!snapshot) return { ready: false };
       const bundle = database.recordContextTransfer(tenantId, executionId, job.contextSourceDeviceId, job.deviceId, snapshot);
+      if (input?.format === 'manifest-v3') {
+        let manifest = database.readContextManifest(tenantId, executionId);
+        if (!manifest) {
+          const detached = detachSnapshot(snapshot);
+          for (const item of detached.objects) database.saveContextObject(tenantId, executionId, item.digest, item.mimeType, item.data);
+          database.saveContextManifest(tenantId, executionId, detached.manifest);
+          manifest = detached.manifest;
+        }
+        return { ready: true, ...(input?.readyOnly === '1' ? {} : { manifest }) };
+      }
       return { ready: true, ...(input?.readyOnly === '1' ? {} : input?.format === 'bundle-v2' ? { bundle } : { context: snapshot }) };
+    },
+    transferObject(id: string, executionId: string, action: 'read' | 'upload', actor: { id?: string }, input: { deviceId?: unknown; digest: string; mimeType?: string; data?: Uint8Array }) {
+      const job = checkedTransfer(id, executionId, action, actor, input.deviceId);
+      if (!/^[a-f0-9]{64}$/.test(input.digest)) throw httpError(400, '交接对象标识无效');
+      if (action === 'upload') {
+        if (job.status !== 'queued' && !database.readContextManifest(tenantId, executionId)) throw httpError(409, '执行已不再等待交接对象');
+        try { database.saveContextObject(tenantId, executionId, input.digest, input.mimeType || '', input.data || new Uint8Array()); }
+        catch { throw httpError(400, '交接对象格式、摘要或大小无效'); }
+        return { ready: true };
+      }
+      const manifest = database.readContextManifest(tenantId, executionId);
+      if (!manifest?.objects.some(item => item.digest === input.digest)) throw httpError(404, '交接对象不存在');
+      const object = database.readContextObject(tenantId, executionId, input.digest);
+      if (!object) throw httpError(409, '交接对象尚未就绪');
+      return object;
     },
     status(id: string) {
       if (!managed(id)) throw httpError(404, '会话不存在');

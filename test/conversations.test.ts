@@ -298,10 +298,16 @@ test('cross-device A to B waits for the source packet and runs in B selected dir
   assert.ok(queued); assert.equal(queued.contextSourceDeviceId, 'A'); assert.equal(queued.deviceId, 'B');
   let uploadedManifestDigest = '';
   const route = (actor: { id: string }, deviceId: string) => (method: string, body?: unknown, endpoint?: string) => {
+    if (endpoint?.includes('/transfer/objects/')) {
+      const url = new URL(endpoint, 'http://localhost');
+      const result = f.service.transferObject(url.pathname.split('/')[3]!, url.searchParams.get('executionId') || '', method === 'POST' ? 'upload' : 'read', actor,
+        { deviceId, digest: url.pathname.split('/').at(-1)!, mimeType: url.searchParams.get('mimeType') || '', data: body instanceof Uint8Array ? body : undefined });
+      return 'bytes' in result ? result.bytes : result;
+    }
     if (endpoint?.includes('/transfer')) {
       const url = new URL(endpoint, 'http://localhost');
       const input = method === 'POST' ? body as Record<string, unknown> : { deviceId, readyOnly: url.searchParams.get('readyOnly'), format: url.searchParams.get('format') };
-      if (method === 'POST' && 'bundle' in input) uploadedManifestDigest = String((input.bundle as { manifestDigest?: unknown }).manifestDigest || '');
+      if (method === 'POST' && 'manifest' in input) uploadedManifestDigest = String((input.manifest as { manifestDigest?: unknown }).manifestDigest || '');
       return f.service.transfer(url.pathname.split('/')[3]!, String(method === 'POST' ? input.executionId : url.searchParams.get('executionId')), method === 'POST' ? 'upload' : 'read', actor, input);
     }
     if (method === 'GET' && endpoint?.includes('/inherited')) {
@@ -328,7 +334,18 @@ test('cross-device A to B waits for the source packet and runs in B selected dir
   const v2Packet = f.service.transfer(created.sessionId, queued.id, 'read', actorB, { deviceId: 'B', format: 'bundle-v2' });
   assert.ok('bundle' in v2Packet && v2Packet.bundle);
   assert.equal('context' in v2Packet, false);
-  assert.equal(v2Packet.bundle.manifestDigest, uploadedManifestDigest);
+  const v3Packet = f.service.transfer(created.sessionId, queued.id, 'read', actorB, { deviceId: 'B', format: 'manifest-v3' });
+  assert.ok('manifest' in v3Packet && v3Packet.manifest);
+  assert.equal(v3Packet.manifest.manifestDigest, uploadedManifestDigest);
+  const objectDigest = v3Packet.manifest.objects[0]?.digest;
+  assert.ok(objectDigest);
+  const deliveredObject = f.service.transferObject(created.sessionId, queued.id, 'read', actorB, { deviceId: 'B', digest: objectDigest });
+  assert.ok('bytes' in deliveredObject && deliveredObject.bytes);
+  assert.deepEqual(Buffer.from(deliveredObject.bytes), bytes);
+  assert.throws(() => f.service.transferObject(created.sessionId, queued.id, 'read', actorA, { deviceId: 'B', digest: objectDigest }), { statusCode: 403 });
+  assert.throws(() => f.service.transferObject(created.sessionId, queued.id, 'upload', actorB, { deviceId: 'A', digest: objectDigest, mimeType: 'image/png', data: bytes }), { statusCode: 403 });
+  assert.throws(() => foreign.transferObject(created.sessionId, queued.id, 'read', actorB, { deviceId: 'B', digest: objectDigest }), { statusCode: 404 });
+  assert.throws(() => f.service.transferObject(created.sessionId, queued.id, 'upload', actorA, { deviceId: 'A', digest: objectDigest, mimeType: 'image/png', data: Buffer.from('changed') }), { statusCode: 400 });
   const changed = freezeContext([...savedPacket.context.entries, { role: 'assistant', text: '伪造变更', source: source.id }], savedPacket.context.sources);
   assert.throws(() => f.service.transfer(created.sessionId, queued.id, 'upload', actorA, { deviceId: 'A', context: changed }), { statusCode: 409 });
   assert.match(launched[0]!.prompt, /Markdown 交接文件/);
@@ -386,6 +403,11 @@ test('remote source to workbench device waits for upload before launching once',
   assert.equal(f.launched.length, 0); await f.service.preparePending(); assert.equal(f.launched.length, 0);
   const worker = new RemoteCodexWorker({ deviceId: 'A', workspace: f.root, directory: path.join(f.root, 'journal-a'), contextSource: { catalog: () => historyA.catalog(), delivery: createSessionDelivery({ history: historyA }) },
     request: (method, body, endpoint) => {
+      if (endpoint?.includes('/transfer/objects/')) {
+        const url = new URL(endpoint, 'http://localhost');
+        return f.service.transferObject(created.sessionId, url.searchParams.get('executionId') || '', 'upload', actorA,
+          { deviceId: 'A', digest: url.pathname.split('/').at(-1)!, mimeType: url.searchParams.get('mimeType') || '', data: body as Uint8Array });
+      }
       if (endpoint?.includes('/transfer')) return f.service.transfer(created.sessionId, String((body as Record<string, unknown>).executionId), 'upload', actorA, body as Record<string, unknown>);
       if (method === 'GET' && endpoint?.includes('/inherited')) return f.service.inherited(created.sessionId, new URL(endpoint, 'http://localhost').searchParams);
       return center.snapshot();
@@ -401,6 +423,8 @@ test('new routes explicitly separate execution and read permissions', () => {
   assert.equal(permissionForRoute('GET', `/api/conversations/${id}/inherited`), 'read');
   assert.equal(permissionForRoute('GET', `/api/conversations/${id}/transfer`), 'work.execute');
   assert.equal(permissionForRoute('POST', `/api/conversations/${id}/transfer`), 'work.execute');
+  assert.equal(permissionForRoute('GET', `/api/conversations/${id}/transfer/objects/${id}`), 'work.execute');
+  assert.equal(permissionForRoute('POST', `/api/conversations/${id}/transfer/objects/${id}`), 'work.execute');
   assert.equal(permissionForRoute('GET', '/api/conversations'), 'read');
 });
 

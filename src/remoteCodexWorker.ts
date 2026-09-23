@@ -3,7 +3,8 @@ import { mkdir, readFile, readdir, writeFile, rename, realpath, stat } from 'nod
 import { CodexRunner, pickNativeDirectory } from './codexExecution.js';
 import { AcpPreferredRunner, AcpTaskRunner, AgentRunnerSet, configuredAcpAgents } from './acpAgent.js';
 import { contextPrompt, freezeContext, readContext, type ContextDelivery, type ContextEntry, type SessionContext } from './contextCompiler.js';
-import { packSnapshot, verifyBundle, verifySnapshot } from '@auto-workflow/context-engine';
+import { verifyBundle, verifySnapshot } from '@auto-workflow/context-engine';
+import { detachSnapshot, restoreDetachedSnapshot, verifyDetachedManifest } from '@auto-workflow/context-engine/detached-bundle';
 import type { AgentProject, ExecutionControl, PromptImageReference, RemoteContextHandoff, TaskCenterData } from '../public/taskTypes.js';
 
 interface RemoteJob {
@@ -119,9 +120,20 @@ export class RemoteCodexWorker {
     if (!job.conversationId || !job.userMessage) return job;
     let snapshot: SessionContext;
     if (job.contextSourceDeviceId && job.contextSourceDeviceId !== this.deviceId) {
-      const result = await this.request('GET', undefined, `/api/conversations/${job.conversationId}/transfer?executionId=${job.id}&deviceId=${this.deviceId}&format=bundle-v2`) as { ready?: boolean; context?: SessionContext; bundle?: unknown };
-      if (!result.ready || (!result.context && !result.bundle)) throw new Error('跨设备交接包尚未送达');
-      try { snapshot = result.bundle ? verifyBundle(result.bundle).snapshot : verifySnapshot(result.context); }
+      const result = await this.request('GET', undefined, `/api/conversations/${job.conversationId}/transfer?executionId=${job.id}&deviceId=${this.deviceId}&format=manifest-v3`) as { ready?: boolean; context?: SessionContext; bundle?: unknown; manifest?: unknown };
+      if (!result.ready || (!result.context && !result.bundle && !result.manifest)) throw new Error('跨设备交接包尚未送达');
+      try {
+        if (result.manifest) {
+          const manifest = verifyDetachedManifest(result.manifest);
+          const objects = new Map<string, Uint8Array>();
+          for (const item of manifest.objects) {
+            const raw = await this.request('GET', undefined, `/api/conversations/${job.conversationId}/transfer/objects/${item.digest}?executionId=${job.id}&deviceId=${this.deviceId}`);
+            if (!(raw instanceof Uint8Array)) throw new Error('交接对象响应不是原始字节');
+            objects.set(item.digest, raw);
+          }
+          snapshot = restoreDetachedSnapshot(manifest, objects);
+        } else snapshot = result.bundle ? verifyBundle(result.bundle).snapshot : verifySnapshot(result.context);
+      }
       catch { throw new Error('跨设备交接包校验失败'); }
     } else if (job.remoteContext) snapshot = await this.sourceSnapshot(job);
     else return job;
@@ -155,7 +167,10 @@ export class RemoteCodexWorker {
       if (!job.conversationId) continue;
       try {
         const context = await this.sourceSnapshot(job);
-        await this.request('POST', { executionId: job.id, deviceId: this.deviceId, bundle: packSnapshot(context) }, `/api/conversations/${job.conversationId}/transfer`);
+        const detached = detachSnapshot(context);
+        for (const item of detached.objects) await this.request('POST', item.data,
+          `/api/conversations/${job.conversationId}/transfer/objects/${item.digest}?executionId=${job.id}&deviceId=${this.deviceId}&mimeType=${encodeURIComponent(item.mimeType)}`);
+        await this.request('POST', { executionId: job.id, deviceId: this.deviceId, manifest: detached.manifest }, `/api/conversations/${job.conversationId}/transfer`);
       } catch (caught: unknown) {
         const transient = caught as ErrorLike & { status?: number };
         if (transient.status && transient.status >= 500 || ['AbortError', 'TimeoutError'].includes(transient.name)) throw caught;
@@ -177,7 +192,7 @@ export class RemoteCodexWorker {
       if (!/^[a-f0-9-]{36}$/.test(job.id)) throw new Error('执行标识无效');
       if (job.status === 'queued' && !this.saved.has(job.id)) {
         if (job.contextSourceDeviceId && job.contextSourceDeviceId !== this.deviceId && !job.contextTransferError) {
-          const transfer = await this.request('GET', undefined, `/api/conversations/${job.conversationId}/transfer?executionId=${job.id}&deviceId=${this.deviceId}&readyOnly=1`) as { ready?: boolean };
+          const transfer = await this.request('GET', undefined, `/api/conversations/${job.conversationId}/transfer?executionId=${job.id}&deviceId=${this.deviceId}&readyOnly=1&format=manifest-v3`) as { ready?: boolean };
           if (!transfer.ready) continue;
         }
         const projects = await this.projects();

@@ -82,8 +82,14 @@ async function main() {
   const history = createAgentHistory({ environment, workspace: () => environment.CODEX_WORKSPACE_DIR || process.cwd() });
   const delivery = createSessionDelivery({ history, environment });
   const request: Request = async (method, body, endpoint = '/api/task-center') => {
-    const response = await fetch(new URL(endpoint, base), { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(endpoint.includes('/transfer') ? 180000 : 60000) });
-    const result = record(await response.json()); if (!response.ok) throw Object.assign(new Error(String(result.message || '请求失败')), { status: response.status }); return result;
+    const binary = body instanceof Uint8Array;
+    const response = await fetch(new URL(endpoint, base), { method,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': binary ? 'application/octet-stream' : 'application/json' },
+      ...(body !== undefined ? { body: binary ? Buffer.from(body) : JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(endpoint.includes('/transfer') ? 180000 : 60000) });
+    if (!response.ok) { const result = record(await response.json()); throw Object.assign(new Error(String(result.message || '请求失败')), { status: response.status }); }
+    if (method === 'GET' && endpoint.includes('/transfer/objects/')) return new Uint8Array(await response.arrayBuffer());
+    return record(await response.json());
   };
   const outputDir = path.join(stateDir, 'inbox');
   const worker = environment.WORKBENCH_EXECUTE_CODEX === 'true' ? new RemoteCodexWorker({ request, deviceId, directory: path.join(stateDir, 'executions'), workspace: environment.CODEX_WORKSPACE_DIR || process.cwd(), contextSource: { catalog: () => history.catalog(), delivery } }) : null;

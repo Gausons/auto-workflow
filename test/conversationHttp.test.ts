@@ -7,7 +7,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { createApp } from '../server.js';
-import type { Execution } from '../public/taskTypes.js';
+import { openDatabase } from '../src/database.js';
+import { freezeSnapshot } from '@auto-workflow/context-engine';
+import { detachSnapshot } from '@auto-workflow/context-engine/detached-bundle';
+import type { Device, Execution } from '../public/taskTypes.js';
 
 interface ApiData {
   token?: string; sessions?: Array<{ id: string }>; sessionId?: string; execution?: Execution | null;
@@ -34,7 +37,8 @@ test('authenticated HTTP and real ACP subprocess support new conversation, two t
     return { status: result.status, data: await result.json() as ApiData };
   }
   await req('/api/auth/setup', 'POST', { username: 'owner', password }, setup);
-  const token = (await req('/api/auth/login', 'POST', { tenantId: 'default', username: 'owner', password })).data.token;
+  const ownerLogin = (await req('/api/auth/login', 'POST', { tenantId: 'default', username: 'owner', password })).data;
+  const token = ownerLogin.token;
   assert.ok(token);
   await req('/api/organization/members', 'POST', { username: 'viewer', role: 'viewer', password }, token);
   const viewer = (await req('/api/auth/login', 'POST', { tenantId: 'default', username: 'viewer', password })).data.token;
@@ -69,4 +73,34 @@ test('authenticated HTTP and real ACP subprocess support new conversation, two t
   const inherited = (await req(`/api/conversations/${switched.data.sessionId}/inherited`, 'GET', undefined, token)).data;
   assert.match(JSON.stringify(inherited), /保持原接口兼容/); assert.match(JSON.stringify(inherited), /工具结果已保留/);
   assert.equal((await req('/api/conversations', 'GET', undefined, token)).data.sessions?.length, 2);
+  const objectRoute = `/api/conversations/${id}/transfer/objects/${'a'.repeat(64)}?executionId=${randomUUID()}&deviceId=remote`;
+  assert.equal((await fetch(base + objectRoute)).status, 401);
+  assert.equal((await fetch(base + objectRoute, { headers: { Authorization: `Bearer ${viewer}` } })).status, 403);
+  assert.equal((await fetch(base + objectRoute, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/octet-stream' }, body: Buffer.from('raw bytes') })).status, 404);
+
+  const ownerId = (ownerLogin.user as { id?: string } | undefined)?.id;
+  assert.ok(ownerId);
+  const executionId = randomUUID(), at = new Date().toISOString();
+  const database = openDatabase(app.filename);
+  try {
+    database.mutateTaskCenter('default', state => {
+      state.devices.push(...(['A', 'B'] as const).map(deviceId => ({ id: deviceId, name: deviceId, owner: ownerId, agents: ['codex'], lastSeen: at, transport: 'connector' as const } satisfies Device)));
+      state.executions.push({ id: executionId, conversationId: id, taskId: String(created.data.taskId), contextVersion: 1, contextId: randomUUID(),
+        contextSourceDeviceId: 'A', deviceId: 'B', cwd: root, title: 'binary transfer', prompt: '', userMessage: '继续',
+        remoteContext: { sourceNativeId: 'native-a', sourceAgent: 'codex', sourceDeviceId: 'A', sourceSessionId: 'source-ref', sourceFreezeId: id, contextDigest: '' },
+        status: 'queued', createdAt: at, updatedAt: at } as Execution);
+    });
+  } finally { database.close(); }
+  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+  const snapshot = freezeSnapshot([{ role: 'user', text: `data:image/png;base64,${image.toString('base64')}`, source: 'source-ref' }], ['source-ref']);
+  const detached = detachSnapshot(snapshot), object = detached.objects[0]!;
+  const objectUrl = `/api/conversations/${id}/transfer/objects/${object.digest}?executionId=${executionId}&deviceId=A&mimeType=image%2Fpng`;
+  const upload = await fetch(base + objectUrl, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/octet-stream' }, body: Buffer.from(object.data) });
+  assert.equal(upload.status, 200, await upload.text());
+  const accepted = await req(`/api/conversations/${id}/transfer`, 'POST', { executionId, deviceId: 'A', manifest: detached.manifest }, token);
+  assert.equal(accepted.status, 200, JSON.stringify(accepted.data));
+  const received = await req(`/api/conversations/${id}/transfer?executionId=${executionId}&deviceId=B&format=manifest-v3`, 'GET', undefined, token);
+  assert.equal(received.status, 200); assert.equal((received.data.manifest as { manifestDigest: string }).manifestDigest, detached.manifest.manifestDigest);
+  const download = await fetch(base + `/api/conversations/${id}/transfer/objects/${object.digest}?executionId=${executionId}&deviceId=B`, { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(download.status, 200); assert.deepEqual(Buffer.from(await download.arrayBuffer()), image);
 });

@@ -120,6 +120,20 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     if (url.pathname === '/api/conversations' && req.method === 'GET') { sendJson(res, 200, { sessions: conversations.list() }); return; }
     const inherited = /^\/api\/conversations\/([a-f0-9]{64})\/inherited$/.exec(url.pathname);
     if (inherited && req.method === 'GET') { sendJson(res, 200, conversations.inherited(inherited[1], url.searchParams)); return; }
+    const transferObject = /^\/api\/conversations\/([a-f0-9]{64})\/transfer\/objects\/([a-f0-9]{64})$/.exec(url.pathname);
+    if (transferObject && ['GET', 'POST'].includes(req.method || '')) {
+      const executionId = url.searchParams.get('executionId') || '';
+      if (!/^[a-f0-9-]{36}$/.test(executionId)) throw Object.assign(new Error('执行标识无效'), { statusCode: 400 });
+      const action = req.method === 'POST' ? 'upload' : 'read';
+      const result = conversations.transferObject(transferObject[1], executionId, action, requestIdentity.getStore()!.user,
+        { deviceId: url.searchParams.get('deviceId'), digest: transferObject[2], mimeType: url.searchParams.get('mimeType') || '',
+          ...(action === 'upload' ? { data: await readBytes(req, 12 * 1024 * 1024) } : {}) });
+      if (action === 'read' && 'bytes' in result) {
+        res.writeHead(200, { 'Content-Type': result.mimeType, 'Content-Length': result.bytes.byteLength, 'Cache-Control': 'no-store' });
+        res.end(Buffer.from(result.bytes));
+      } else sendJson(res, 200, result);
+      return;
+    }
     const transfer = /^\/api\/conversations\/([a-f0-9]{64})\/transfer$/.exec(url.pathname);
     if (transfer && ['GET', 'POST'].includes(req.method || '')) {
       const body = req.method === 'POST' ? await readJson(req, 85_000_000) : { executionId: url.searchParams.get('executionId'), deviceId: url.searchParams.get('deviceId'), readyOnly: url.searchParams.get('readyOnly'), format: url.searchParams.get('format') };
@@ -601,6 +615,16 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
       let data = '', size = 0; req.on('data', (chunk: Buffer | string) => { size += Buffer.byteLength(chunk); if (size > limit) { reject(Object.assign(new Error('请求体过大'), { statusCode: 413 })); return; } data += chunk; });
       req.on('end', () => { if (!data) return resolve({}); try { const parsed: unknown = JSON.parse(data); if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('请求体必须是 JSON 对象'); resolve(parsed as JsonObject); } catch (error: unknown) { reject(Object.assign(asError(error), { statusCode: 400 })); } }); req.on('error', reject);
     });
+  }
+  async function readBytes(req: IncomingMessage, limit: number): Promise<Buffer> {
+    const parts: Buffer[] = []; let size = 0;
+    for await (const part of req) {
+      const bytes = Buffer.isBuffer(part) ? part : Buffer.from(part);
+      size += bytes.length;
+      if (size > limit) throw Object.assign(new Error('请求体过大'), { statusCode: 413 });
+      parts.push(bytes);
+    }
+    return Buffer.concat(parts);
   }
   function sendJson(res: ServerResponse, status: number, data: unknown) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)); }
   function clampNumber(value: unknown, min: number, max: number, fallback: number) { const number = Number(value); return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback; }

@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./directory-bundle": "./src/directory-bundle.ts"
+    "./directory-bundle": "./src/directory-bundle.ts",
+    "./detached-bundle": "./src/detached-bundle.ts"
   },
   "engines": {
     "node": ">=22.16.0"

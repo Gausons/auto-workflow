@@ -9,6 +9,7 @@ import type { WorkIssue } from './issueSources/types.js';
 import type { TaskCenterData } from '../public/taskTypes.js';
 import type { SessionContext } from './contextCompiler.js';
 import { packSnapshot, verifySnapshot, type ContextBundle } from '@auto-workflow/context-engine';
+import { verifyDetachedManifest, type DetachedManifest } from '@auto-workflow/context-engine/detached-bundle';
 
 export interface Tenant { id: string; name: string; createdAt?: string }
 export interface TenantSettings { config: Record<string, unknown>; assignmentPeople: unknown[] }
@@ -24,7 +25,7 @@ export function openDatabase(filename: string) {
   const db = new DatabaseSync(filename);
   db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
   const version = Number(db.prepare('PRAGMA user_version').get()?.user_version || 0);
-  if (version > 6) { db.close(); throw new Error('数据库版本高于当前程序支持的版本'); }
+  if (version > 7) { db.close(); throw new Error('数据库版本高于当前程序支持的版本'); }
   if (version === 0) {
     transaction(() => {
       db.exec(readFileSync(new URL('../migrations/001_initial.sql', import.meta.url), 'utf8'));
@@ -61,6 +62,12 @@ export function openDatabase(filename: string) {
     transaction(() => {
       db.exec(readFileSync(new URL('../migrations/006_context_transfers.sql', import.meta.url), 'utf8'));
       db.exec('PRAGMA user_version = 6');
+    });
+  }
+  if (version < 7) {
+    transaction(() => {
+      db.exec(readFileSync(new URL('../migrations/007_context_objects.sql', import.meta.url), 'utf8'));
+      db.exec('PRAGMA user_version = 7');
     });
   }
 
@@ -162,8 +169,9 @@ export function openDatabase(filename: string) {
     saveSessionContext: (tenantId: string, snapshot: SessionContext) => {
       db.prepare('INSERT INTO session_contexts VALUES (?, ?, ?) ON CONFLICT(tenant_id, id) DO NOTHING').run(tenantId, snapshot.id, JSON.stringify(snapshot));
     },
-    recordContextTransfer: (tenantId: string, executionId: string, sourceDeviceId: string, targetDeviceId: string, snapshot: SessionContext, storageKey?: string): ContextBundle => {
+    recordContextTransfer: (tenantId: string, executionId: string, sourceDeviceId: string, targetDeviceId: string, snapshot: SessionContext, storageKey?: string, manifest?: DetachedManifest): ContextBundle => {
       const bundle = packSnapshot(verifySnapshot(snapshot));
+      if (manifest && (verifyDetachedManifest(manifest).snapshot.digest !== snapshot.digest || manifest.snapshot.id !== snapshot.id)) throw new Error('交接清单与来源快照不匹配');
       transaction(() => {
         if (storageKey) {
           const existing = db.prepare('SELECT payload FROM session_contexts WHERE tenant_id = ? AND id = ?').get(tenantId, storageKey) as { payload: string } | undefined;
@@ -180,6 +188,13 @@ export function openDatabase(filename: string) {
         }
         else if (prior.status === 'failed') db.prepare('UPDATE context_transfers SET snapshot_id = ?, snapshot_digest = ?, manifest_digest = ?, status = ?, failure = NULL, revision = revision + 1, updated_at = ? WHERE tenant_id = ? AND execution_id = ?')
           .run(snapshot.id, snapshot.digest, bundle.manifestDigest, 'available', new Date().toISOString(), tenantId, executionId);
+        if (manifest) {
+          const existingManifest = db.prepare('SELECT manifest_digest AS digest FROM context_transfer_manifests WHERE tenant_id = ? AND execution_id = ? AND schema_version = 3')
+            .get(tenantId, executionId) as { digest: string } | undefined;
+          if (existingManifest && existingManifest.digest !== manifest.manifestDigest) throw new Error('交接清单已冻结，不能覆盖');
+          if (!existingManifest) db.prepare('INSERT INTO context_transfer_manifests VALUES (?, ?, 3, ?, ?, ?)')
+            .run(tenantId, executionId, manifest.manifestDigest, JSON.stringify(manifest), new Date().toISOString());
+        }
       });
       return bundle;
     },
@@ -196,6 +211,45 @@ export function openDatabase(filename: string) {
     },
     readContextTransfer: (tenantId: string, executionId: string) => db.prepare('SELECT source_device_id AS sourceDeviceId, target_device_id AS targetDeviceId, snapshot_id AS snapshotId, snapshot_digest AS snapshotDigest, manifest_digest AS manifestDigest, status, failure, revision FROM context_transfers WHERE tenant_id = ? AND execution_id = ?').get(tenantId, executionId) as
       { sourceDeviceId: string; targetDeviceId: string; snapshotId: string; snapshotDigest: string; manifestDigest: string; status: string; failure: string | null; revision: number } | undefined,
+    saveContextObject: (tenantId: string, executionId: string, objectDigest: string, mimeType: string, bytes: Uint8Array): void => {
+      if (!/^[a-f0-9]{64}$/.test(objectDigest) || !['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(mimeType) ||
+          bytes.byteLength < 1 || bytes.byteLength > 12 * 1024 * 1024 || createHash('sha256').update(bytes).digest('hex') !== objectDigest) throw new Error('交接对象格式或摘要无效');
+      transaction(() => {
+        const previous = db.prepare('SELECT mime_type AS mimeType, data FROM context_transfer_objects WHERE tenant_id = ? AND execution_id = ? AND digest = ?')
+          .get(tenantId, executionId, objectDigest) as { mimeType: string; data: Uint8Array } | undefined;
+        if (previous) {
+          if (previous.mimeType !== mimeType || !Buffer.from(previous.data).equals(Buffer.from(bytes))) throw new Error('交接对象已冻结，不能覆盖');
+          return;
+        }
+        if (db.prepare('SELECT 1 FROM context_transfer_manifests WHERE tenant_id = ? AND execution_id = ? AND schema_version = 3').get(tenantId, executionId)) throw new Error('交接清单已封存，不能添加对象');
+        const current = db.prepare('SELECT COALESCE(SUM(byte_length), 0) AS total FROM context_transfer_objects WHERE tenant_id = ? AND execution_id = ?').get(tenantId, executionId) as { total: number };
+        if (current.total + bytes.byteLength > 50 * 1024 * 1024) throw new Error('交接对象总量超限');
+        db.prepare('INSERT INTO context_transfer_objects VALUES (?, ?, ?, ?, ?, ?, ?)').run(tenantId, executionId, objectDigest, mimeType, bytes.byteLength, Buffer.from(bytes), new Date().toISOString());
+      });
+    },
+    readContextObject: (tenantId: string, executionId: string, objectDigest: string): { mimeType: string; bytes: Uint8Array } | null => {
+      const row = db.prepare('SELECT mime_type AS mimeType, data FROM context_transfer_objects WHERE tenant_id = ? AND execution_id = ? AND digest = ?')
+        .get(tenantId, executionId, objectDigest) as { mimeType: string; data: Uint8Array } | undefined;
+      return row ? { mimeType: row.mimeType, bytes: row.data } : null;
+    },
+    saveContextManifest: (tenantId: string, executionId: string, manifest: DetachedManifest): void => {
+      verifyDetachedManifest(manifest);
+      transaction(() => {
+        const receipt = db.prepare('SELECT snapshot_digest AS digest, status FROM context_transfers WHERE tenant_id = ? AND execution_id = ?')
+          .get(tenantId, executionId) as { digest: string; status: string } | undefined;
+        if (!receipt || receipt.status !== 'available' || receipt.digest !== manifest.snapshot.digest) throw new Error('交接清单没有匹配的来源快照');
+        const existing = db.prepare('SELECT manifest_digest AS digest FROM context_transfer_manifests WHERE tenant_id = ? AND execution_id = ? AND schema_version = 3')
+          .get(tenantId, executionId) as { digest: string } | undefined;
+        if (existing && existing.digest !== manifest.manifestDigest) throw new Error('交接清单已冻结，不能覆盖');
+        if (!existing) db.prepare('INSERT INTO context_transfer_manifests VALUES (?, ?, 3, ?, ?, ?)')
+          .run(tenantId, executionId, manifest.manifestDigest, JSON.stringify(manifest), new Date().toISOString());
+      });
+    },
+    readContextManifest: (tenantId: string, executionId: string): DetachedManifest | null => {
+      const row = db.prepare('SELECT payload FROM context_transfer_manifests WHERE tenant_id = ? AND execution_id = ? AND schema_version = 3')
+        .get(tenantId, executionId) as { payload: string } | undefined;
+      return row ? verifyDetachedManifest(JSON.parse(row.payload)) : null;
+    },
     readTaskCenter: (tenantId: string) => parseTaskCenter((db.prepare('SELECT payload FROM task_centers WHERE tenant_id = ?').get(tenantId) as { payload?: string } | undefined)?.payload),
     mutateTaskCenter: <T>(tenantId: string, update: (data: TaskCenterData) => T): T => transaction(() => {
       const data = parseTaskCenter((db.prepare('SELECT payload FROM task_centers WHERE tenant_id = ?').get(tenantId) as { payload?: string } | undefined)?.payload);
