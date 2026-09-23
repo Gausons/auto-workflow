@@ -7,34 +7,7 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <section class="login-screen" id="loginScreen">
-      <div class="login-card">
-        <p class="eyebrow">BugFlow · 组织工作台</p>
-        <h1>登录你的组织</h1>
-        <form id="loginForm">
-          <label for="loginOrganization">组织 ID</label>
-          <input id="loginOrganization" name="tenantId" value="default" required autocomplete="organization" />
-          <label for="loginUsername">用户名</label>
-          <input id="loginUsername" name="username" required autocomplete="username" />
-          <label for="loginPassword">密码</label>
-          <input id="loginPassword" name="password" type="password" required autocomplete="current-password" maxlength="128" />
-          <p id="loginError" class="login-error" role="alert"></p>
-          <button class="button primary" type="submit">登录</button>
-        </form>
-        <details class="setup-details" id="setupDetails">
-          <summary>首次使用？初始化组织所有者</summary>
-          <p>使用原组织令牌创建首位所有者。初始化后，所有成员均使用个人账号登录。</p>
-          <form id="setupForm">
-            <label>组织初始化令牌<input name="token" type="password" required autocomplete="off" /></label>
-            <label>所有者用户名<input name="username" required minlength="3" maxlength="80" autocomplete="username" /></label>
-            <label>显示名称<input name="displayName" required maxlength="80" autocomplete="name" /></label>
-            <label>密码（12–128 位）<input name="password" type="password" required minlength="12" maxlength="128" autocomplete="new-password" /></label>
-            <p id="setupError" class="login-error" role="alert"></p>
-            <button class="button primary" type="submit">创建组织所有者</button>
-          </form>
-        </details>
-      </div>
-    </section>
+    <section class="login-screen" id="loginScreen"><noscript>请启用 JavaScript 后登录工作台。</noscript></section>
     <div class="app-shell" id="workspaceShell" hidden>
       <aside class="sidebar">
         <div class="brand">
@@ -121,44 +94,10 @@
             </nav>
             <div class="settings-content">
         <section class="settings-panel" data-settings-panel="members" hidden>
-          <div class="config-band">
-            <h2>组织成员</h2>
-            <p>所有者管理全部成员；管理员只能管理操作员和只读成员。停用账号会立即撤销其登录会话。</p>
-            <form id="memberForm" class="fields-grid">
-              <label>用户名<input name="username" required minlength="3" maxlength="80" autocomplete="off" /></label>
-              <label>显示名称<input name="displayName" required maxlength="80" /></label>
-              <label>初始密码<input name="password" type="password" required minlength="12" maxlength="128" autocomplete="new-password" /></label>
-              <label>角色<select name="role" id="newMemberRole"></select></label>
-              <button class="button primary" type="submit">添加成员</button>
-            </form>
-            <p id="memberStatus" role="status"></p>
-            <div id="memberList" class="member-list"></div>
-            <h3>角色权限</h3>
-            <div class="table-scroll"><table class="role-table">
-              <thead><tr><th>角色</th><th>查看数据</th><th>同步 / 分配 / 执行</th><th>审核 / 配置</th><th>成员管理</th></tr></thead>
-              <tbody>
-                <tr><td>组织所有者</td><td>✓</td><td>✓</td><td>✓</td><td>全部角色</td></tr>
-                <tr><td>管理员</td><td>✓</td><td>✓</td><td>✓</td><td>操作员、只读成员</td></tr>
-                <tr><td>操作员</td><td>✓</td><td>✓</td><td>—</td><td>—</td></tr>
-                <tr><td>只读成员</td><td>✓</td><td>—</td><td>—</td><td>—</td></tr>
-              </tbody>
-            </table></div>
-            <h3>组织审计记录</h3>
-            <button class="button secondary" id="refreshMembers" type="button">刷新成员与记录</button>
-            <div id="auditList" class="member-list"></div>
-          </div>
+          <div id="reactMembersPanel"></div>
         </section>
         <section class="settings-panel" data-settings-panel="account" hidden>
-          <div class="config-band">
-            <h2>我的账号</h2>
-            <p id="accountIdentity"></p>
-            <form id="passwordForm" class="fields-grid">
-              <label>当前密码<input name="currentPassword" type="password" required autocomplete="current-password" maxlength="128" /></label>
-              <label>新密码（12–128 位）<input name="password" type="password" required autocomplete="new-password" minlength="12" maxlength="128" /></label>
-              <button class="button primary" type="submit">修改密码并退出所有会话</button>
-            </form>
-            <p id="passwordStatus" role="status"></p>
-          </div>
+          <div id="reactAccountPanel"></div>
         </section>
 
         <section class="settings-panel" data-settings-panel="config" hidden>
@@ -337,6 +276,7 @@
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/__WEB_ENTRY__" type="module"></script>
     <script src="/app.js" type="module"></script>
   </body>
 </html>

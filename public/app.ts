@@ -39,14 +39,12 @@ interface HistoryListResponse {
   offset: number; limit: number; total: number; scope: string; providers: HistoryProvider[];
   workspaces: HistoryWorkspace[]; sessions: HistorySession[];
 }
-interface Member { id: string; username: string; displayName: string; role: UserRole; enabled: boolean }
-interface AuditEvent { actorName: string; action: string; createdAt: string; target: string }
-
 function select<T extends Element = HTMLElement>(selector: string): T {
   return document.querySelector<T>(selector) as T;
 }
 const escapeHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char] || char));
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
+const roleLabel = (role: string) => ({ owner: '组织所有者', admin: '管理员', operator: '操作员', viewer: '只读成员' } as Record<string, string>)[role] || role;
 const state: AppState = {
   user: null, permissions: [], config: {}, scheduler: {}, assignmentPeople: [], bugs: [], metrics: {},
   selectedBugId: null, view: currentView(), settingsSection: currentSettingsSection()
@@ -73,10 +71,7 @@ init();
 async function init() {
   bindEvents();
   sessionStorage.removeItem('bugflow.tenantToken');
-  select('#loginForm').addEventListener('submit', login);
-  select('#setupForm').addEventListener('submit', setup);
   select('#logoutTenant').addEventListener('click', logout);
-  bindMemberEvents();
   if (!sessionStorage.getItem('bugflow.sessionToken')) return;
   try {
     await loadBootstrap();
@@ -84,35 +79,10 @@ async function init() {
     select('#workspaceShell').hidden = false;
     await loadCurrentView();
   } catch (error: unknown) {
-    select('#loginError').textContent = errorMessage(error);
+    select('#loginScreen').hidden = false;
+    select('#workspaceShell').hidden = true;
+    window.dispatchEvent(new CustomEvent('bugflow:auth-required', { detail: { message: errorMessage(error) } }));
   }
-}
-
-async function login(event: SubmitEvent) {
-  event.preventDefault();
-  const form = event.currentTarget as HTMLFormElement, button = select<HTMLButtonElement>('#loginForm button');
-  button.disabled = true;
-  try {
-    const data = await api<{ token: string }>('/api/auth/login', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) });
-    sessionStorage.setItem('bugflow.sessionToken', data.token);
-    location.reload();
-  } catch (error: unknown) { select('#loginError').textContent = errorMessage(error); }
-  finally { button.disabled = false; }
-}
-
-async function setup(event: SubmitEvent) {
-  event.preventDefault();
-  const form = event.currentTarget as HTMLFormElement, button = select<HTMLButtonElement>('#setupForm button');
-  const { token, ...input } = Object.fromEntries(new FormData(form));
-  button.disabled = true;
-  try {
-    const data = await api<{ tenant: { id: string }; message: string }>('/api/auth/setup', { method: 'POST', headers: { Authorization: `Bearer ${String(token).trim()}` }, body: JSON.stringify(input) });
-    select<HTMLInputElement>('#loginOrganization').value = data.tenant.id;
-    select<HTMLInputElement>('#loginUsername').value = String(input.username ?? '');
-    form.reset(); select<HTMLDetailsElement>('#setupDetails').open = false;
-    select('#loginError').textContent = data.message;
-  } catch (error: unknown) { select('#setupError').textContent = errorMessage(error); }
-  finally { button.disabled = false; }
 }
 
 async function logout() {
@@ -161,7 +131,6 @@ async function loadCurrentView() {
     else if (state.view === 'inbox') taskCenterUI.showInbox();
     else taskCenterUI.showTasks();
   }
-  if (state.view === 'settings' && state.settingsSection === 'members') await loadMembers();
   if (state.view === 'history') {
     await loadAgentHistory();
     const id = /^#history\/([a-f0-9]{64})$/.exec(location.hash)?.[1];
@@ -184,8 +153,8 @@ function applyBootstrap(data: BootstrapData) {
   select('#tenantName').textContent = `${data.tenant?.name || ''} (${data.tenant?.id || ''})`;
   if (state.user) {
     select('#currentUser').textContent = `${state.user.displayName} · ${roleLabel(state.user.role)}`;
-    select('#accountIdentity').textContent = `${state.user.username} · ${state.user.displayName}`;
   }
+  window.dispatchEvent(new CustomEvent('bugflow:bootstrap', { detail: { user: state.user, permissions: state.permissions } }));
   renderPermissions();
   render();
   configurePolling();
@@ -417,56 +386,6 @@ async function assignmentPeopleAction(event: MouseEvent) {
 async function saveAssignmentPeople(people: AssignmentPerson[]) {
   try { applyBootstrap(await api<BootstrapData>('/api/assignment/people', { method: 'PUT', body: JSON.stringify({ people }) })); showToast('分配规则已保存'); }
   catch (error: unknown) { showToast(errorMessage(error)); }
-}
-
-function roleLabel(role: string) { return ({ owner: '组织所有者', admin: '管理员', operator: '操作员', viewer: '只读成员' } as Record<string, string>)[role] || role; }
-function roleOptions(selected = 'viewer') {
-  const roles = state.user?.role === 'owner' ? ['owner', 'admin', 'operator', 'viewer'] : ['operator', 'viewer'];
-  return roles.map((role) => `<option value="${role}" ${role === selected ? 'selected' : ''}>${roleLabel(role)}</option>`).join('');
-}
-function bindMemberEvents() {
-  select('#refreshMembers').addEventListener('click', loadMembers);
-  select('#memberForm').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget as HTMLFormElement;
-    try { await api('/api/organization/members', { method: 'POST', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); form.reset(); await loadMembers(); }
-    catch (error: unknown) { showToast(errorMessage(error)); }
-  });
-  select('#memberList').addEventListener('submit', async (event) => {
-    event.preventDefault(); const form = (event.target as Element | null)?.closest<HTMLFormElement>('[data-member-id]');
-    if (!form) return;
-    const body: Record<string, FormDataEntryValue | boolean> = Object.fromEntries(new FormData(form)); body.enabled = body.enabled === 'true';
-    try { await api(`/api/organization/members/${form.dataset.memberId}`, { method: 'PATCH', body: JSON.stringify(body) }); await loadMembers(); }
-    catch (error: unknown) { showToast(errorMessage(error)); }
-  });
-  select('#memberList').addEventListener('click', async (event) => {
-    const button = (event.target as Element | null)?.closest('[data-reset-password]'); if (!button) return;
-    const form = button.closest<HTMLFormElement>('[data-member-id]'); if (!form) return;
-    const password = form.elements.namedItem('newPassword') as HTMLInputElement;
-    try { await api(`/api/organization/members/${form.dataset.memberId}/password`, { method: 'PUT', body: JSON.stringify({ password: password.value }) }); password.value = ''; showToast('密码已重置'); }
-    catch (error: unknown) { showToast(errorMessage(error)); }
-  });
-  select('#passwordForm').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget as HTMLFormElement;
-    try { await api('/api/auth/password', { method: 'PUT', body: JSON.stringify(Object.fromEntries(new FormData(form))) }); await logout(); }
-    catch (error: unknown) { select('#passwordStatus').textContent = errorMessage(error); }
-  });
-}
-async function loadMembers() {
-  if (!state.permissions.includes('members.manage')) return;
-  const [data, audit] = await Promise.all([api<{ members: Member[] }>('/api/organization/members'), api<{ events: AuditEvent[] }>('/api/organization/audit')]);
-  select('#newMemberRole').innerHTML = roleOptions();
-  select('#memberStatus').textContent = `${data.members.length} 位成员`;
-  select('#memberList').innerHTML = data.members.map((member) => `<form class="member-card" data-member-id="${escapeHtml(member.id)}">
-    <strong>${escapeHtml(member.username)} · ${roleLabel(member.role)}</strong>
-    <label>显示名称<input name="displayName" value="${escapeHtml(member.displayName)}"></label>
-    <label>角色<select name="role">${roleOptions(member.role)}</select></label>
-    <label>状态<select name="enabled"><option value="true" ${member.enabled ? 'selected' : ''}>启用</option><option value="false" ${member.enabled ? '' : 'selected'}>停用</option></select></label>
-    <button class="button secondary">保存</button>
-    <label>重置密码<input name="newPassword" type="password"></label><button class="button ghost" type="button" data-reset-password>重置密码</button>
-  </form>`).join('');
-  select('#auditList').innerHTML = audit.events.map((item) => `<div class="member-card"><strong>${escapeHtml(item.actorName)} · ${escapeHtml(item.action)}</strong><p>${escapeHtml(item.createdAt)} · ${escapeHtml(item.target)}</p></div>`).join('');
 }
 
 function bindHistoryEvents() {

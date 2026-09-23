@@ -86,7 +86,26 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
         await runtimeFor(tenant).handleApi(req, res, url, principal);
         return;
       }
-      const assets: Record<string, [string, string]> = { '/': ['index.html', 'text/html; charset=utf-8'], '/index.html': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['build/app.js', 'text/javascript; charset=utf-8'], '/historyView.js': ['build/historyView.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'] };
+      if (['/', '/index.html'].includes(url.pathname) && ['GET', 'HEAD'].includes(req.method || '')) {
+        const template = await readFile(path.join(projectDir, 'public', 'index.html'), 'utf8');
+        const content = template.replace('/__WEB_ENTRY__', `/${await webEntryAsset()}`);
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+        res.end(req.method === 'HEAD' ? undefined : content);
+        return;
+      }
+      if (/^\/assets\/[A-Za-z0-9._-]+\.(?:js|css)$/.test(url.pathname) && ['GET', 'HEAD'].includes(req.method || '')) {
+        let content: Buffer;
+        try { content = await readFile(path.join(projectDir, 'public', 'build', url.pathname.slice(1))); }
+        catch (error: unknown) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return sendJson(res, 404, { message: '资源不存在' });
+          throw error;
+        }
+        const type = url.pathname.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8';
+        res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'public, max-age=31536000, immutable' });
+        res.end(req.method === 'HEAD' ? undefined : content);
+        return;
+      }
+      const assets: Record<string, [string, string]> = { '/app.js': ['build/app.js', 'text/javascript; charset=utf-8'], '/historyView.js': ['build/historyView.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'] };
       assets['/taskContent.js'] = ['build/taskContent.js', 'text/javascript; charset=utf-8'];
       assets['/taskCenter.js'] = ['build/taskCenter.js', 'text/javascript; charset=utf-8'];
       assets['/agentRunConfig.js'] = ['build/agentRunConfig.js', 'text/javascript; charset=utf-8'];
@@ -117,6 +136,16 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
       finally { database.close(); }
     }
   };
+}
+
+async function webEntryAsset() {
+  const raw = await readFile(path.join(projectDir, 'public', 'build', '.vite', 'manifest.json'), 'utf8');
+  const manifest = JSON.parse(raw) as Record<string, { file?: unknown; isEntry?: unknown }>;
+  const entry = manifest['web/src/main.tsx'];
+  if (!entry || entry.isEntry !== true || typeof entry.file !== 'string' || !/^assets\/[A-Za-z0-9._-]+\.js$/.test(entry.file)) {
+    throw new Error('Web 构建清单缺少有效入口，请先运行 pnpm build:client');
+  }
+  return entry.file;
 }
 
 function sendJson(res: ServerResponse, status: number, data: unknown) {

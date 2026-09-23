@@ -281,6 +281,8 @@ pnpm tenant -- migrate [组织ID]
 
 ## 开发
 
+前端计划采用 React + Vite 的纯 Web 架构；详细决策、工程边界和渐进迁移步骤见[Web 前端技术选型](docs/frontend-web-technology-selection.md)。
+
 ```bash
 # 开发模式（监听源码变化）
 pnpm dev
@@ -298,7 +300,8 @@ pnpm start
 主要目录：
 
 ```text
-public/       浏览器端页面、样式和交互
+web/          React Web 页面与 API 客户端
+public/       迁移中的旧页面与公共样式；build/ 为生成产物
 src/          服务端领域逻辑与集成
 scripts/      租户管理、多设备连接器等命令
 migrations/   SQLite 数据库迁移

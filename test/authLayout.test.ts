@@ -19,6 +19,7 @@ test('login page and its entire JavaScript import graph are served without authe
     const page = await fetch(base);
     assert.equal(page.status, 200);
     const html = await page.text();
+    assert.match(html, /src="\/assets\/react-entry-[A-Za-z0-9_-]+\.js"/);
     const pending = [...html.matchAll(/<script[^>]*src="([^"]+)"/g)].map(match => new URL(match[1], base).href);
     assert.ok(pending.length > 0);
     const visited = new Set<string>();
@@ -34,6 +35,9 @@ test('login page and its entire JavaScript import graph are served without authe
         pending.push(new URL(match[1], url).href);
       }
     }
+    const missing = await fetch(base + '/assets/missing.js');
+    assert.equal(missing.status, 404);
+    assert.match(missing.headers.get('content-type') || '', /json/);
   } finally {
     await app.close();
     await rm(rootDir, { recursive: true, force: true });

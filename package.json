@@ -4,20 +4,21 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "npm run build:client && npm run typecheck",
-    "build:client": "tsc -p tsconfig.client.json",
-    "prestart": "npm run build:client && npm run kill:4173",
+    "build": "pnpm build:client && pnpm typecheck",
+    "build:client": "node --import tsx scripts/build-client.ts",
+    "prestart": "pnpm build:client && pnpm kill:4173",
     "start": "node --import tsx --import ./src/issueSources/preload.ts server.ts",
-    "predev": "npm run build:client && npm run kill:4173",
+    "predev": "pnpm build:client && pnpm kill:4173",
     "dev": "node --import tsx --import ./src/issueSources/preload.ts --watch server.ts",
     "kill:port": "node --import tsx scripts/kill-port.ts",
     "kill:4173": "node --import tsx scripts/kill-4173.ts",
     "device:sync": "node --import tsx scripts/device-sync.ts",
-    "pretest": "npm run build:client",
-    "test": "node --import tsx --test test/*.test.ts",
+    "pretest": "pnpm build:client",
+    "test": "pnpm test:web && node --import tsx --test test/*.test.ts",
+    "test:web": "vitest run",
     "tenant": "node --import tsx --import ./src/issueSources/preload.ts scripts/tenant.ts",
     "check:type-debt": "node --import tsx scripts/check-type-debt.ts",
-    "typecheck": "pnpm check:type-debt && tsc --noEmit"
+    "typecheck": "pnpm check:type-debt && tsc --noEmit && tsc -p tsconfig.client.json --noEmit && tsc -p tsconfig.web.json --noEmit"
   },
   "engines": {
     "node": ">=22.16.0"
@@ -25,10 +26,21 @@
   "license": "MIT",
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",
+    "@tanstack/react-query": "^5.103.2",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "tsx": "^4.23.13"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
     "@types/node": "^22.20.1",
-    "typescript": "^7.0.2"
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "jsdom": "^30.1.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1"
   }
 }
