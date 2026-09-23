@@ -232,6 +232,11 @@ export function openDatabase(filename: string) {
         .get(tenantId, executionId, objectDigest) as { mimeType: string; data: Uint8Array } | undefined;
       return row ? { mimeType: row.mimeType, bytes: row.data } : null;
     },
+    readContextObjectMetadata: (tenantId: string, executionId: string, objectDigest: string): { mimeType: string; bytes: number } | null => {
+      const row = db.prepare('SELECT mime_type AS mimeType, byte_length AS bytes FROM context_transfer_objects WHERE tenant_id = ? AND execution_id = ? AND digest = ?')
+        .get(tenantId, executionId, objectDigest) as { mimeType: string; bytes: number } | undefined;
+      return row || null;
+    },
     saveContextManifest: (tenantId: string, executionId: string, manifest: DetachedManifest): void => {
       verifyDetachedManifest(manifest);
       transaction(() => {

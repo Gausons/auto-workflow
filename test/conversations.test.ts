@@ -11,6 +11,7 @@ import { createConversations } from '../src/conversations.js';
 import { createCodexExecution } from '../src/codexExecution.js';
 import { createTaskCenter } from '../src/taskCenter.js';
 import { RemoteCodexWorker } from '../src/remoteCodexWorker.js';
+import { detachSnapshot } from '@auto-workflow/context-engine/detached-bundle';
 import { contextPrompt, freezeContext, readContext } from '../src/contextCompiler.js';
 import { permissionForRoute } from '../src/rbac.js';
 type ExecutionOptions = Parameters<typeof createCodexExecution>[0];
@@ -337,6 +338,9 @@ test('cross-device A to B waits for the source packet and runs in B selected dir
   const v3Packet = f.service.transfer(created.sessionId, queued.id, 'read', actorB, { deviceId: 'B', format: 'manifest-v3' });
   assert.ok('manifest' in v3Packet && v3Packet.manifest);
   assert.equal(v3Packet.manifest.manifestDigest, uploadedManifestDigest);
+  assert.deepEqual(f.service.transfer(created.sessionId, queued.id, 'upload', actorA, { deviceId: 'A', probe: v3Packet.manifest }), { ready: true, missingObjects: [] });
+  assert.throws(() => f.service.transfer(created.sessionId, queued.id, 'upload', actorB, { deviceId: 'A', probe: v3Packet.manifest }), { statusCode: 403 });
+  assert.throws(() => foreign.transfer(created.sessionId, queued.id, 'upload', actorA, { deviceId: 'A', probe: v3Packet.manifest }), { statusCode: 404 });
   const objectDigest = v3Packet.manifest.objects[0]?.digest;
   assert.ok(objectDigest);
   const deliveredObject = f.service.transferObject(created.sessionId, queued.id, 'read', actorB, { deviceId: 'B', digest: objectDigest });
@@ -347,6 +351,7 @@ test('cross-device A to B waits for the source packet and runs in B selected dir
   assert.throws(() => foreign.transferObject(created.sessionId, queued.id, 'read', actorB, { deviceId: 'B', digest: objectDigest }), { statusCode: 404 });
   assert.throws(() => f.service.transferObject(created.sessionId, queued.id, 'upload', actorA, { deviceId: 'A', digest: objectDigest, mimeType: 'image/png', data: Buffer.from('changed') }), { statusCode: 400 });
   const changed = freezeContext([...savedPacket.context.entries, { role: 'assistant', text: '伪造变更', source: source.id }], savedPacket.context.sources);
+  assert.throws(() => f.service.transfer(created.sessionId, queued.id, 'upload', actorA, { deviceId: 'A', probe: detachSnapshot(changed).manifest }), { statusCode: 409 });
   assert.throws(() => f.service.transfer(created.sessionId, queued.id, 'upload', actorA, { deviceId: 'A', context: changed }), { statusCode: 409 });
   assert.match(launched[0]!.prompt, /Markdown 交接文件/);
   const markdown = await readFile(launched[0]!.contextMarkdownPath!, 'utf8');
@@ -368,21 +373,30 @@ test('cross-device A to B waits for the source packet and runs in B selected dir
   assert.equal(failedJob?.status, 'failed'); assert.match(failedJob.message || '', /原始会话不存在/); assert.equal(launched.length, 1);
 });
 
-test('source connector retries the same frozen transfer after a lost response and restart', async t => {
+test('source connector resumes only missing objects after interrupted upload and restart', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'transfer-retry-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const journal = path.join(root, 'journal'), executionId = randomUUID(), conversationId = randomUUID();
   const job = { id: executionId, conversationId, deviceId: 'B', contextSourceDeviceId: 'A', status: 'queued',
     contextDigest: 'a'.repeat(64), remoteContext: { sourceDeviceId: 'A', sourceSessionId: 'source-a' } };
   const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
-  const first = freezeContext([{ role: 'user', text: `冻结前的来源 data:image/png;base64,${image.toString('base64')}`, source: 'source-a' }], ['source-a']);
-  let lost = true, objectUploads = 0;
+  const gif = Buffer.from('GIF89a\x01\x00\x01\x00\x00\x00\x00\x00', 'binary');
+  const first = freezeContext([{ role: 'user', text: `冻结前的来源 data:image/png;base64,${image.toString('base64')} data:image/gif;base64,${gif.toString('base64')}`, source: 'source-a' }], ['source-a']);
+  const secondDigest = detachSnapshot(first).objects[1]!.digest;
+  let lostObject = true, lostManifest = true, objectUploads = 0;
+  const stored = new Set<string>();
   const manifests: Array<{ snapshot: { digest: string } }> = [];
   const request = (method: string, body?: unknown, endpoint?: string) => {
     if (method === 'GET') return { executions: [job], directoryRequests: [] };
-    if (endpoint?.includes('/transfer/objects/')) { objectUploads++; return { ready: true }; }
+    if (endpoint?.includes('/transfer/objects/')) {
+      const digest = endpoint.split('/objects/')[1]!.split('?')[0]!;
+      if (digest === secondDigest && lostObject) { lostObject = false; throw new TypeError('对象上传中断'); }
+      objectUploads++; stored.add(digest); return { ready: true };
+    }
     if (endpoint?.includes('/transfer')) {
-      if (lost) { lost = false; throw new TypeError('fetch failed'); }
+      const probe = (body as { probe?: { objects: Array<{ digest: string }> } }).probe;
+      if (probe) return { ready: true, missingObjects: probe.objects.map(item => item.digest).filter(digest => !stored.has(digest)) };
+      if (lostManifest) { lostManifest = false; throw new TypeError('清单响应丢失'); }
       manifests.push((body as { manifest: { snapshot: { digest: string } } }).manifest);
       return { ready: true };
     }
@@ -392,13 +406,17 @@ test('source connector retries the same frozen transfer after a lost response an
   const worker = new RemoteCodexWorker({ deviceId: 'A', workspace: root, directory: journal, request, runnerFactory });
   let captures = 0;
   worker.sourceSnapshot = async () => { captures++; return first; };
-  await assert.rejects(worker.sync(), /fetch failed/);
+  await assert.rejects(worker.sync(), /对象上传中断/);
   assert.equal(captures, 1);
   worker.close();
   const restarted = new RemoteCodexWorker({ deviceId: 'A', workspace: root, directory: journal, request, runnerFactory });
   restarted.sourceSnapshot = async () => { throw new Error('重启后不能重读已经变化的来源'); };
-  t.after(() => restarted.close());
-  await restarted.sync();
+  await assert.rejects(restarted.sync(), /清单响应丢失/);
+  restarted.close();
+  const finalWorker = new RemoteCodexWorker({ deviceId: 'A', workspace: root, directory: journal, request, runnerFactory });
+  finalWorker.sourceSnapshot = async () => { throw new Error('不能重读来源'); };
+  t.after(() => finalWorker.close());
+  await finalWorker.sync();
   assert.equal(captures, 1);
   assert.equal(manifests.length, 1);
   assert.equal(manifests[0]!.snapshot.digest, first.digest);

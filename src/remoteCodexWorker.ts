@@ -175,7 +175,13 @@ export class RemoteCodexWorker {
       try {
         const context = await this.outboundSnapshot(job);
         const detached = detachSnapshot(context);
-        for (const item of detached.objects) await this.request('POST', item.data,
+        const probe = await this.request('POST', { executionId: job.id, deviceId: this.deviceId, probe: detached.manifest },
+          `/api/conversations/${job.conversationId}/transfer`) as { missingObjects?: unknown };
+        const known = new Set(detached.objects.map(item => item.digest));
+        if (!Array.isArray(probe?.missingObjects) || probe.missingObjects.some(item => typeof item !== 'string' || !known.has(item)) ||
+            new Set(probe.missingObjects).size !== probe.missingObjects.length) throw new Error('交接对象查询响应无效');
+        const missing = new Set(probe.missingObjects as string[]);
+        for (const item of detached.objects.filter(item => missing.has(item.digest))) await this.request('POST', item.data,
           `/api/conversations/${job.conversationId}/transfer/objects/${item.digest}?executionId=${job.id}&deviceId=${this.deviceId}&mimeType=${encodeURIComponent(item.mimeType)}`);
         await this.request('POST', { executionId: job.id, deviceId: this.deviceId, manifest: detached.manifest }, `/api/conversations/${job.conversationId}/transfer`);
       } catch (caught: unknown) {

@@ -198,10 +198,29 @@ export function createConversations({ database, tenantId, history, delivery, exe
       const entries = cleanContextEntries(context.entries);
       return { messages: entries.slice(offset, offset + 100).map(entry => ({ ...entry, role: ['user', 'assistant', 'tool_call', 'tool_result'].includes(entry.role) ? entry.role : 'tool_result' })), total: entries.length, offset, digest: context.digest };
     },
-    transfer(id: string, executionId: string, action: 'read' | 'upload', actor: { id?: string }, input?: { deviceId?: unknown; context?: unknown; bundle?: unknown; manifest?: unknown; format?: unknown; readyOnly?: unknown; failure?: unknown }) {
+    transfer(id: string, executionId: string, action: 'read' | 'upload', actor: { id?: string }, input?: { deviceId?: unknown; context?: unknown; bundle?: unknown; manifest?: unknown; probe?: unknown; format?: unknown; readyOnly?: unknown; failure?: unknown }) {
       const job = checkedTransfer(id, executionId, action, actor, input?.deviceId);
       const contextId = job.contextSourceDeviceId === 'local' ? job.contextId! : job.id;
       if (action === 'upload') {
+        if (input?.probe !== undefined) {
+          let manifest: DetachedManifest;
+          try { manifest = verifyDetachedManifest(input.probe); }
+          catch { throw httpError(400, '交接清单格式或摘要无效'); }
+          if (!manifest.snapshot.sources.includes(job.remoteContext!.sourceSessionId)) throw httpError(400, '交接清单缺少原始来源');
+          const sealed = database.readContextManifest(tenantId, executionId);
+          const existing = database.readSessionContext(tenantId, contextId);
+          if ((sealed && sealed.manifestDigest !== manifest.manifestDigest) ||
+              (existing && (existing.digest !== manifest.snapshot.digest || existing.id !== manifest.snapshot.id)) ||
+              (job.status !== 'queued' && !sealed)) throw httpError(409, '交接记录已冻结，不能覆盖');
+          const missingObjects: string[] = [];
+          for (const item of manifest.objects) {
+            const stored = database.readContextObjectMetadata(tenantId, executionId, item.digest);
+            if (!stored) missingObjects.push(item.digest);
+            else if (stored.mimeType !== item.mimeType || stored.bytes !== item.bytes) throw httpError(409, '已上传交接对象与清单不一致');
+          }
+          if (sealed && missingObjects.length) throw httpError(409, '已封存交接清单缺少对象');
+          return { ready: true, missingObjects };
+        }
         if (job.status !== 'queued' && !database.readSessionContext(tenantId, contextId)) throw httpError(409, '执行已不再等待交接包');
         if (typeof input?.failure === 'string') {
           if (!input.failure || input.failure.length > 2000) throw httpError(400, '交接失败信息无效');
