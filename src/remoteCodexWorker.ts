@@ -1,10 +1,12 @@
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile, rename, realpath, stat } from 'node:fs/promises';
 import { CodexRunner, pickNativeDirectory } from './codexExecution.js';
 import { AcpPreferredRunner, AcpTaskRunner, AgentRunnerSet, configuredAcpAgents } from './acpAgent.js';
 import { contextPrompt, freezeContext, readContext, type ContextDelivery, type ContextEntry, type SessionContext } from './contextCompiler.js';
 import { verifyBundle, verifySnapshot } from '@auto-workflow/context-engine';
 import { detachSnapshot, restoreDetachedSnapshot, verifyDetachedManifest } from '@auto-workflow/context-engine/detached-bundle';
+import { loadOrFreezeCapture } from '@auto-workflow/context-engine/capture-journal';
 import type { AgentProject, ExecutionControl, PromptImageReference, RemoteContextHandoff, TaskCenterData } from '../public/taskTypes.js';
 
 interface RemoteJob {
@@ -116,6 +118,11 @@ export class RemoteCodexWorker {
     const supplemental = inherited.filter(entry => entry.source !== meta.sourceSessionId);
     return freezeContext([...original.entries, ...supplemental], [...original.sources, meta.sourceSessionId, ...new Set(supplemental.map(entry => entry.source))], original.partial);
   }
+  async outboundSnapshot(job: RemoteJob) {
+    const identity = createHash('sha256').update(JSON.stringify([job.id, job.conversationId, job.deviceId,
+      job.contextSourceDeviceId, job.contextDigest, job.remoteContext])).digest('hex');
+    return loadOrFreezeCapture(path.join(this.directory, 'context'), job.id, identity, () => this.sourceSnapshot(job));
+  }
   async prepareContext(job: RemoteJob) {
     if (!job.conversationId || !job.userMessage) return job;
     let snapshot: SessionContext;
@@ -166,14 +173,16 @@ export class RemoteCodexWorker {
     for (const job of snapshot.executions.filter(candidate => candidate.contextSourceDeviceId === this.deviceId && candidate.deviceId !== this.deviceId && candidate.status === 'queued' && candidate.remoteContext && !this.published.has(candidate.id))) {
       if (!job.conversationId) continue;
       try {
-        const context = await this.sourceSnapshot(job);
+        const context = await this.outboundSnapshot(job);
         const detached = detachSnapshot(context);
         for (const item of detached.objects) await this.request('POST', item.data,
           `/api/conversations/${job.conversationId}/transfer/objects/${item.digest}?executionId=${job.id}&deviceId=${this.deviceId}&mimeType=${encodeURIComponent(item.mimeType)}`);
         await this.request('POST', { executionId: job.id, deviceId: this.deviceId, manifest: detached.manifest }, `/api/conversations/${job.conversationId}/transfer`);
       } catch (caught: unknown) {
         const transient = caught as ErrorLike & { status?: number };
-        if (transient.status && transient.status >= 500 || ['AbortError', 'TimeoutError'].includes(transient.name)) throw caught;
+        if (typeof transient.status === 'number' && (transient.status >= 500 || [408, 429].includes(transient.status)) ||
+            ['AbortError', 'TimeoutError', 'TypeError'].includes(transient.name) ||
+            ['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENETUNREACH'].includes(transient.code || '')) throw caught;
         await this.request('POST', { executionId: job.id, deviceId: this.deviceId, failure: asError(caught).message.slice(0, 2000) }, `/api/conversations/${job.conversationId}/transfer`);
       }
       this.published.add(job.id);

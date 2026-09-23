@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -10,6 +11,7 @@ import { issueRecordSource } from '@auto-workflow/context-adapters/issue';
 import { readBundleDirectory, writeBundleDirectory } from '@auto-workflow/context-engine/directory-bundle';
 import { detachSnapshot, restoreDetachedSnapshot, verifyDetachedManifest } from '@auto-workflow/context-engine/detached-bundle';
 import { importDetachedSnapshotDirectory, readDetachedBundleDirectory, writeDetachedBundleDirectory } from '@auto-workflow/context-engine/portable-bundle';
+import { loadOrFreezeCapture } from '@auto-workflow/context-engine/capture-journal';
 
 test('a new source enters the same capture, snapshot and bundle flow', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'context-engine-'));
@@ -127,6 +129,25 @@ test('bundle CLI exports, verifies and imports a snapshot independently of a tas
   assert.equal(cli('verify', path.join(root, 'markdown')).digest, markdown.digest);
   const legacy = await writeBundleDirectory(packSnapshot(snapshot), root, 'legacy');
   assert.equal(cli('verify', legacy).digest, snapshot.digest);
+});
+
+test('capture journal reuses one sealed snapshot after restart and rejects identity drift or corruption', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'context-capture-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const key = randomUUID(), identity = 'a'.repeat(64);
+  const first = freezeSnapshot([{ role: 'user', source: 'session-a', text: '冻结前' }], ['session-a']);
+  let reads = 0;
+  assert.deepEqual(await loadOrFreezeCapture(root, key, identity, async () => { reads++; return first; }), first);
+  assert.deepEqual(await loadOrFreezeCapture(root, key, identity, async () => { reads++; throw new Error('不应重读来源'); }), first);
+  assert.equal(reads, 1);
+  await assert.rejects(loadOrFreezeCapture(root, key, 'b'.repeat(64), async () => first), { code: 'INVALID_CAPTURE' });
+  await writeFile(path.join(root, `capture-${key}.json`), '{broken');
+  await assert.rejects(loadOrFreezeCapture(root, key, identity, async () => first), { code: 'INVALID_CAPTURE' });
+  const concurrentKey = randomUUID();
+  const second = freezeSnapshot([{ role: 'user', source: 'session-a', text: '并发来源' }], ['session-a']);
+  const concurrent = await Promise.all([first, second].map(snapshot => loadOrFreezeCapture(root, concurrentKey, identity, async () => snapshot)));
+  assert.equal(concurrent[0]!.digest, concurrent[1]!.digest);
+  assert.equal((await loadOrFreezeCapture(root, concurrentKey, identity, async () => { throw new Error('不应重读'); })).digest, concurrent[0]!.digest);
 });
 
 test('issue source captures authorized records through the common engine without mutating provider state', async () => {

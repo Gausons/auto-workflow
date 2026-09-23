@@ -10,6 +10,7 @@
 - `detachSnapshot/restoreDetachedSnapshot`：生成 v3 清单，将原始图片字节拆成按 SHA-256 寻址的对象；还原后验证原 v1 快照摘要。
 - `writeBundleDirectory/readBundleDirectory`：写入与校验旧 v2 目录包。
 - `writeDetachedBundleDirectory/readDetachedBundleDirectory/importDetachedSnapshotDirectory`：导出、校验及导入 v3 原始字节目录包；导入只产生经过验证的本地快照文件。
+- `loadOrFreezeCapture`：按宿主操作标识和身份指纹持久冻结来源快照；断线重试与进程重启复用同一份材料。
 
 `@auto-workflow/context-adapters` 包含当前 Codex/Claude 会话交付适配器、受授权目录限制的 Markdown 适配器，以及只读问题记录适配器。新增数据源实现 `SourceAdapter` 即可复用上述流程。插件代码必须由宿主显式注册；来源材料和 Agent 输出均是不可信数据。
 

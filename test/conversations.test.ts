@@ -368,6 +368,43 @@ test('cross-device A to B waits for the source packet and runs in B selected dir
   assert.equal(failedJob?.status, 'failed'); assert.match(failedJob.message || '', /原始会话不存在/); assert.equal(launched.length, 1);
 });
 
+test('source connector retries the same frozen transfer after a lost response and restart', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'transfer-retry-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const journal = path.join(root, 'journal'), executionId = randomUUID(), conversationId = randomUUID();
+  const job = { id: executionId, conversationId, deviceId: 'B', contextSourceDeviceId: 'A', status: 'queued',
+    contextDigest: 'a'.repeat(64), remoteContext: { sourceDeviceId: 'A', sourceSessionId: 'source-a' } };
+  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+  const first = freezeContext([{ role: 'user', text: `冻结前的来源 data:image/png;base64,${image.toString('base64')}`, source: 'source-a' }], ['source-a']);
+  let lost = true, objectUploads = 0;
+  const manifests: Array<{ snapshot: { digest: string } }> = [];
+  const request = (method: string, body?: unknown, endpoint?: string) => {
+    if (method === 'GET') return { executions: [job], directoryRequests: [] };
+    if (endpoint?.includes('/transfer/objects/')) { objectUploads++; return { ready: true }; }
+    if (endpoint?.includes('/transfer')) {
+      if (lost) { lost = false; throw new TypeError('fetch failed'); }
+      manifests.push((body as { manifest: { snapshot: { digest: string } } }).manifest);
+      return { ready: true };
+    }
+    throw new Error('意外请求');
+  };
+  const runnerFactory = () => ({ projects: async () => [], start: async () => {}, respond: async () => {}, stop: async () => {}, reconcile: async () => {}, close() {} });
+  const worker = new RemoteCodexWorker({ deviceId: 'A', workspace: root, directory: journal, request, runnerFactory });
+  let captures = 0;
+  worker.sourceSnapshot = async () => { captures++; return first; };
+  await assert.rejects(worker.sync(), /fetch failed/);
+  assert.equal(captures, 1);
+  worker.close();
+  const restarted = new RemoteCodexWorker({ deviceId: 'A', workspace: root, directory: journal, request, runnerFactory });
+  restarted.sourceSnapshot = async () => { throw new Error('重启后不能重读已经变化的来源'); };
+  t.after(() => restarted.close());
+  await restarted.sync();
+  assert.equal(captures, 1);
+  assert.equal(manifests.length, 1);
+  assert.equal(manifests[0]!.snapshot.digest, first.digest);
+  assert.equal(objectUploads, 2);
+});
+
 test('local source can hand its frozen context to a remote device without copying the repository', async t => {
   const f = await fixture(t), target = path.join(f.root, 'target'), selected = path.join(f.root, 'selected-repo'); await mkdir(target); await mkdir(selected);
   const center = createTaskCenter({ database: f.database, tenantId: 'default', history: f.history }), actor = { id: 'connector-b' }, requester = { id: 'requester' };
