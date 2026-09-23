@@ -75,9 +75,10 @@ test('performs a real ACP v1 initialize, session/new, session/prompt and update 
   await connection.configure(session, 'm2', 'high');
   const imageBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
   const image = path.join(root, 'history.png'); await writeFile(image, imageBytes);
+  const markdown = path.join(root, 'handoff.md'); await writeFile(markdown, '# 会话交接\n\n原始图片已内嵌');
   const sha256 = (await import('node:crypto')).createHash('sha256').update(imageBytes).digest('hex');
-  assert.deepEqual(await connection.prompt('执行', [{ id: 'image-1', path: image, mimeType: 'image/png', sha256, size: imageBytes.length }]), { stopReason: 'end_turn' });
-  assert.equal(updates[0].update.content.text, 'ACP 完成:yes:text,text,image');
+  assert.deepEqual(await connection.prompt('执行', [{ id: 'image-1', path: image, mimeType: 'image/png', sha256, size: imageBytes.length }], markdown), { stopReason: 'end_turn' });
+  assert.equal(updates[0].update.content.text, 'ACP 完成:yes:text,resource_link,text,image');
 
 });
 

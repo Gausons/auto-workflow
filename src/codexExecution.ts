@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { taskContent } from '../public/taskContent.js';
 import { gitBranches, switchGitBranch, decodeAttachments, saveAttachments } from './taskWorkspace.js';
-import { realpath, stat, rm } from 'node:fs/promises';
+import { readFile, realpath, stat, rm } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
 import { CodexDesktopBridge, readDesktopTerminal } from './codexDesktopBridge.js';
 import { CodexAppServer } from './codexAppServer.js';
@@ -216,6 +216,14 @@ export class CodexRunner {
     this.jobs.set(job.id, stored); job = stored;
     let creating = false, submitting = false;
     try {
+      if (job.contextMarkdownPath) {
+        if (!path.isAbsolute(job.contextMarkdownPath) || !(await stat(job.contextMarkdownPath)).isFile()) throw new Error('会话交接文件不可读取');
+      }
+      const imageInputs = await Promise.all((job.promptImages || []).map(async image => {
+        const bytes = await readFile(image.path);
+        if (bytes.length !== image.size || createHash('sha256').update(bytes).digest('hex') !== image.sha256) throw new Error(`历史图片 ${image.id} 完整性校验失败`);
+        return { type: 'localImage', path: image.path };
+      }));
       let client = await this.connectJob(job);
       this.publish(job, { status: 'launching', message: job.resumeThreadId ? '正在恢复原 Codex 会话' : '正在创建 Codex 会话' });
       if (job.resumeThreadId) {
@@ -244,7 +252,7 @@ export class CodexRunner {
         catch { /* Keep the generated Codex title. */ }
       }
       submitting = true;
-      const turn = await client.call('turn/start', { threadId: job.threadId, input: [{ type: 'text', text: job.prompt }], clientUserMessageId: job.id }) as { turn: { id: string } };
+      const turn = await client.call('turn/start', { threadId: job.threadId, input: [{ type: 'text', text: job.prompt }, ...imageInputs], clientUserMessageId: job.id }) as { turn: { id: string } };
       submitting = false;
       this.publish(job, { turnId: turn.turn.id, ...(job.status === 'launching' ? { status: 'running', message: 'Codex 正在执行' } : {}) });
       try { if (job.executionTransport !== 'desktop-ipc') await this.desktopOpener(job.threadId!); this.publish(job, { desktopOpened: true }); }

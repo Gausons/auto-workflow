@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, readFile, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
@@ -289,6 +289,26 @@ test('resumes the original thread without creating or renaming it, and routes co
   assert.equal(last(updates).id, 'job-2'); assert.equal(last(updates).output, '第二轮回复');
   await runner.notification({ method: 'turn/completed', params: { threadId, turn: { id: 'new-2', status: 'completed' } } });
   assert.deepEqual(opened, [threadId, threadId]); runner.close();
+});
+
+test('native Codex turn receives the Markdown file reference and unchanged original image bytes', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'codex-handoff-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const markdown = path.join(root, 'handoff.md'), image = path.join(root, 'original.png');
+  const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+  await writeFile(markdown, '# 交接'); await writeFile(image, bytes);
+  const ref = { id: 'image-1', path: image, mimeType: 'image/png' as const, size: bytes.length, sha256: (await import('node:crypto')).createHash('sha256').update(bytes).digest('hex') };
+  const client = new FakeClient(), runner = new CodexRunner({ clientFactory: () => client });
+  await runner.start({ ...job(), cwd: root, prompt: `读取 ${markdown} 后继续`, contextMarkdownPath: markdown, promptImages: [ref] });
+  assert.deepEqual(client.calls.find(call => call.method === 'turn/start')?.params?.input, [
+    { type: 'text', text: `读取 ${markdown} 后继续` }, { type: 'localImage', path: image }
+  ]);
+  runner.close();
+  await writeFile(image, 'tampered');
+  const rejected = new FakeClient(), rejectedRunner = new CodexRunner({ clientFactory: () => rejected });
+  await rejectedRunner.start({ ...job(), id: 'bad-image', cwd: root, contextMarkdownPath: markdown, promptImages: [ref] });
+  assert.equal(rejected.calls.some(call => call.method === 'thread/start' || call.method === 'turn/start'), false);
+  rejectedRunner.close();
 });
 
 test('busy or unavailable original threads never fall back to a new thread', async () => {

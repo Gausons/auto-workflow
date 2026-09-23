@@ -2,6 +2,8 @@
 import * as acp from '@agentclientprotocol/sdk';
 import { Readable, Writable } from 'node:stream';
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 const sessions = new Map();
 acp.agent({ name: 'conversation-fixture' })
   .onRequest(acp.methods.agent.initialize, () => ({ protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: { loadSession: true }, authMethods: [], agentInfo: { name: 'fixture', version: '1' } }))
@@ -16,10 +18,12 @@ acp.agent({ name: 'conversation-fixture' })
   })
   .onRequest(acp.methods.agent.session.prompt, async ctx => {
     const text = ctx.params.prompt.filter(p => p.type === 'text').map(p => p.text).join('\n');
+    const handoff = ctx.params.prompt.find(p => p.type === 'resource_link' && p.mimeType === 'text/markdown');
+    const context = handoff ? await readFile(fileURLToPath(handoff.uri), 'utf8') : '';
     const count = (sessions.get(ctx.params.sessionId) || 0) + 1;
     sessions.set(ctx.params.sessionId, count);
-    const output = text.includes('inherited_context')
-      ? `已继承上下文：${text.includes('保持原接口兼容') ? '保持原接口兼容' : '历史可用'}；收到：${text.split('本轮用户消息：\n').at(-1)}`
+    const output = handoff
+      ? `已继承上下文：${context.includes('保持原接口兼容') ? '保持原接口兼容' : '历史可用'}；收到：${text.split('本轮用户消息：\n').at(-1)}`
       : `同一会话第 ${count} 轮：${text}`;
     await ctx.client.notify(acp.methods.client.session.update, { sessionId: ctx.params.sessionId, update: { sessionUpdate: 'tool_call', toolCallId: 'test-tool', title: '检查上下文', kind: 'read', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: '工具结果已保留' } }] } });
     await ctx.client.notify(acp.methods.client.session.update, { sessionId: ctx.params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: output } } });

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { freezeContext, contextPrompt } from '../src/contextCompiler.js';
@@ -24,8 +24,9 @@ test('model summary cites source records, excludes image data, and reuses the sa
   }) as typeof fetch;
   const summarize = createContextModelSummarizer({ apiKey: 'test-key', baseUrl: 'https://example.invalid/v1', model: 'test-model', timeoutMs: 1000, fetchImpl });
   const first = await contextPrompt(snapshot, '继续', root, 120000, true, summarize);
-  assert.match(first.prompt, /模型整理/);
-  assert.match(first.prompt, /保持接口兼容（记录 1）/);
+  assert.match(first.prompt, /Markdown 交接文件/);
+  assert.doesNotMatch(first.prompt, /保持接口兼容/);
+  assert.match(await readFile(first.markdownPath, 'utf8'), /保持接口兼容（记录 1）/);
   assert.equal((await summarize(snapshot, snapshot.entries, root)).status, 'complete');
   assert.equal(calls, 1);
 });
@@ -35,13 +36,13 @@ test('unavailable or invalid model summary is labeled and the handoff remains us
   t.after(() => rm(root, { recursive: true, force: true }));
   const snapshot = freezeContext([{ role: 'user', source: 'source', text: '继续任务' }], ['source']);
   const unavailable = await contextPrompt(snapshot, '继续', root);
-  assert.match(unavailable.prompt, /未配置模型摘要服务/);
+  assert.match(await readFile(unavailable.markdownPath, 'utf8'), /未配置模型摘要服务/);
   const invalid = createContextModelSummarizer({
     apiKey: 'test-key', baseUrl: 'https://example.invalid/v1', model: 'test-model', timeoutMs: 1000,
     fetchImpl: (async () => Response.json({ output_text: JSON.stringify({ goal: [{ text: '凭空结论', refs: [99] }], constraints: [], decisions: [], completed: [], next: [], uncertain: [] }) })) as typeof fetch
   });
   const fallback = await contextPrompt(snapshot, '继续', root, 120000, true, invalid);
   assert.notEqual(fallback.markdownPath, unavailable.markdownPath);
-  assert.match(fallback.prompt, /模型整理失败，已使用原文摘取/);
-  assert.match(fallback.prompt, /继续任务/);
+  assert.match(await readFile(fallback.markdownPath, 'utf8'), /模型整理失败，已使用原文摘取/);
+  assert.match(await readFile(fallback.markdownPath, 'utf8'), /继续任务/);
 });

@@ -2,8 +2,9 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { Readable, Writable } from 'node:stream';
-import { readFile, realpath } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import * as acp from '@agentclientprotocol/sdk';
 import { httpError } from './rbac.js';
 import type { AgentProject, Execution, ExecutionStatus, PromptImageReference } from '../public/taskTypes.js';
@@ -17,7 +18,7 @@ interface RunnerJob {
   title?: string; cwd?: string; prompt?: string; resumeSessionId?: string; sessionId?: string | null;
   model?: string | null; reasoningEffort?: string | null; conversationId?: string; output?: string;
   contextEvents?: unknown[]; request?: unknown; desktopOpened?: boolean; desktopMessage?: string; updatedAt?: string;
-  promptImages?: PromptImageReference[];
+  promptImages?: PromptImageReference[]; contextMarkdownPath?: string;
   [key: string]: unknown;
 }
 type RunnerProject = Partial<AgentProject> & { id: string };
@@ -41,7 +42,7 @@ interface ConnectionLike extends EventEmitter {
   configure(session: acp.NewSessionResponse, modelId?: string | null, reasoningEffort?: string | null): Promise<acp.SessionConfigOption[]>;
   catalog(session: acp.NewSessionResponse): Promise<Catalog>;
   closeSession(): Promise<void>;
-  prompt(text: string, images?: PromptImageReference[]): Promise<acp.PromptResponse>;
+  prompt(text: string, images?: PromptImageReference[], markdownPath?: string): Promise<acp.PromptResponse>;
   supportsImages?(): boolean;
   respond(decision: string): void;
   cancel(): Promise<void>;
@@ -227,10 +228,16 @@ export class AcpAgentConnection extends EventEmitter {
 
   supportsImages() { return this.capabilities.promptCapabilities?.image === true; }
 
-  async prompt(text: string, images: PromptImageReference[] = []) {
+  async prompt(text: string, images: PromptImageReference[] = [], markdownPath?: string) {
     if (!this.sessionId) throw new Error('ACP 会话尚未创建');
     this.promptStarted = true;
     const prompt: acp.ContentBlock[] = [{ type: 'text', text }];
+    if (markdownPath) {
+      if (!path.isAbsolute(markdownPath)) throw new Error('会话交接文件路径无效');
+      const file = await stat(markdownPath);
+      if (!file.isFile()) throw new Error('会话交接文件不可读取');
+      prompt.push({ type: 'resource_link', name: path.basename(markdownPath), uri: pathToFileURL(markdownPath).href, mimeType: 'text/markdown', size: file.size });
+    }
     if (this.supportsImages()) for (const image of images) {
       const bytes = await readFile(image.path);
       if (bytes.length !== image.size || createHash('sha256').update(bytes).digest('hex') !== image.sha256) throw new Error(`历史图片 ${image.id} 完整性校验失败`);
@@ -372,7 +379,7 @@ export class AcpTaskRunner {
         catch { this.publish(job, { desktopOpened: false, desktopMessage: 'Codex 会话已创建，但无法自动在客户端打开。' }); }
       }
       acceptingUpdates = true; promptDispatched = true;
-      void connection.prompt(job.prompt!, job.promptImages).then((result) => {
+      void connection.prompt(job.prompt!, job.promptImages, job.contextMarkdownPath).then((result) => {
         const status = result.stopReason === 'end_turn' ? 'completed' : result.stopReason === 'cancelled' ? 'interrupted' : 'failed';
         this.publish(job, { status, request: null, ...(job.promptImages?.length ? { contextImageDelivery: connection.supportsImages?.() ? 'native' : 'file-reference' } : {}), message: status === 'completed' ? 'ACP 本轮执行完成' : `ACP 执行结束：${result.stopReason}` });
         this.connections.delete(job.id);
