@@ -45,11 +45,7 @@
             <p class="eyebrow">个人缺陷自动处理原型</p>
             <h1>集中管理缺陷，并直接生成 Agent 任务</h1>
           </div>
-          <div class="top-actions">
-            <button class="button secondary" id="assignAll" type="button">一键分配</button>
-            <button class="button secondary" id="syncNow" type="button">立即拉取</button>
-            <button class="button primary" id="createTaskFromBug" type="button">从缺陷生成任务</button>
-          </div>
+          <div class="top-actions" id="workbenchActions"></div>
         </header>
 
         <section class="page task-center" data-page="tasks" id="taskCenter" hidden aria-label="任务中心"></section>
@@ -101,178 +97,19 @@
         </section>
 
         <section class="settings-panel" data-settings-panel="config" hidden>
-          <div class="config-band" id="config">
-          <form class="config-form" id="configForm">
-            <div class="form-heading">
-              <div>
-                <h2>对接配置</h2>
-                <p>默认数据源为 Jira Cloud。地址、JQL 和凭据在组织环境文件中配置，修改后重启。</p>
-              </div>
-            </div>
-
-            <div class="fields-grid">
-              <label>
-                <span>扩展数据源经办人</span>
-                <div class="combo-field">
-                  <input name="assignee" autocomplete="off" placeholder="人员 ID（Jira 请通过 JQL 筛选）" />
-                  <select id="assigneeSelect" aria-label="选择经办人">
-                    <option value="">选择员工</option>
-                  </select>
-                </div>
-              </label>
-              <label>
-                <span>扩展数据源操作人</span>
-                <input name="operatorId" autocomplete="off" placeholder="流程流转时使用" />
-              </label>
-              <label>
-                <span>IDE 执行路径</span>
-                <input name="codexWorkspaceDir" autocomplete="off" placeholder="/srv/bugflow/repos/my-project" />
-                <small id="workspacePolicy" hidden>工作目录由团队管理员配置；需要调整时请联系管理员。</small>
-              </label>
-              <label>
-                <span>轮询间隔（分钟）</span>
-                <input name="intervalMinutes" type="number" min="1" max="240" />
-              </label>
-              <label class="checkbox-field">
-                <input name="selfOnly" type="checkbox" value="true" />
-                <span>只看当前个人 Token 数据</span>
-              </label>
-              <label class="checkbox-field">
-                <input name="enableAIAssignment" type="checkbox" value="true" />
-                <span>开启 AI 分配建议</span>
-              </label>
-              <label class="checkbox-field">
-                <input name="enableAutoAssignment" type="checkbox" value="true" />
-                <span>开启自动分配</span>
-              </label>
-              <label>
-                <span>AI 分配模型</span>
-                <select name="aiAssignmentModel">
-                  <option value="gpt-5.6-sol">GPT-5.6 Sol</option>
-                  <option value="gpt-5.6-terra">GPT-5.6 Terra</option>
-                  <option value="gpt-5.6-luna">GPT-5.6 Luna</option>
-                  <option value="gpt-5.5">GPT-5.5</option>
-                  <option value="gpt-5.4">GPT-5.4</option>
-                  <option value="gpt-5.4-mini" selected>GPT-5.4 Mini</option>
-                </select>
-              </label>
-              <label>
-                <span>OpenAI Base URL</span>
-                <input name="openaiBaseUrl" autocomplete="off" placeholder="https://api.openai.com/v1" />
-              </label>
-              <label>
-                <span>OpenAI 请求超时（ms）</span>
-                <input name="openaiTimeoutMs" type="number" min="5000" max="120000" />
-              </label>
-            </div>
-
-            <div class="form-actions">
-              <div class="credential-state" id="credentialState">凭证状态读取中</div>
-              <button class="button secondary" type="button" id="toggleScheduler">开启定时</button>
-              <button class="button primary" type="submit">保存配置</button>
-            </div>
-          </form>
-          </div>
+          <div id="reactConfigPanel"></div>
         </section>
 
         <section class="settings-panel" data-settings-panel="assignment" hidden>
-          <section class="config-band">
-            <div class="panel-title">
-              <div>
-                <h2>分配规则</h2>
-                <p class="panel-subtitle">维护 AI 分配建议可选人员和职责，保存后用于下一次推荐。</p>
-              </div>
-              <span id="assignmentPeopleState">读取中</span>
-            </div>
-            <form class="config-form" id="assignmentPeopleForm">
-              <div class="fields-grid assignment-add-grid">
-                <label>
-                  <span>姓名</span>
-                  <input name="name" autocomplete="off" required />
-                </label>
-                <label>
-                  <span>员工号</span>
-                  <input name="employeeId" autocomplete="off" required />
-                </label>
-                <label class="wide-field">
-                  <span>职责</span>
-                  <textarea name="responsibility" rows="3" required></textarea>
-                </label>
-              </div>
-              <div class="form-actions">
-                <button class="button primary" type="submit">添加人员</button>
-              </div>
-            </form>
-          </section>
-
-          <section class="task-band">
-            <div class="panel-title">
-              <h2>人员职责</h2>
-              <span>编辑后逐条保存</span>
-            </div>
-            <div class="assignment-people-list" id="assignmentPeopleList"></div>
-          </section>
+          <div id="reactAssignmentPanel"></div>
         </section>
             </div>
           </div>
         </section>
 
-        <section class="page" data-page="workbench">
-          <section class="metric-grid" aria-label="缺陷概览">
-            <div class="metric">
-              <span>缺陷总数</span>
-              <strong id="metricTotal">0</strong>
-            </div>
-            <div class="metric">
-              <span>未处理</span>
-              <strong id="metricPending">0</strong>
-            </div>
-            <div class="metric">
-              <span>处理中</span>
-              <strong id="metricProcessing">0</strong>
-            </div>
-            <div class="metric">
-              <span>已解决</span>
-              <strong id="metricResolved">0</strong>
-            </div>
-          </section>
-
-        <section class="workbench" id="workbench">
-          <div class="bug-list-panel">
-            <div class="panel-title">
-              <h2>个人缺陷</h2>
-              <span id="syncState">尚未同步</span>
-            </div>
-            <div class="bug-list" id="bugList"></div>
-          </div>
-
-          <div class="bug-detail-panel">
-            <div class="panel-title">
-              <h2>缺陷详情</h2>
-              <span id="selectedState">未选择</span>
-            </div>
-            <article class="bug-detail" id="bugDetail"></article>
-          </div>
-        </section>
-        </section>
+        <section class="page" data-page="workbench"><div id="reactWorkbenchPage"></div></section>
 
       </main>
-    </div>
-
-    <div class="attachment-preview-modal" id="attachmentPreviewModal" hidden>
-      <div class="attachment-preview-dialog" role="dialog" aria-modal="true" aria-labelledby="attachmentPreviewTitle">
-        <div class="attachment-preview-header">
-          <strong id="attachmentPreviewTitle">图片预览</strong>
-          <div class="attachment-preview-actions">
-            <a class="button secondary" id="attachmentPreviewDownload" href="#" download>下载</a>
-            <button class="preview-close" id="attachmentPreviewClose" type="button" aria-label="关闭图片预览" title="关闭">×</button>
-          </div>
-        </div>
-        <div class="attachment-preview-stage">
-          <img id="attachmentPreviewImage" alt="" />
-          <p id="attachmentPreviewState">图片加载中</p>
-        </div>
-      </div>
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>

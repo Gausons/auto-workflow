@@ -12,7 +12,7 @@ function renderAccount(reload = vi.fn()) {
 
 describe('AccountPanel', () => {
   beforeEach(() => { sessionStorage.clear(); });
-  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  afterEach(() => { cleanup(); delete (window as Window & { __bugflowIdentity?: unknown }).__bugflowIdentity; vi.unstubAllGlobals(); });
 
   it('receives the authenticated identity from bootstrap', async () => {
     renderAccount();

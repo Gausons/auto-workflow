@@ -27,6 +27,8 @@ export function AuthScreen({ hasSession, reload = () => location.reload() }: Aut
       setNotice(detail?.message || '登录状态已失效，请重新登录');
     };
     window.addEventListener(AUTH_REQUIRED_EVENT, handleRequired);
+    const pendingError = (window as Window & { __bugflowAuthError?: string }).__bugflowAuthError;
+    if (pendingError) handleRequired(new CustomEvent(AUTH_REQUIRED_EVENT, { detail: { message: pendingError } }));
     return () => window.removeEventListener(AUTH_REQUIRED_EVENT, handleRequired);
   }, []);
 

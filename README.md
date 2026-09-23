@@ -296,7 +296,7 @@ pnpm tenant -- migrate [组织ID]
 
 ## 开发
 
-前端计划采用 React + Vite 的纯 Web 架构；详细决策、工程边界和渐进迁移步骤见[Web 前端技术选型](docs/frontend-web-technology-selection.md)。
+前端正按 React + TypeScript + Vite 的纯 Web 架构渐进迁移：登录、账号、成员、缺陷工作台和设置已使用 React，任务中心与历史会话仍由兼容层承载。详细决策、工程边界和后续步骤见[Web 前端技术选型](docs/frontend-web-technology-selection.md)。
 
 ```bash
 # 开发模式（监听源码变化）

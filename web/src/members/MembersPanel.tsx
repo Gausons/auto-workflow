@@ -29,6 +29,8 @@ export function MembersPanel() {
   useEffect(() => {
     const handleBootstrap = (event: Event) => setIdentity((event as CustomEvent<BootstrapDetail>).detail || {});
     window.addEventListener('bugflow:bootstrap', handleBootstrap);
+    const identity = (window as Window & { __bugflowIdentity?: BootstrapDetail }).__bugflowIdentity;
+    if (identity) setIdentity(identity);
     return () => window.removeEventListener('bugflow:bootstrap', handleBootstrap);
   }, []);
 

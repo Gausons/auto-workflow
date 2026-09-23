@@ -15,6 +15,8 @@ export function AccountPanel({ reload = () => location.reload() }: AccountPanelP
       setUser(value || null);
     };
     window.addEventListener('bugflow:bootstrap', handleBootstrap);
+    const identity = (window as Window & { __bugflowIdentity?: { user?: CurrentUser | null } }).__bugflowIdentity;
+    if (identity) setUser(identity.user || null);
     return () => window.removeEventListener('bugflow:bootstrap', handleBootstrap);
   }, []);
 

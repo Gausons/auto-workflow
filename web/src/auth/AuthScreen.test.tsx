@@ -12,7 +12,15 @@ function renderAuth(reload = vi.fn()) {
 
 describe('AuthScreen', () => {
   beforeEach(() => { sessionStorage.clear(); });
-  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  afterEach(() => { cleanup(); delete (window as Window & { __bugflowAuthError?: string }).__bugflowAuthError; vi.unstubAllGlobals(); });
+
+  it('shows login when an expired session was rejected before React mounted', async () => {
+    (window as Window & { __bugflowAuthError?: string }).__bugflowAuthError = '登录会话已失效';
+    const client = new QueryClient();
+    render(<QueryClientProvider client={client}><AuthScreen hasSession /></QueryClientProvider>);
+    expect(await screen.findByRole('button', { name: '登录' })).toBeTruthy();
+    expect(screen.getByText('登录会话已失效')).toBeTruthy();
+  });
 
   it('logs in and stores the member session', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ token: 'member-token' }), { status: 200, headers: { 'Content-Type': 'application/json' } }));

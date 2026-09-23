@@ -9,7 +9,7 @@ function renderMembers() {
 }
 
 describe('MembersPanel', () => {
-  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  afterEach(() => { cleanup(); delete (window as Window & { __bugflowIdentity?: unknown }).__bugflowIdentity; vi.unstubAllGlobals(); });
 
   it('loads members and audit records for an authorized owner', async () => {
     const fetchMock = vi.fn().mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(path.endsWith('/audit')
