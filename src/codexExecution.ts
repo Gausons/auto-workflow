@@ -369,6 +369,7 @@ function frequentDirectories(data: TaskCenterData, deviceId: string, fallback = 
 
 export function createCodexExecution({ database, tenantId, workspace, history, attachmentRoot, environment = {}, runnerFactory, directoryPicker = pickNativeDirectory }: CreateCodexExecutionOptions) {
   let closing = false;
+  let localProjectCache: { at: number; projects: TargetProject[] } = { at: 0, projects: [] };
   const update = (job: RunnerJob) => {
     if (!closing) database.mutateTaskCenter(tenantId, (data) => recordExecution(data, job));
   };
@@ -392,14 +393,20 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
       const task = data.tasks.find((item) => item.id === job.taskId); if (task) { task.status = 'error'; task.revision++; }
     }
   });
+  const localProjects = async (fresh = false) => {
+    if (!fresh && localProjectCache.projects.length && Date.now() - localProjectCache.at < 60_000) return localProjectCache.projects;
+    const projects = (await runner.projects!(workspace())).map((project) => ({ ...project, deviceId: 'local', deviceName: '工作台所在设备', online: true, commonDirectories: [] }));
+    localProjectCache = { at: Date.now(), projects };
+    return projects;
+  };
   return {
     launch(job: RunnerJob) {
       if (job.deviceId === 'local') void Promise.resolve().then(() => runner.start!(job)).catch((error: unknown) => update({ ...(database.readTaskCenter(tenantId).executions.find((item) => item.id === job.id) || job), status: 'unknown', message: `启动结果待核对：${asError(error).message}`, updatedAt: timestamp() }));
     },
     async targets() {
       let localError: string | null = null, projects: TargetProject[] = [];
-      try { projects = (await runner.projects!(workspace())).map((project) => ({ ...project, deviceId: 'local', deviceName: '工作台所在设备', online: true, commonDirectories: [] })); }
-      catch (error: unknown) { localError = asError(error).message; }
+      try { projects = await localProjects(true); }
+      catch (error: unknown) { localProjectCache = { at: Date.now(), projects: [] }; localError = asError(error).message; }
       const data = database.readTaskCenter(tenantId), devices = data.devices;
       for (const d of devices) for (const p of d.codexProjects || []) projects.push({ ...p, deviceId: d.id, deviceName: d.name, online: Date.now() - Date.parse(d.lastSeen) < 90000, commonDirectories: [] });
       projects = projects.map((project) => ({ ...project, commonDirectories: frequentDirectories(data, project.deviceId, project.cwd) }));
@@ -407,7 +414,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
     },
     async git(input: GitInput) {
       if (input.deviceId && input.deviceId !== 'local') throw httpError(422, '远端设备暂不支持网页分支管理');
-      const project = (await this.targets()).projects.find((item) => item.id === input.projectId && item.deviceId === 'local');
+      const project = (await localProjects()).find((item) => item.id === input.projectId);
       if (!project) throw httpError(400, '请选择本地执行目标');
       if (input.cwd !== undefined && (typeof input.cwd !== 'string' || input.cwd.length > 2000)) throw httpError(400, '工作目录无效');
       let cwd: string;
@@ -415,11 +422,9 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
       if (input.action === 'list') return gitBranches(cwd);
       if (!['switch', 'create'].includes(input.action || '')) throw httpError(400, '分支操作无效');
       const repo = await promisify(execFile)('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], { timeout: 10000 }).then(r => r.stdout.trim());
-      for (const job of database.readTaskCenter(tenantId).executions || []) {
-        if (job.deviceId !== 'local' || (!active.has(job.status) && job.releaseStatus !== 'releasing')) continue;
-        const jobRepo = await promisify(execFile)('git', ['-C', job.cwd, 'rev-parse', '--show-toplevel'], { timeout: 10000 }).then(r => r.stdout.trim()).catch(() => '');
-        if (jobRepo === repo) throw httpError(409, '此仓库有任务正在执行，请结束后再切换分支');
-      }
+      const activeJobs = (database.readTaskCenter(tenantId).executions || []).filter(job => job.deviceId === 'local' && (active.has(job.status) || job.releaseStatus === 'releasing'));
+      const activeRepos = await Promise.all(activeJobs.map(job => promisify(execFile)('git', ['-C', job.cwd, 'rev-parse', '--show-toplevel'], { timeout: 10000 }).then(r => r.stdout.trim()).catch(() => '')));
+      if (activeRepos.includes(repo)) throw httpError(409, '此仓库有任务正在执行，请结束后再切换分支');
       return switchGitBranch(cwd, input.branch, input.action === 'create');
     },
     async pickDirectory(input: DirectoryInput, actor: Actor = {}) {

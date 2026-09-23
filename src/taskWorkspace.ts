@@ -7,17 +7,25 @@ const exec = promisify(execFile);
 type ErrorLike = Error & { stderr?: string | Buffer };
 const asError = (value: unknown): ErrorLike => value instanceof Error ? value as ErrorLike : new Error(String(value));
 const git = async (cwd: string, args: string[]) => (await exec('git', ['-C', cwd, ...args], { timeout: 15000, maxBuffer: 2 * 1024 * 1024 })).stdout.replace(/\n$/, '');
+async function readGitBranchState(cwd: string) {
+  const [refs, status] = await Promise.all([
+    git(cwd, ['for-each-ref', '--format=%(HEAD)%09%(refname:short)', 'refs/heads/']),
+    git(cwd, ['status', '--porcelain=v1', '-z'])
+  ]);
+  let current = '';
+  const branches = refs.split('\n').filter(Boolean).map(entry => {
+    const separator = entry.indexOf('\t');
+    if (entry.slice(0, separator) === '*') current = entry.slice(separator + 1);
+    return entry.slice(separator + 1);
+  });
+  const entries = status.split('\0'); let changes = 0;
+  for (let index = 0; index < entries.length; index++) { const entry = entries[index]; if (!entry) continue; changes++; if (/^[RC]|^.[RC]/.test(entry)) index++; }
+  return { repository: true, current, branches, changes };
+}
 export async function gitBranches(cwd: string) {
   try { await git(cwd, ['rev-parse', '--show-toplevel']); }
   catch { return { repository: false, current: '', branches: [], changes: 0 }; }
-  const [current, branches, status] = await Promise.all([
-    git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => ''),
-    git(cwd, ['for-each-ref', '--format=%(refname:short)', 'refs/heads/']),
-    git(cwd, ['status', '--porcelain=v1', '-z'])
-  ]);
-  const entries = status.split('\0'); let changes = 0;
-  for (let index = 0; index < entries.length; index++) { const entry = entries[index]; if (!entry) continue; changes++; if (/^[RC]|^.[RC]/.test(entry)) index++; }
-  return { repository: true, current, branches: branches.split('\n').filter(Boolean), changes };
+  return readGitBranchState(cwd);
 }
 export async function switchGitBranch(cwd: string, branch: unknown, create = false) {
   if (typeof branch !== 'string' || !branch || branch.length > 200 || branch.startsWith('-')) throw httpError(400, '分支名称无效');
@@ -25,7 +33,7 @@ export async function switchGitBranch(cwd: string, branch: unknown, create = fal
   catch { throw httpError(400, '分支名称无效'); }
   try { await git(cwd, create ? ['switch', '-c', branch] : ['switch', '--no-guess', branch]); }
   catch (caught: unknown) { const error = asError(caught); throw httpError(409, `无法切换分支，未强制覆盖文件：${String(error.stderr || error.message).slice(0, 1500)}`); }
-  return gitBranches(cwd);
+  return readGitBranchState(cwd);
 }
 export function decodeAttachments(input: unknown) {
   if (input === undefined) return [];

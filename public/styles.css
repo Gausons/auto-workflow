@@ -1629,14 +1629,13 @@ body[data-can-manage-members="false"] [data-settings-target="members"] { display
 .history-chat-header { flex: 0 0 auto; padding: 16px 28px; }
 .history-chat-scroll { flex: 1; min-height: 0; overflow-y: auto; scroll-behavior: smooth; }
 .history-chat-content { width: 100%; max-width: 900px; padding: 32px 32px 24px; }
-.history-composer { flex: 0 0 auto; width: 100%; max-width: 900px; margin: 0 auto; padding: 12px 32px 20px; border: 0; background: #fff; max-height: 50%; overflow-y: auto; }
+.history-composer { flex: 0 0 auto; width: 100%; max-width: 900px; margin: 0 auto; padding: 12px 32px 20px; border: 0; background: #fff; overflow: visible; }
 .history-composer .conversation-composer, .tc-composer.conversation-composer { display: block; border: 1px solid #e5e5e5; border-radius: 24px; padding: 16px; background: #fff; box-shadow: 0 4px 20px #00000006; }
 .conversation-composer:focus-within { border-color: #b8b8b8; box-shadow: 0 4px 20px #00000008; }
 .history-composer textarea, .tc-composer.conversation-composer textarea { display: block; width: 100%; min-height: 76px; max-height: 180px; padding: 0 2px; border: 0; border-radius: 0; outline: none; resize: vertical; background: transparent; font-size: 15px; line-height: 1.7; }
 .history-compose-footer { margin-top: 12px; }
 .conversation-context { color: #777; font-size: 12px; text-decoration: none; overflow-wrap: anywhere; }
 .conversation-context:hover { color: #222; }
-.conversation-send { display: flex; align-items: center; gap: 12px; margin-left: auto; }
 .history-composer button[type=submit] { width: 34px; height: 34px; padding: 0; border-radius: 50%; font-size: 23px; }
 .history-composer [data-status], .history-composer [data-error] { margin: 8px 4px 0; font-size: 11px; }
 .history-composer [data-status]:empty, .history-composer [data-error]:empty, .history-composer [data-actions]:empty { display: none; }
@@ -1662,7 +1661,7 @@ body[data-view="new-task"] .tc-create { flex: 1; width: 100%; max-width: 900px; 
   .history-chat-content { padding: 24px 16px; }
   .history-composer { padding: 8px 12px 12px; }
   body[data-view="new-task"] .tc-create { padding: 0 12px 12px; }
-  .conversation-send > .history-meta { display: none; }
+  .history-compose-footer .history-meta { display: none; }
   .tc-create-directory { flex-wrap: wrap; }
 }
 .tc-composer.conversation-composer button[type=submit] { width: 34px; height: 34px; min-height: 34px; padding: 0; border-radius: 50%; font-size: 23px; }
@@ -1740,14 +1739,15 @@ body[data-view="new-task"] .tc-create { flex: 1; width: 100%; max-width: 900px; 
 .tc-task-content pre { max-width: 100%; overflow-x: auto; }
 .tc-dialog textarea.tc-markdown-editor { min-height: 300px; max-height: 65dvh; line-height: 1.7; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; resize: vertical; }
 
-.conversation-switch { padding-bottom: 10px; }
 .conversation-switch .tc-create-context { margin-bottom: -12px; }
-.conversation-new-actions { position: relative; z-index: 1; display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-height: 48px; padding: 0 16px; border: 1px solid #e5e5e5; border-bottom: 0; border-radius: 24px 24px 0 0; background: #fff; }
-.conversation-new-actions .tc-model-menu { margin-right: auto; }
-.conversation-new-actions [role="status"] { min-width: 0; color: var(--muted, #64748b); font-size: 12px; overflow-wrap: anywhere; }
-.conversation-switch + .conversation-composer { border-radius: 0 0 24px 24px; }
+.conversation-switch .conversation-composer { position: relative; }
+.conversation-new-controls { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; }
+.conversation-new-button { white-space: nowrap; }
+.conversation-new-status { margin: 8px 2px 0; color: var(--muted, #64748b); font-size: 12px; overflow-wrap: anywhere; }
+.conversation-new-status:empty { display: none; }
 @media (max-width: 600px) {
-  .conversation-new-actions { flex-wrap: wrap; padding: 8px 12px; }
-  .conversation-new-actions [role="status"] { order: 3; width: 100%; }
+  .history-compose-footer { align-items: flex-end; }
+  .conversation-new-controls { flex-wrap: wrap; gap: 6px; }
+  .conversation-new-button { padding-left: 10px; padding-right: 10px; }
 }
 .history-inherited { margin-bottom: 16px; padding: 12px; border: 1px solid #dce3eb; border-radius: 10px; }

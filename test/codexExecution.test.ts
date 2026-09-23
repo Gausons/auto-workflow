@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, realpath, rm, readFile } from 'node:fs/promises';
+import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
 import { CodexRunner, createCodexExecution, executionPrompt } from '../src/codexExecution.js';
@@ -41,6 +43,22 @@ class FakeClient extends EventEmitter {
 }
 const job = () => ({ id: 'job-1', taskId: 'task-1', title: '任务', prompt: '实现功能', cwd: '/repo', projectId: 'project-1', status: 'queued' });
 const last = <T>(values: T[]): T => { const value = values.at(-1); assert.ok(value); return value; };
+
+test('git operations reuse the recently discovered local target', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'codex-git-target-')); t.after(() => rm(root, { recursive: true, force: true }));
+  await promisify(execFile)('git', ['-C', root, 'init', '-b', 'main']);
+  const db = openDatabase(':memory:'); t.after(() => db.close()); db.createTenant({ id: 'default', token: 'x'.repeat(32) });
+  let discoveries = 0;
+  const service = createCodexExecution({ database: db, tenantId: 'default', workspace: () => root, runnerFactory: () => ({
+    projects: async () => { discoveries++; return [{ id: 'project', name: 'Repo', cwd: root }]; }, close() {}
+  }) });
+  t.after(() => service.close());
+
+  await service.targets();
+  assert.equal((await service.git({ action: 'list', deviceId: 'local', projectId: 'project' })).repository, true);
+  assert.equal(discoveries, 1, 'branch reads should not restart Agent project discovery');
+  await assert.rejects(service.git({ action: 'list', deviceId: 'local', projectId: 'unknown' }), /请选择本地执行目标/);
+});
 
 test('creates durable project thread, starts a real turn and opens desktop without overriding permissions/model', async () => {
   const client = new FakeClient(), updates: RunnerUpdate[] = [], opened: string[] = [];

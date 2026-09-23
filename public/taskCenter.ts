@@ -25,7 +25,7 @@ const time = (value?: string) => value && Number.isFinite(Date.parse(value)) ? n
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 export function createTaskCenterUI({ root, api, canEdit, toast }: TaskCenterUiOptions) {
   let data: TaskCenterData = { tasks: [], sessions: [], devices: [], handoffs: [], executions: [] }, selected: string | null = null, page: Page = 'tasks', tab = 'progress', query = '', loaded = false, request = 0;
-  let createFiles: File[] = [], branchState: BranchState | null = null, branchKey = '', branchLoading = false, branchError = '';
+  let createFiles: File[] = [], branchState: BranchState | null = null, branchKey = '', branchLoading = false, branchSwitching = '', branchError = '';
   let draft = '', sourceSessionId: string | null = null, creating = false, createError = '';
   let createTargets: AgentProject[] | null = null, createTargetsError = '', createProjectIndex = 0, createModel = '', createReasoningEffort = '', createCwd = '';
   const sessionContent = new Map<string, SessionCache>();
@@ -138,7 +138,7 @@ export function createTaskCenterUI({ root, api, canEdit, toast }: TaskCenterUiOp
     if (createProject()?.deviceId !== 'local') return '';
     const state = branchKey === workspaceKey() ? branchState : null;
     return `<details class="tc-config-menu tc-branch-menu" id="tc-branch-menu" name="create-config"><summary data-tc="branches" aria-label="Git 分支"><span aria-hidden="true">⑂</span><span>${esc(state?.current || 'Git 分支')}</span><span aria-hidden="true">⌄</span></summary><div class="tc-config-panel">
-      ${branchLoading ? '<p role="status">正在读取分支…</p>' : branchError ? `<p role="alert">${esc(branchError)}</p>` : state?.repository ? `<input id="tc-branch-search" aria-label="搜索分支" placeholder="搜索分支"><p class="tc-create-hint">${state.current ? `当前：${esc(state.current)}` : '当前为分离 HEAD'} · 未提交：${state.changes} 项</p><div class="tc-branch-options">${state.branches.map((name: string) => `<button type="button" data-tc="switch-branch" data-id="${esc(name)}" aria-pressed="${name === state.current}">${esc(name)}${name === state.current ? ' ✓' : ''}</button>`).join('')}</div><label class="tc-create-setting">新分支<input id="tc-new-branch" aria-label="新分支名称" placeholder="输入分支名称" maxlength="200"></label><button type="button" class="button secondary" data-tc="new-branch">创建并切换</button>` : '<p class="tc-create-hint">当前目录不是 Git 仓库。</p>'}
+      ${branchLoading ? '<p role="status">正在读取分支…</p>' : branchSwitching ? `<p role="status">正在切换到 ${esc(branchSwitching)}…</p>` : branchError ? `<p role="alert">${esc(branchError)}</p>` : state?.repository ? `<input id="tc-branch-search" aria-label="搜索分支" placeholder="搜索分支"><p class="tc-create-hint">${state.current ? `当前：${esc(state.current)}` : '当前为分离 HEAD'} · 未提交：${state.changes} 项</p><div class="tc-branch-options">${state.branches.map((name: string) => `<button type="button" data-tc="switch-branch" data-id="${esc(name)}" aria-pressed="${name === state.current}">${esc(name)}${name === state.current ? ' ✓' : ''}</button>`).join('')}</div><label class="tc-create-setting">新分支<input id="tc-new-branch" aria-label="新分支名称" placeholder="输入分支名称" maxlength="200"></label><button type="button" class="button secondary" data-tc="new-branch">创建并切换</button>` : '<p class="tc-create-hint">当前目录不是 Git 仓库。</p>'}
     </div></details>`;
   }
   async function encodeFile(file: File) {
@@ -149,19 +149,19 @@ export function createTaskCenterUI({ root, api, canEdit, toast }: TaskCenterUiOp
   }
   function createConversation() {
     const project = createProject();
-    const disabled = creating ? 'disabled' : '';
+    const busy = creating || Boolean(branchSwitching), disabled = busy ? 'disabled' : '';
     return `<section class="tc-create" aria-label="新建任务会话">
       <div class="tc-create-log" role="log" aria-live="polite">${createdMessages.length ? createdMessages.map(m => `<p class="tc-create-message">${esc(m.text)}</p><div class="tc-create-reply">${m.executed ? '任务已创建并提交 Agent。' : '任务已创建。'}${button('open-created', '查看任务', m.taskId)}</div>`).join('') : empty('想让 Agent 完成什么？', '描述你的目标，让 Agent 帮你完成。')}</div>
-      <form id="tc-create-form" class="tc-create-shell" aria-busy="${creating}">
-        <div class="tc-create-context" aria-label="任务运行环境">${project ? renderRunContext(createConfig(), { disabled: creating, branch: branchMenu() }) : `<p class="tc-create-hint" role="${createTargets === null ? 'status' : 'alert'}">${esc(createTargets === null ? '正在读取运行配置…' : createTargetsError || '未发现可用 Agent，仍可创建任务。')}</p>`}</div>
+      <form id="tc-create-form" class="tc-create-shell" aria-busy="${busy}">
+        <div class="tc-create-context" aria-label="任务运行环境">${project ? renderRunContext(createConfig(), { disabled: busy, branch: branchMenu() }) : `<p class="tc-create-hint" role="${createTargets === null ? 'status' : 'alert'}">${esc(createTargets === null ? '正在读取运行配置…' : createTargetsError || '未发现可用 Agent，仍可创建任务。')}</p>`}</div>
         <div class="tc-composer conversation-composer">
           ${sourceSessionId ? `<p class="tc-meta">将关联会话：${esc(data.sessions.find(s => s.id === sourceSessionId)?.title)}</p>` : ''}
           <textarea id="tc-create-message" aria-label="任务描述" placeholder="描述任务、期望结果，或需要解决的问题…" rows="4" maxlength="64000" required ${disabled}>${esc(draft)}</textarea>
           <div class="tc-attachment-list">${createFiles.map((file, index) => `<span class="tc-attachment" title="${esc(file.name)}"><span>${esc(file.name)}</span><small>${Math.max(1, Math.round(file.size / 1024))} KB</small><button type="button" data-tc="remove-file" data-id="${index}" aria-label="移除 ${esc(file.name)}" ${disabled}>×</button></span>`).join('')}</div>
           <input type="file" id="tc-create-files" multiple hidden ${disabled}>
-          <footer><div class="tc-create-tools"><button type="button" class="tc-attach-button" data-tc="attach-files" aria-label="附加文件" title="${project?.deviceId === 'local' ? '附加文件（最多 10 个，单个 5 MB）' : '附件暂仅支持工作台所在设备'}" ${creating || project?.deviceId !== 'local' ? 'disabled' : ''}>＋</button><span class="tc-create-shortcut">⌘ / Ctrl + Enter 发送</span></div><div class="tc-create-send">
-            ${project ? renderRunModel(createConfig(), creating) : ''}
-            <button class="button primary" type="submit" aria-label="创建并发送任务" title="创建并发送任务" ${creating || !draft.trim() ? 'disabled' : ''}>${creating ? '…' : '↑'}</button>
+          <footer><div class="tc-create-tools"><button type="button" class="tc-attach-button" data-tc="attach-files" aria-label="附加文件" title="${project?.deviceId === 'local' ? '附加文件（最多 10 个，单个 5 MB）' : '附件暂仅支持工作台所在设备'}" ${busy || project?.deviceId !== 'local' ? 'disabled' : ''}>＋</button><span class="tc-create-shortcut">⌘ / Ctrl + Enter 发送</span></div><div class="tc-create-send">
+            ${project ? renderRunModel(createConfig(), busy) : ''}
+            <button class="button primary" type="submit" aria-label="创建并发送任务" title="创建并发送任务" ${busy || !draft.trim() ? 'disabled' : ''}>${creating ? '…' : '↑'}</button>
           </div></footer>
           <p class="tc-form-error" role="alert" ${createError ? '' : 'hidden'}>${esc(createError)}</p>
         </div>
@@ -194,7 +194,7 @@ export function createTaskCenterUI({ root, api, canEdit, toast }: TaskCenterUiOp
     const target = e.target as HTMLElement;
     if (target.id !== 'tc-create-form') return;
     e.preventDefault();
-    if (creating || !canEdit() || !draft.trim()) return;
+    if (creating || branchSwitching || !canEdit() || !draft.trim()) return;
     const description = draft.trim();
     if (createFiles.length && createProject()?.deviceId !== 'local') { createError = '附件暂仅支持工作台所在设备，请移除附件或切回本地'; render(); return; }
     creating = true; createError = ''; render();
@@ -299,14 +299,16 @@ export function createTaskCenterUI({ root, api, canEdit, toast }: TaskCenterUiOp
       if (action === 'remove-file') { createFiles.splice(Number(id), 1); render(); return; }
       if (action === 'branches') { if (!branchLoading && !selectFrom(root, '#tc-branch-menu')?.open) await loadBranches(); return; }
       if (action === 'switch-branch' || action === 'new-branch') {
+        if (branchSwitching) return;
         const branch = action === 'new-branch' ? selectFrom(root, '#tc-new-branch')?.value.trim() : id;
         if (!branch) { toast('请输入分支名称'); return; }
-        b.disabled = true;
         const key = workspaceKey();
+        branchSwitching = branch; branchError = ''; render();
+        const menu = selectFrom(root, '#tc-branch-menu'); if (menu) menu.open = true;
         try {
           const result = await api<BranchState>('/api/task-center/git', { method: 'POST', body: JSON.stringify({ action: action === 'new-branch' ? 'create' : 'switch', branch, projectId: createProject()?.id, deviceId: createProject()?.deviceId, cwd: createCwd }) });
-          if (workspaceKey() === key) { branchState = result; branchKey = key; render(); }
-        } finally { b.disabled = false; }
+          if (workspaceKey() === key) { branchState = result; branchKey = key; }
+        } finally { branchSwitching = ''; render(); }
         return;
       }
       if (action === 'updates') { if (pendingData) { data = pendingData; pendingData = null; sessionContent.clear(); render(); for (const sid of expanded) await readSession(sid); } return; }

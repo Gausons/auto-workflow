@@ -1,6 +1,6 @@
 import { escape, renderMessages } from './historyView.js';
 import { pendingHistoryMessages } from './historyTimeline.js';
-import { renderRunContext, renderRunModel, selectedAgentProject, type AgentRunConfig } from './agentRunConfig.js';
+import { renderRunContext, renderRunModel, runDirectoryName, selectedAgentProject, type AgentRunConfig } from './agentRunConfig.js';
 import type { AgentProject, HistoryMessage, InteractionRequest } from './taskTypes.js';
 
 interface ComposerSession {
@@ -41,15 +41,15 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
   const drafts = new Map<string, { text: string; requestId: string; sentText: string }>();
   let liveOutput: HTMLElement | null = null;
   let historyMessages: HistoryMessage[] = [], executions: ComposerJob[] = [];
-  let newSessionConfig: AgentRunConfig | null = null, newSessionStatus = '', branchState: BranchState | null = null, branchLoading = false, branchError = '';
+  let newSessionConfig: AgentRunConfig | null = null, newSessionStatus = '', branchState: BranchState | null = null, branchLoading = false, branchSwitching = '', branchError = '';
   let submission = 0, synchronizedSignature = '';
   let host: HTMLElement | null = null, session: ComposerSession | null = null, generation = 0, timer: ReturnType<typeof setTimeout> | undefined, sending = false, polling = false, job: ComposerJob | null = null, outputSignature = '';
   const draft = () => { if (!session) throw new Error('会话尚未挂载'); if (!drafts.has(session.id)) drafts.set(session.id, { text: '', requestId: '', sentText: '' }); return drafts.get(session.id)!; };
   const select = <T extends HTMLElement = HTMLElement>(selector: string): T | null => host?.querySelector<T>(selector) || null;
   function update() {
     const submit = select<HTMLButtonElement>('[type="submit"]'), input = select<HTMLTextAreaElement>('textarea');
-    if (submit) submit.disabled = !canSendNative || sending || (Boolean(job && busy.has(job.status)) || job?.releaseStatus === 'releasing') || !input?.value.trim();
-    if (input) input.disabled = sending;
+    if (submit) submit.disabled = !canSendNative || sending || Boolean(branchSwitching) || (Boolean(job && busy.has(job.status)) || job?.releaseStatus === 'releasing') || !input?.value.trim();
+    if (input) input.disabled = sending || Boolean(branchSwitching);
     const status = select('[data-status]');
     if (status) status.textContent = sending ? '正在发送…' : job ? `${names[job.status] || job.status} · ${job.message || ''}${job.executionTransport === 'desktop-ipc' ? ' · 由客户端执行；审批和问题请在客户端处理' : ''}${job.releaseStatus === 'releasing' ? ' · 正在释放网页连接' : job.releaseStatus === 'released' ? ' · 网页连接已释放' : job.releaseStatus === 'failed' ? ' · 会话释放失败，请检查服务进程' : ''}` : session?.managed ? '已继承原会话上下文，直接输入下一条消息即可。' : canSendNative ? '消息将追加到原会话，沿用其上下文与配置。' : '选择其他 Agent 新开会话，即可带上上下文继续。';
     const actions = select('[data-actions]');
@@ -84,7 +84,7 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
     catch (error: unknown) { const target = select('[data-error]'); if (current === generation && target) target.textContent = errorMessage(error); }
     finally { if (current === generation) { polling = false; timer = setTimeout(poll, 2500); } }
   }
-  function unmount() { generation++; clearTimeout(timer); host = null; liveOutput = null; session = null; polling = false; sending = false; job = null; historyMessages = []; executions = []; synchronizedSignature = ''; outputSignature = ''; newSessionConfig = null; newSessionStatus = ''; branchState = null; branchLoading = false; branchError = ''; }
+  function unmount() { generation++; clearTimeout(timer); host = null; liveOutput = null; session = null; polling = false; sending = false; job = null; historyMessages = []; executions = []; synchronizedSignature = ''; outputSignature = ''; newSessionConfig = null; newSessionStatus = ''; branchState = null; branchLoading = false; branchSwitching = ''; branchError = ''; }
   function mount(element: HTMLElement, value: ComposerSession, output?: HTMLElement, messages: HistoryMessage[] = []) {
     unmount(); host = element; liveOutput = output || null; session = value; historyMessages = messages;
     canSendNative = Boolean(value.managed || (value.agent === 'codex' && (!value.deviceId || value.deviceId === 'local') && value.sessionId && !value.archived));
@@ -93,11 +93,11 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
     }
     const state = draft();
     const contextLink = value.agent === 'codex' && value.sessionId ? `<a class="conversation-context" href="codex://threads/${encodeURIComponent(value.sessionId)}">在 Codex 中打开 ↗</a>` : `<span class="conversation-context">${escape(value.agentLabel || value.agent)} · ${escape(value.model || '默认配置')}</span>`;
-    host.innerHTML = `<form class="conversation-composer"><label class="history-sr-only" for="historyReply">发送消息</label><textarea id="historyReply" rows="3" maxlength="12000" placeholder="继续讨论，或描述下一步需要完成的工作…" required>${escape(state.text)}</textarea><div class="history-compose-footer">${contextLink}<span class="conversation-send"><span class="history-meta">⌘ / Ctrl + Enter</span><button type="submit" aria-label="发送消息" title="发送消息">↑</button></span></div></form><p class="history-meta" data-status role="status"></p><p data-error role="alert"></p><div data-actions></div>`;
+    host.innerHTML = `${openSession ? '<div class="conversation-switch tc-create-shell"><div class="tc-create-context" data-new-session-context><p class="tc-create-hint" role="status">正在读取运行配置…</p></div>' : ''}<form class="conversation-composer"><label class="history-sr-only" for="historyReply">发送消息</label><textarea id="historyReply" rows="3" maxlength="12000" placeholder="继续讨论，或描述下一步需要完成的工作…" required>${escape(state.text)}</textarea><div class="history-compose-footer"><div class="tc-create-tools">${contextLink}<span class="history-meta">⌘ / Ctrl + Enter</span></div><div class="tc-create-send">${openSession ? '<div class="conversation-new-controls" data-new-session-controls></div>' : ''}<button type="submit" aria-label="发送消息" title="发送消息">↑</button></div></div>${openSession ? '<p class="conversation-new-status" data-new-session-status role="status"></p>' : ''}</form>${openSession ? '</div>' : ''}<p class="history-meta" data-status role="status"></p><p data-error role="alert"></p><div data-actions></div>`;
     select<HTMLTextAreaElement>('textarea')!.oninput = (event: Event) => { state.text = (event.target as HTMLTextAreaElement).value; if (state.text.trim() !== state.sentText) state.requestId = ''; update(); };
     select<HTMLTextAreaElement>('textarea')!.onkeydown = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.isComposing) { event.preventDefault(); if (!select<HTMLButtonElement>('[type="submit"]')!.disabled) select<HTMLFormElement>('form')!.requestSubmit(); } };
     select<HTMLFormElement>('form')!.onsubmit = async (e: SubmitEvent) => {
-      e.preventDefault(); if (!canSendNative || sending || (Boolean(job && busy.has(job.status)) || job?.releaseStatus === 'releasing') || !state.text.trim()) return;
+      e.preventDefault(); if (!canSendNative || sending || branchSwitching || (Boolean(job && busy.has(job.status)) || job?.releaseStatus === 'releasing') || !state.text.trim()) return;
       const current = generation, id = value.id, message = state.text.trim(), createdAt = new Date().toISOString();
       state.requestId ||= requestId(); state.sentText = message;
       submission++; sending = true; select('[data-error]')!.textContent = ''; update();
@@ -126,15 +126,23 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
   }
   function mountSwitch() {
     if (!host || !session || !openSession) return;
-    const currentSession = session, current = generation, id = currentSession.id, container = document.createElement('div');
-    container.className = 'conversation-switch tc-create-shell';
-    container.innerHTML = '<div class="tc-create-context"><p class="tc-create-hint" role="status">正在读取运行配置…</p></div>';
-    host.prepend(container);
+    const currentSession = session, current = generation, id = currentSession.id;
+    const container = select<HTMLElement>('.conversation-switch');
+    if (!container) return;
     const project = () => newSessionConfig ? selectedAgentProject(newSessionConfig) : undefined;
-    const branchMenu = () => project()?.deviceId !== 'local' ? '' : `<details class="tc-config-menu tc-branch-menu" id="history-branch-menu" name="create-config"><summary data-new-session="branches" aria-label="Git 分支"><span aria-hidden="true">⑂</span><span>${escape(branchState?.current || 'Git 分支')}</span><span aria-hidden="true">⌄</span></summary><div class="tc-config-panel">${branchLoading ? '<p role="status">正在读取分支…</p>' : branchError ? `<p role="alert">${escape(branchError)}</p>` : branchState?.repository ? `<input data-new-session="branch-search" aria-label="搜索分支" placeholder="搜索分支"><p class="tc-create-hint">${branchState.current ? `当前：${escape(branchState.current)}` : '当前为分离 HEAD'} · 未提交：${branchState.changes} 项</p><div class="tc-branch-options">${branchState.branches.map(name => `<button type="button" data-new-session="switch-branch" data-id="${escape(name)}" aria-pressed="${name === branchState?.current}">${escape(name)}${name === branchState?.current ? ' ✓' : ''}</button>`).join('')}</div><label class="tc-create-setting">新分支<input data-new-session="new-branch-name" aria-label="新分支名称" placeholder="输入分支名称" maxlength="200"></label><button type="button" class="button secondary" data-new-session="new-branch">创建并切换</button>` : '<p class="tc-create-hint">展开后读取当前 Git 分支。</p>'}</div></details>`;
+    const branchMenu = () => project()?.deviceId !== 'local' ? '' : `<details class="tc-config-menu tc-branch-menu" id="history-branch-menu" name="create-config"><summary data-new-session="branches" aria-label="Git 分支"><span aria-hidden="true">⑂</span><span>${escape(branchState?.current || 'Git 分支')}</span><span aria-hidden="true">⌄</span></summary><div class="tc-config-panel">${branchLoading ? '<p role="status">正在读取分支…</p>' : branchSwitching ? `<p role="status">正在切换到 ${escape(branchSwitching)}…</p>` : branchError ? `<p role="alert">${escape(branchError)}</p>` : branchState?.repository ? `<input data-new-session="branch-search" aria-label="搜索分支" placeholder="搜索分支"><p class="tc-create-hint">${branchState.current ? `当前：${escape(branchState.current)}` : '当前为分离 HEAD'} · 未提交：${branchState.changes} 项</p><div class="tc-branch-options">${branchState.branches.map(name => `<button type="button" data-new-session="switch-branch" data-id="${escape(name)}" aria-pressed="${name === branchState?.current}">${escape(name)}${name === branchState?.current ? ' ✓' : ''}</button>`).join('')}</div><label class="tc-create-setting">新分支<input data-new-session="new-branch-name" aria-label="新分支名称" placeholder="输入分支名称" maxlength="200"></label><button type="button" class="button secondary" data-new-session="new-branch">创建并切换</button>` : '<p class="tc-create-hint">展开后读取当前 Git 分支。</p>'}</div></details>`;
     const renderSwitch = () => {
       if (current !== generation || !newSessionConfig) return;
-      container.innerHTML = `<div class="tc-create-context" aria-label="新会话运行环境">${renderRunContext(newSessionConfig, { disabled: sending, branch: branchMenu() })}</div><div class="conversation-new-actions">${renderRunModel(newSessionConfig, sending)}<button type="button" class="button secondary" data-new-session="create" ${sending ? 'disabled' : ''}>带上下文新开会话 →</button><span role="status">${escape(newSessionStatus)}</span></div>`;
+      const switching = Boolean(branchSwitching), disabled = sending || switching;
+      const context = container.querySelector<HTMLElement>('[data-new-session-context]');
+      const controls = container.querySelector<HTMLElement>('[data-new-session-controls]');
+      const status = container.querySelector<HTMLElement>('[data-new-session-status]');
+      if (context) {
+        context.setAttribute('aria-label', '新会话运行环境');
+        context.innerHTML = renderRunContext(newSessionConfig, { disabled, branch: branchMenu() });
+      }
+      if (controls) controls.innerHTML = `${renderRunModel(newSessionConfig, disabled)}<button type="button" class="button secondary conversation-new-button" data-new-session="create" ${disabled ? 'disabled' : ''}>带上下文新开会话 →</button>`;
+      if (status) status.textContent = newSessionStatus;
     };
     void api('/api/task-center/codex').then(value => {
       const result = value as TargetsResponse;
@@ -148,7 +156,15 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
     container.oninput = event => {
       if (!newSessionConfig) return;
       const target = event.target as HTMLInputElement;
-      if (target.id === 'tc-create-cwd') newSessionConfig.cwd = target.value;
+      if (target.id === 'tc-create-cwd') {
+        newSessionConfig.cwd = target.value;
+        const name = container.querySelector<HTMLElement>('#tc-create-directory-name');
+        if (name) {
+          name.textContent = runDirectoryName(newSessionConfig.cwd || project()?.cwd || '');
+          const summary = name.closest<HTMLElement>('summary');
+          if (summary) { summary.title = newSessionConfig.cwd || project()?.cwd || '工作目录'; summary.setAttribute('aria-label', `工作目录：${summary.title}`); }
+        }
+      }
       if (target.dataset.newSession === 'branch-search') container.querySelectorAll<HTMLElement>('[data-new-session="switch-branch"]').forEach(button => { button.hidden = !(button.dataset.id || '').toLowerCase().includes(target.value.toLowerCase()); });
     };
     container.onchange = event => {
@@ -159,6 +175,16 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
       else if (target.id === 'tc-create-effort') newSessionConfig.reasoningEffort = target.value;
       else return;
       renderSwitch();
+      if (target.id === 'tc-create-model' || target.id === 'tc-create-effort') {
+        const menu = container.querySelector<HTMLDetailsElement>('#tc-create-model-menu');
+        if (menu) menu.open = true;
+        container.querySelector<HTMLElement>(`#${target.id}`)?.focus();
+      }
+    };
+    container.onkeydown = event => {
+      if (event.key !== 'Escape') return;
+      const menu = (event.target as HTMLElement).closest<HTMLDetailsElement>('.tc-config-menu');
+      if (menu) { menu.open = false; menu.querySelector<HTMLElement>('summary')?.focus(); }
     };
     container.onclick = async event => {
       const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button,[data-new-session="branches"]');
@@ -191,13 +217,17 @@ export function createHistoryComposer({ api, canEdit, refresh, syncHistory, open
         return;
       }
       if (action === 'switch-branch' || action === 'new-branch') {
+        if (branchSwitching) return;
         const branch = action === 'new-branch' ? container.querySelector<HTMLInputElement>('[data-new-session="new-branch-name"]')?.value.trim() : button.dataset.id;
         if (!branch) { newSessionStatus = '请输入分支名称'; renderSwitch(); return; }
-        try { branchState = await api('/api/task-center/git', { method: 'POST', body: JSON.stringify({ action: action === 'new-branch' ? 'create' : 'switch', branch, projectId: project()?.id, deviceId: project()?.deviceId, cwd: newSessionConfig.cwd }) }) as BranchState; branchError = ''; }
+        branchSwitching = branch; branchError = ''; newSessionStatus = ''; renderSwitch(); update();
+        const menu = container.querySelector<HTMLDetailsElement>('#history-branch-menu'); if (menu) menu.open = true;
+        try { branchState = await api('/api/task-center/git', { method: 'POST', body: JSON.stringify({ action: action === 'new-branch' ? 'create' : 'switch', branch, projectId: project()?.id, deviceId: project()?.deviceId, cwd: newSessionConfig.cwd }) }) as BranchState; }
         catch (error: unknown) { branchError = errorMessage(error); }
-        renderSwitch(); return;
+        finally { branchSwitching = ''; renderSwitch(); update(); }
+        return;
       }
-      if (action !== 'create' || sending || !project()) return;
+      if (action !== 'create' || sending || branchSwitching || !project()) return;
       const message = draft().text.trim(), selected = project()!;
       const signature = JSON.stringify([selected.deviceId, selected.id, newSessionConfig.cwd, newSessionConfig.model, newSessionConfig.reasoningEffort, message]);
       let attempt = newRequests.get(id);
