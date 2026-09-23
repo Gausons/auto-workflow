@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import test from 'node:test';
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { SourceRegistry, freezeSnapshot, packSnapshot, verifyBundle, verifySnapshot } from '@auto-workflow/context-engine';
@@ -8,6 +9,7 @@ import { markdownSource } from '@auto-workflow/context-adapters/markdown';
 import { issueRecordSource } from '@auto-workflow/context-adapters/issue';
 import { readBundleDirectory, writeBundleDirectory } from '@auto-workflow/context-engine/directory-bundle';
 import { detachSnapshot, restoreDetachedSnapshot, verifyDetachedManifest } from '@auto-workflow/context-engine/detached-bundle';
+import { importDetachedSnapshotDirectory, readDetachedBundleDirectory, writeDetachedBundleDirectory } from '@auto-workflow/context-engine/portable-bundle';
 
 test('a new source enters the same capture, snapshot and bundle flow', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'context-engine-'));
@@ -69,6 +71,62 @@ test('detached transfer preserves the exact v1 snapshot and deduplicates origina
   assert.throws(() => verifyDetachedManifest({ ...detached.manifest, events: [] }), { code: 'INVALID_BUNDLE' });
   assert.throws(() => restoreDetachedSnapshot(detached.manifest, new Map()), { code: 'INVALID_BUNDLE' });
   assert.throws(() => restoreDetachedSnapshot(detached.manifest, new Map([[detached.objects[0]!.digest, Buffer.from('tampered')]])), { code: 'INVALID_BUNDLE' });
+});
+
+test('v3 offline bundle can be copied, verified and imported without replacing an existing snapshot', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'context-offline-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = path.join(root, 'source'), target = path.join(root, 'target');
+  await mkdir(source); await mkdir(target);
+  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+  const snapshot = freezeSnapshot([{ role: 'user', source: 'remote:a', text: `请看 data:image/png;base64,${image.toString('base64')}` }], ['remote:a']);
+  const written = await writeDetachedBundleDirectory(snapshot, source, 'handoff');
+  await cp(written, path.join(target, 'handoff'), { recursive: true });
+  const copied = path.join(target, 'handoff');
+  const checked = await readDetachedBundleDirectory(copied);
+  assert.deepEqual(checked.snapshot, snapshot);
+  assert.deepEqual(checked.objects[0]!.data, image);
+  assert.equal(checked.manifest.schemaVersion, 3);
+  const imported = await importDetachedSnapshotDirectory(copied, target, 'snapshot.json');
+  assert.deepEqual(JSON.parse(await readFile(imported.file, 'utf8')), snapshot);
+  await assert.rejects(importDetachedSnapshotDirectory(copied, target, 'snapshot.json'), { code: 'EEXIST' });
+  await assert.rejects(writeDetachedBundleDirectory(snapshot, source, 'handoff'), { code: 'INVALID_BUNDLE' });
+  await writeFile(path.join(copied, 'objects', checked.objects[0]!.digest), 'broken');
+  await assert.rejects(readDetachedBundleDirectory(copied), { code: 'INVALID_BUNDLE' });
+});
+
+test('v3 offline bundle rejects symlinks and unsafe names', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'context-offline-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const snapshot = freezeSnapshot([{ role: 'reference', source: 'a', text: 'evidence' }], ['a']);
+  const directory = await writeDetachedBundleDirectory(snapshot, root, 'handoff');
+  await assert.rejects(writeDetachedBundleDirectory(snapshot, root, '../outside'), { code: 'INVALID_BUNDLE' });
+  await assert.rejects(importDetachedSnapshotDirectory(directory, root, '../outside.json'), { code: 'INVALID_BUNDLE' });
+  const alias = path.join(root, 'alias');
+  await symlink(directory, alias);
+  await assert.rejects(readDetachedBundleDirectory(alias), { code: 'INVALID_BUNDLE' });
+  await rm(path.join(directory, 'manifest.json'));
+  await symlink(path.join(root, 'missing'), path.join(directory, 'manifest.json'));
+  await assert.rejects(readDetachedBundleDirectory(directory), { code: 'INVALID_BUNDLE' });
+});
+
+test('bundle CLI exports, verifies and imports a snapshot independently of a task', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'context-cli-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const snapshot = freezeSnapshot([{ role: 'reference', source: 'issue:one', text: '问题记录' }], ['issue:one']);
+  const input = path.join(root, 'input.json');
+  await writeFile(input, JSON.stringify(snapshot));
+  const cli = (...args: string[]) => JSON.parse(execFileSync(process.execPath, ['--import', 'tsx', path.resolve('scripts/context-bundle.ts'), ...args],
+    { cwd: path.resolve('.'), encoding: 'utf8' })) as Record<string, unknown>;
+  assert.equal(cli('pack-snapshot', input, root, 'portable').digest, snapshot.digest);
+  assert.equal(cli('verify', path.join(root, 'portable')).digest, snapshot.digest);
+  assert.equal(cli('import-snapshot', path.join(root, 'portable'), root, 'imported.json').digest, snapshot.digest);
+  assert.deepEqual(JSON.parse(await readFile(path.join(root, 'imported.json'), 'utf8')), snapshot);
+  await writeFile(path.join(root, 'notes.md'), '# 离线交接');
+  const markdown = cli('pack-markdown', root, 'notes.md', root, 'markdown');
+  assert.equal(cli('verify', path.join(root, 'markdown')).digest, markdown.digest);
+  const legacy = await writeBundleDirectory(packSnapshot(snapshot), root, 'legacy');
+  assert.equal(cli('verify', legacy).digest, snapshot.digest);
 });
 
 test('issue source captures authorized records through the common engine without mutating provider state', async () => {

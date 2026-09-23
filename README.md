@@ -207,14 +207,16 @@ pnpm device:sync
 
 会话提取、快照校验与打包已抽为 `packages/context-engine/` 工作区包，Codex/Claude 历史、Markdown 和问题记录来源位于 `packages/context-adapters/`。新版连接器使用 v3 清单和独立图片对象交接，图片按原始字节上传、按 SHA-256 去重并在目标设备还原；旧连接器仍可读取 v1 快照或 v2 包。服务端按租户、执行、来源设备和目标设备隔离对象，并保存不可覆盖的传输摘要。单张图片上限 12 MiB，单次图片总量上限 50 MiB；对象目前按整件重试，分片续传、普通附件文件和代码改动交付尚未接入。
 
-本地 Markdown 文件可作为独立数据源打包，供复制到另一台机器后校验：
+本地 Markdown 文件或已冻结的 v1 快照可独立打成 v3 目录包，复制到另一台机器后校验、导入：
 
 ```bash
 pnpm context:bundle -- pack-markdown /absolute/source/root notes.md /absolute/output handoff-1
+pnpm context:bundle -- pack-snapshot /absolute/snapshot.json /absolute/output handoff-2
 pnpm context:bundle -- verify /absolute/output/handoff-1
+pnpm context:bundle -- import-snapshot /absolute/output/handoff-1 /absolute/imported snapshot.json
 ```
 
-第一条命令只读取授权根目录中的相对 Markdown 路径，并生成不可覆盖的目录包；第二条校验来源快照、清单与对象摘要。该命令只生成和校验数据包，不会自动启动 Agent。架构、协议边界与后续阶段见[会话与数据流转核心引擎设计](docs/context-transfer-engine-design.md)。
+`pack-markdown` 只读取授权根目录中的相对 Markdown 路径；`pack-snapshot` 要求来源是可校验的完整 v1 快照 JSON。目录包含 v3 清单和按摘要命名的原始图片字节，复制后 `verify` 会重建并校验原快照摘要，同时继续支持旧 v2 目录包。`import-snapshot` 将 v3 包还原为新的本地快照 JSON 文件，不覆盖已有文件，也不会自动写入任务、启动 Agent 或信任包内自称的租户身份。包内容属于不可信输入，导入后的使用仍需由宿主单独授权。架构、协议边界与后续阶段见[会话与数据流转核心引擎设计](docs/context-transfer-engine-design.md)。
 
 任务详情把会话、执行、交接和任务变更按发生时间展示；会话可以原位展开并分页读取，工具记录默认折叠。搜索任务列表也会匹配关联会话的标题、Agent 和工作目录。后台更新通过“有新进展”提示，避免打断正在阅读的记录。
 
