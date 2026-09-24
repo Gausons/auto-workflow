@@ -49,30 +49,7 @@
         </header>
 
         <section class="page task-center" data-page="tasks" id="taskCenter" hidden aria-label="任务中心"></section>
-        <section class="page history-page" data-page="history" hidden>
-          <div class="history-heading"><h1>会话</h1><span>Agent 历史记录</span></div>
-          <div class="history-layout">
-            <aside class="history-browser" aria-label="历史会话列表">
-              <form id="historyFilters" class="history-filters">
-                <label class="history-search">搜索会话<input id="historyQuery" placeholder="搜索会话…" maxlength="200" /></label>
-                <div class="history-selects">
-                  <label>Agent<select id="historyAgent"><option value="">全部 Agent</option></select></label>
-                  <label>工作区<select id="historyWorkspace"><option value="">全部工作区</option></select></label>
-                </div>
-                <button class="button secondary" type="submit">刷新会话</button>
-              </form>
-              <p id="historyStatus" role="status" aria-live="polite"></p>
-              <div id="historyList" class="history-list"></div>
-              <div class="history-pagination">
-                <button id="historyPrev" class="button secondary" type="button" disabled aria-label="上一页">←</button>
-                <span id="historyPage"></span>
-                <button id="historyNext" class="button secondary" type="button" disabled aria-label="下一页">→</button>
-              </div>
-              <details class="history-source-details"><summary>数据来源</summary><p id="historySources" class="history-meta"></p></details>
-            </aside>
-            <div id="historyDetail" class="history-detail" aria-live="polite"><div class="history-empty"><span>◎</span><h2>从一个会话开始</h2><p>选择历史会话，查看对话与工作过程</p></div></div>
-          </div>
-        </section>
+        <section class="page history-page" data-page="history" hidden><div id="reactHistoryPage"></div></section>
 
         <section class="page settings-page" data-page="settings" hidden>
           <header class="page-heading settings-heading">

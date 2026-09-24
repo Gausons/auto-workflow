@@ -4,6 +4,7 @@ import { hasSessionToken } from './api/client.js';
 import { AccountPanel } from './account/AccountPanel.js';
 import { AuthScreen } from './auth/AuthScreen.js';
 import { MembersPanel } from './members/MembersPanel.js';
+import { HistoryPage } from './history/HistoryPage.js';
 import { WorkbenchPage } from './workbench/WorkbenchPage.js';
 import { AssignmentPanel, ConfigPanel } from './settings/SettingsPanels.js';
 
@@ -55,5 +56,12 @@ const assignmentRoot = document.querySelector<HTMLElement>('#reactAssignmentPane
 if (assignmentRoot) createRoot(assignmentRoot).render(
   <QueryClientProvider client={queryClient}>
     <AssignmentPanel />
+  </QueryClientProvider>
+);
+
+const historyRoot = document.querySelector<HTMLElement>('#reactHistoryPage');
+if (historyRoot) createRoot(historyRoot).render(
+  <QueryClientProvider client={queryClient}>
+    <HistoryPage />
   </QueryClientProvider>
 );
