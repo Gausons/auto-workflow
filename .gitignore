@@ -19,6 +19,7 @@
 !/tsconfig.client.json
 !/tsconfig.web.json
 !/vite.config.ts
+!/playwright.config.ts
 !/src/
 !/public/
 !/web/

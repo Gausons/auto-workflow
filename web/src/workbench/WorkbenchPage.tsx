@@ -23,7 +23,7 @@ type CommandResult = Bootstrap | { bug: Bug } | { attachments: Attachment[] } | 
 const bootstrapKey = ['bootstrap'] as const;
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-function isWorkbenchRoute() { return location.hash === '#workbench'; }
+function isWorkbenchRoute() { return location.pathname === '/workbench' || location.hash === '#workbench'; }
 function safeAttachmentUrl(value: string | undefined) {
   if (!value) return null;
   try {

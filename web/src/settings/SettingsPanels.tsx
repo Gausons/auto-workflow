@@ -21,7 +21,7 @@ const errorMessage = (error: unknown) => error instanceof Error ? error.message 
 const modelIds = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'];
 
 function useSettings(section: 'config' | 'assignment') {
-  const isActive = () => location.hash === `#settings/${section}` || location.hash === `#${section}` || (section === 'assignment' && location.hash === '#settings');
+  const isActive = () => location.pathname === `/settings/${section}` || location.hash === `#settings/${section}` || location.hash === `#${section}` || (section === 'assignment' && (location.pathname === '/settings' || location.hash === '#settings'));
   const [active, setActive] = useState(isActive);
   useEffect(() => {
     const update = () => setActive(isActive());

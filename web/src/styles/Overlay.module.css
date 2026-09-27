@@ -1,0 +1,13 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: rgb(17 24 39 / 45%);
+}
+
+.panel {
+  overflow-y: auto;
+  box-shadow: 0 18px 60px rgb(17 24 39 / 18%);
+}

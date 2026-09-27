@@ -3,18 +3,17 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 test('primary navigation keeps four work tabs and moves administration into settings', async () => {
-  const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
-  const app = await readFile(new URL('../public/app.ts', import.meta.url), 'utf8');
-  const primaryNavigation = html.match(/<nav class="nav-list"[\s\S]*?<\/nav>/)?.[0] || '';
+  const app = await readFile(new URL('../web/src/app/App.tsx', import.meta.url), 'utf8');
+  const primaryNavigation = app.match(/<nav className="nav-list"[\s\S]*?<\/nav>/)?.[0] || '';
 
-  assert.equal((primaryNavigation.match(/data-nav=/g) || []).length, 4);
-  for (const route of ['new-task', 'tasks', 'workbench', 'history']) {
-    assert.match(primaryNavigation, new RegExp(`data-nav="${route}"`));
+  assert.equal((primaryNavigation.match(/<Link/g) || []).length, 4);
+  for (const route of ['/tasks/new', '/tasks', '/workbench', '/history']) {
+    assert.match(primaryNavigation, new RegExp(`to="${route.replaceAll('/', '\\/')}"`));
   }
-  assert.doesNotMatch(primaryNavigation, /data-nav="(?:assignment|config|members|account)"/);
-  assert.match(html, /data-page="settings"/);
+  assert.doesNotMatch(primaryNavigation, /to="\/settings/);
+  assert.match(app, /className="page settings-page"/);
   for (const panel of ['assignment', 'config', 'members', 'account']) {
-    assert.match(html, new RegExp(`data-settings-panel="${panel}"`));
+    assert.ok(app.includes(`['${panel}'`));
   }
-  assert.match(app, /view\.startsWith\('settings\/'\)/);
+  assert.match(app, /path: 'settings\/:section'/);
 });

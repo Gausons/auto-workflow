@@ -86,9 +86,10 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
         await runtimeFor(tenant).handleApi(req, res, url, principal);
         return;
       }
-      if (['/', '/index.html'].includes(url.pathname) && ['GET', 'HEAD'].includes(req.method || '')) {
+      if (isWebPagePath(url.pathname) && ['GET', 'HEAD'].includes(req.method || '')) {
         const template = await readFile(path.join(projectDir, 'public', 'index.html'), 'utf8');
-        const content = template.replace('/__WEB_ENTRY__', `/${await webEntryAsset()}`);
+        const assets = await webEntryAssets();
+        const content = template.replace('/__WEB_ENTRY__', `/${assets.script}`).replace('<!--__WEB_STYLES__-->', assets.styles.map(file => `<link rel="stylesheet" href="/${file}" />`).join('\n    '));
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
         res.end(req.method === 'HEAD' ? undefined : content);
         return;
@@ -105,17 +106,9 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
         res.end(req.method === 'HEAD' ? undefined : content);
         return;
       }
-      const assets: Record<string, [string, string]> = { '/app.js': ['build/app.js', 'text/javascript; charset=utf-8'], '/historyView.js': ['build/historyView.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'] };
-      assets['/taskContent.js'] = ['build/taskContent.js', 'text/javascript; charset=utf-8'];
-      assets['/taskCenter.js'] = ['build/taskCenter.js', 'text/javascript; charset=utf-8'];
-      assets['/agentRunConfig.js'] = ['build/agentRunConfig.js', 'text/javascript; charset=utf-8'];
-      assets['/historyComposer.js'] = ['build/historyComposer.js', 'text/javascript; charset=utf-8'];
-      assets['/historyTimeline.js'] = ['build/historyTimeline.js', 'text/javascript; charset=utf-8'];
-      assets['/taskTimeline.js'] = ['build/taskTimeline.js', 'text/javascript; charset=utf-8'];
-      const asset = Object.hasOwn(assets, url.pathname) ? assets[url.pathname] : null;
-      if (!asset || !['GET', 'HEAD'].includes(req.method || '')) return sendJson(res, 404, { message: '页面不存在' });
-      const content = await readFile(path.join(projectDir, 'public', asset![0]!));
-      res.writeHead(200, { 'Content-Type': asset[1], 'Cache-Control': 'no-cache' });
+      if (url.pathname !== '/styles.css' || !['GET', 'HEAD'].includes(req.method || '')) return sendJson(res, 404, { message: '页面不存在' });
+      const content = await readFile(path.join(projectDir, 'public', 'styles.css'));
+      res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'no-cache' });
       res.end(req.method === 'HEAD' ? undefined : content);
     } catch (caught: unknown) {
       const error = asError(caught);
@@ -138,14 +131,22 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
   };
 }
 
-async function webEntryAsset() {
+function isWebPagePath(value: string) {
+  if (value === '/' || value === '/index.html') return true;
+  return /^\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\/?$/.test(value) && value !== '/api' && !value.startsWith('/api/') && value !== '/assets' && !value.startsWith('/assets/');
+}
+
+async function webEntryAssets() {
   const raw = await readFile(path.join(projectDir, 'public', 'build', '.vite', 'manifest.json'), 'utf8');
-  const manifest = JSON.parse(raw) as Record<string, { file?: unknown; isEntry?: unknown }>;
+  const manifest = JSON.parse(raw) as Record<string, { file?: unknown; isEntry?: unknown; css?: unknown }>;
   const entry = manifest['web/src/main.tsx'];
   if (!entry || entry.isEntry !== true || typeof entry.file !== 'string' || !/^assets\/[A-Za-z0-9._-]+\.js$/.test(entry.file)) {
     throw new Error('Web 构建清单缺少有效入口，请先运行 pnpm build:client');
   }
-  return entry.file;
+  if (entry.css !== undefined && (!Array.isArray(entry.css) || !entry.css.every(file => typeof file === 'string' && /^assets\/[A-Za-z0-9._-]+\.css$/.test(file)))) {
+    throw new Error('Web 构建清单包含无效样式资源');
+  }
+  return { script: entry.file, styles: (entry.css || []) as string[] };
 }
 
 function sendJson(res: ServerResponse, status: number, data: unknown) {

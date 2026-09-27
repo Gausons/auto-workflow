@@ -20,6 +20,11 @@ test('login page and its entire JavaScript import graph are served without authe
     assert.equal(page.status, 200);
     const html = await page.text();
     assert.match(html, /src="\/assets\/react-entry-[A-Za-z0-9_-]+\.js"/);
+    const stylesheet = html.match(/href="(\/assets\/[A-Za-z0-9._-]+\.css)"/)?.[1];
+    assert.ok(stylesheet, 'Vite manifest CSS must be linked from the Web entry');
+    const styleResponse = await fetch(base + stylesheet);
+    assert.equal(styleResponse.status, 200);
+    assert.match(styleResponse.headers.get('content-type') || '', /text\/css/);
     const pending = [...html.matchAll(/<script[^>]*src="([^"]+)"/g)].map(match => new URL(match[1], base).href);
     assert.ok(pending.length > 0);
     const visited = new Set<string>();
@@ -32,7 +37,7 @@ test('login page and its entire JavaScript import graph are served without authe
       assert.match(response.headers.get('content-type') || '', /javascript/);
       const source = await response.text();
       for (const match of source.matchAll(/\b(?:import|export)\s+(?:[^'";]*?\s+from\s*)?['"]([^'"]+)['"]/g)) {
-        pending.push(new URL(match[1], url).href);
+        if (match[1]?.startsWith('/') || match[1]?.startsWith('.')) pending.push(new URL(match[1], url).href);
       }
     }
     const missing = await fetch(base + '/assets/missing.js');
@@ -51,6 +56,9 @@ test('authentication and workspace views cannot render at the same time', async 
   assert.match(css, /\[hidden\]\s*\{\s*display:\s*none\s*!important;/);
   assert.match(css, /\.login-screen\s*\{[^}]*display:\s*grid;/s);
   assert.match(css, /\.login-card\s*\{/);
-  assert.match(html, /id="workspaceShell"\s+hidden/);
-  assert.match(html, /id="loginScreen"/);
+  assert.match(html, /id="app"/);
+  const app = await readFile(new URL('../web/src/app/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /id="workspaceShell"/);
+  assert.match(app, /id="loginScreen"/);
+  assert.match(app, /if \(!hasSessionToken\(\) \|\| bootstrap\.isError\)/);
 });

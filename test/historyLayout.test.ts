@@ -23,13 +23,14 @@ test('history list constrains long session titles to its grid column', async () 
 });
 
 test('context continuation shares the new-task composer layout without clipping menus', async () => {
-  const composer = await readFile(new URL('../public/historyComposer.ts', import.meta.url), 'utf8');
+  const composer = await readFile(new URL('../web/src/history/HistoryComposer.tsx', import.meta.url), 'utf8');
   const css = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
 
-  assert.match(composer, /class="conversation-switch tc-create-shell"/);
-  assert.match(composer, /class="history-compose-footer"[\s\S]*data-new-session-controls[\s\S]*type="submit"/);
-  assert.match(composer, /if \(controls\) controls\.innerHTML = `\$\{renderRunModel/);
-  assert.match(composer, /正在切换到 \$\{escape\(branchSwitching\)\}/);
+  assert.match(composer, /className="conversation-switch tc-create-shell"/);
+  assert.match(composer, /className="history-compose-footer"/);
+  assert.match(composer, /className="conversation-new-controls"/);
+  assert.match(composer, /className="tc-config-menu tc-model-menu"/);
+  assert.match(composer, /branchBusy/);
   assert.match(css, /\.history-composer\s*\{[^}]*overflow:\s*visible;/s);
   assert.doesNotMatch(css, /\.conversation-new-actions\s*\{/);
 });

@@ -3,11 +3,6 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HistoryPage } from './HistoryPage.js';
-import { createHistoryComposer } from '../../../public/historyComposer.js';
-
-vi.mock('../../../public/historyComposer.js', () => ({
-  createHistoryComposer: vi.fn(() => ({ mount: () => {}, unmount: () => {} }))
-}));
 
 const id = 'a'.repeat(64);
 const session = { id, sessionId: id, agent: 'codex', agentLabel: 'Codex', deviceId: 'local', title: '<script>不可信标题</script>', cwd: '/repo/work', status: 'ready', createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:01:00.000Z', messageCount: 1 };
@@ -71,18 +66,20 @@ describe('HistoryPage', () => {
     await waitFor(() => expect(fetchMock.mock.calls.filter(([path]) => String(path).startsWith('/api/agent-sessions?'))).toHaveLength(2));
   });
 
-  it('keeps one composer instance across history navigation so drafts can survive', async () => {
+  it('preserves a React composer draft across history navigation', async () => {
     vi.stubGlobal('fetch', vi.fn().mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(path.startsWith('/api/agent-sessions?') ? list
       : path.startsWith(`/api/agent-sessions/${id}`) ? { session, messages: [], total: 0 }
-        : { permissions: ['read'] }), { status: 200 }))));
+        : path === '/api/task-center/codex' ? { projects: [] }
+          : { permissions: ['work.execute'] }), { status: 200 }))));
     renderHistory(`#history/${id}`);
 
     await screen.findByRole('heading', { name: '<script>不可信标题</script>' });
+    await userEvent.setup().type(screen.getByRole('textbox', { name: '发送消息' }), '保留这段草稿');
     location.hash = '#tasks';
     await waitFor(() => expect(screen.queryByRole('heading', { name: '<script>不可信标题</script>' })).toBeNull());
     location.hash = `#history/${id}`;
     await screen.findByRole('heading', { name: '<script>不可信标题</script>' });
 
-    expect(createHistoryComposer).toHaveBeenCalledOnce();
+    expect(screen.getByRole('textbox', { name: '发送消息' })).toHaveProperty('value', '保留这段草稿');
   });
 });

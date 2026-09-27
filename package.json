@@ -17,6 +17,7 @@
     "pretest": "pnpm build:client",
     "test": "pnpm test:web && node --import tsx --test test/*.test.ts",
     "test:web": "vitest run",
+    "test:e2e": "pnpm build:client && playwright test",
     "tenant": "node --import tsx --import ./src/issueSources/preload.ts scripts/tenant.ts",
     "check:type-debt": "node --import tsx scripts/check-type-debt.ts",
     "typecheck": "pnpm check:type-debt && tsc --noEmit && tsc -p tsconfig.client.json --noEmit && tsc -p tsconfig.web.json --noEmit"
@@ -26,15 +27,17 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@agentclientprotocol/sdk": "1.4.0",
     "@auto-workflow/context-adapters": "workspace:*",
     "@auto-workflow/context-engine": "workspace:*",
-    "@agentclientprotocol/sdk": "1.4.0",
     "@tanstack/react-query": "^5.103.2",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "react-router": "^8.4.0",
     "tsx": "^4.23.13"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",
     "@types/node": "^22.20.1",

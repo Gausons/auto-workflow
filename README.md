@@ -296,7 +296,7 @@ pnpm tenant -- migrate [组织ID]
 
 ## 开发
 
-前端正按 React + TypeScript + Vite 的纯 Web 架构渐进迁移：登录、账号、成员、缺陷工作台、历史会话列表与详情、设置已使用 React；历史续聊输入区和任务中心仍由兼容层承载。详细决策、工程边界和后续步骤见[Web 前端技术选型](docs/frontend-web-technology-selection.md)。
+前端已迁移为 React + TypeScript + Vite 的纯 Web 应用：登录、设置、缺陷工作台、任务中心、新建任务和历史会话续聊均由 React 承载。页面使用普通路径（如 `/tasks`、`/tasks/new`、`/history/:id`）；旧 `#tasks` 等 hash 链接会自动转到对应路径。服务端通过 Vite manifest 加载带指纹的 JS/CSS，业务接口保持不变。现有视觉基础样式保留在 `public/styles.css`，新组件样式使用 CSS Modules。详细决策见[Web 前端技术选型](docs/frontend-web-technology-selection.md)。
 
 ```bash
 # 开发模式（监听源码变化）
@@ -308,6 +308,9 @@ pnpm build
 # 运行测试
 pnpm test
 
+# 运行真实浏览器回归（首次需 pnpm exec playwright install chromium）
+pnpm test:e2e
+
 # 生产方式启动（启动前自动构建浏览器端）
 pnpm start
 ```
@@ -315,8 +318,8 @@ pnpm start
 主要目录：
 
 ```text
-web/          React Web 页面与 API 客户端
-public/       迁移中的旧页面与公共样式；build/ 为生成产物
+web/          React Web 应用、组件测试与浏览器回归
+public/       Web 入口、共享类型/渲染工具与基础样式；build/ 为生成产物
 src/          服务端领域逻辑与集成
 scripts/      租户管理、多设备连接器等命令
 migrations/   SQLite 数据库迁移

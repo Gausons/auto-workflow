@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
-import { createHistoryComposer } from '../../../public/historyComposer.js';
+import { HistoryComposer } from './HistoryComposer.js';
 import { renderMessages } from '../../../public/historyView.js';
 import type { HistoryMessage, Session } from '../../../public/taskTypes.js';
 
@@ -15,19 +15,13 @@ interface HistoryListResponse {
 }
 interface HistoryFilters { offset: number; agent: string; query: string; workspace: string }
 interface InheritedPage { messages: HistoryMessage[]; total: number }
-interface ComposerHandlers {
-  canEdit(): boolean;
-  refresh(id: string): void;
-  syncHistory(id: string): Promise<HistoryMessage[] | null>;
-}
-
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 const statusLabels: Record<string, string> = { ready: '等待输入', preparing: '正在准备上下文', queued: '等待执行', launching: '正在连接', running: '正在回复', waiting: '等待处理', failed: '执行失败', completed: '本轮结束', interrupted: '已中断', error: '发生错误', unknown: '运行状态未知' };
 const sourceLabels: Record<string, string> = { available: '可读取', missing: '未找到历史目录', unconfigured: '未配置', error: '无法读取目录' };
 const statusLabel = (value: unknown) => statusLabels[String(value)] || '运行状态未知';
 const time = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('zh-CN') : '时间未知';
 const directoryName = (value: string | undefined) => value?.split('/').filter(Boolean).at(-1) || '未知工作区';
-const currentRoute = () => ({ active: /^#history(?:\/|$)/.test(location.hash), id: /^#history\/([a-f0-9]{64})$/.exec(location.hash)?.[1] || null });
+const currentRoute = () => ({ active: /^\/history(?:\/|$)/.test(location.pathname) || /^#history(?:\/|$)/.test(location.hash), id: /^\/history\/([a-f0-9]{64})$/.exec(location.pathname)?.[1] || /^#history\/([a-f0-9]{64})$/.exec(location.hash)?.[1] || null });
 
 function SafeMessages({ messages }: { messages: HistoryMessage[] }) {
   const element = useRef<HTMLDivElement>(null);
@@ -44,9 +38,7 @@ function SafeMessages({ messages }: { messages: HistoryMessage[] }) {
   return <div className="history-messages" data-history-transcript ref={element} />;
 }
 
-function HistoryDetail({ id, canExecute, composer, handlers }: { id: string; canExecute: boolean; composer: ReturnType<typeof createHistoryComposer>; handlers: { current: ComposerHandlers | null } }) {
-  const composerHost = useRef<HTMLElement>(null);
-  const outputHost = useRef<HTMLDivElement>(null);
+function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) {
   const [synced, setSynced] = useState<{ messages: HistoryMessage[]; total: number } | null>(null);
   const detail = useInfiniteQuery({
     queryKey: ['history', 'detail', id],
@@ -72,28 +64,16 @@ function HistoryDetail({ id, canExecute, composer, handlers }: { id: string; can
   const loadedMessages = detail.data?.pages.flatMap(page => page.messages) || [];
   const messages = synced?.messages || loadedMessages;
 
-  useEffect(() => {
-    if (!session || !composerHost.current || !outputHost.current) return;
-    let alive = true;
-    const controller = new AbortController();
-    handlers.current = {
-      canEdit: () => canExecute,
-      refresh: () => { setSynced(null); void detail.refetch(); },
-      syncHistory: async currentId => {
-        const all: HistoryMessage[] = [];
-        let page: HistoryDetailResponse;
-        do {
-          page = await apiRequest<HistoryDetailResponse>(`/api/agent-sessions/${encodeURIComponent(currentId)}?offset=${all.length}&limit=200`, { signal: controller.signal });
-          all.push(...page.messages);
-        } while (all.length < page.total && page.messages.length);
-        if (!alive) return null;
-        setSynced({ messages: all, total: page.total });
-        return all;
-      }
-    };
-    composer.mount(composerHost.current, session, outputHost.current, loadedMessages);
-    return () => { alive = false; controller.abort(); composer.unmount(); handlers.current = null; };
-  }, [session?.id, canExecute]);
+  const syncHistory = async (currentId: string) => {
+    const all: HistoryMessage[] = [];
+    let page: HistoryDetailResponse;
+    do {
+      page = await apiRequest<HistoryDetailResponse>(`/api/agent-sessions/${encodeURIComponent(currentId)}?offset=${all.length}&limit=200`);
+      all.push(...page.messages);
+    } while (all.length < page.total && page.messages.length);
+    setSynced({ messages: all, total: page.total });
+    return all;
+  };
 
   if (detail.isPending) return <div className="history-detail" role="status">正在读取会话…</div>;
   if (detail.isError || !first || !session) return <div className="history-detail" role="alert">加载失败：{errorMessage(detail.error)} <button className="button secondary" type="button" onClick={() => detail.refetch()}>重试</button></div>;
@@ -119,9 +99,9 @@ function HistoryDetail({ id, canExecute, composer, handlers }: { id: string; can
       </details>}
       <SafeMessages messages={messages} />
       <div className="history-chat-footer"><span>已显示 {messages.length} / {synced?.total ?? first.total} 条记录</span>{!synced && detail.hasNextPage && <button className="button secondary" type="button" disabled={detail.isFetchingNextPage} onClick={() => void detail.fetchNextPage()}>加载更多记录</button>}</div>
-      <div id="historyLiveOutput" className="history-messages" role="log" aria-live="polite" ref={outputHost} />
+      <div id="historyLiveOutput" />
     </div></div>
-    <section className="history-composer" id="historyComposer" aria-label="会话输入框" ref={composerHost} />
+    <HistoryComposer session={session} historyMessages={messages} canEdit={canExecute} syncHistory={syncHistory} />
   </div>;
 }
 
@@ -129,15 +109,6 @@ export function HistoryPage() {
   const [route, setRoute] = useState(currentRoute);
   const [filters, setFilters] = useState<HistoryFilters>({ offset: 0, agent: '', query: '', workspace: '' });
   const [draft, setDraft] = useState('');
-  const composerHandlers = useRef<ComposerHandlers | null>(null);
-  const composerRef = useRef<ReturnType<typeof createHistoryComposer> | null>(null);
-  if (!composerRef.current) composerRef.current = createHistoryComposer({
-    api: (path, init) => apiRequest(path, init),
-    canEdit: () => composerHandlers.current?.canEdit() ?? false,
-    refresh: id => composerHandlers.current?.refresh(id),
-    syncHistory: id => composerHandlers.current?.syncHistory(id) ?? Promise.resolve(null),
-    openSession: id => { location.hash = `history/${id}`; }
-  });
   useEffect(() => {
     const update = () => setRoute(currentRoute());
     window.addEventListener('hashchange', update);
@@ -192,7 +163,7 @@ export function HistoryPage() {
           <button className="button secondary" type="button" disabled={!data || data.offset + data.limit >= data.total} aria-label="下一页" onClick={() => setFilters(previous => ({ ...previous, offset: previous.offset + 30 }))}>→</button></div>
         <details className="history-source-details"><summary>数据来源</summary><p className="history-meta">{sourceText}</p></details>
       </aside>
-      {route.id ? <HistoryDetail key={route.id} id={route.id} canExecute={identity.data?.permissions.includes('work.execute') === true} composer={composerRef.current} handlers={composerHandlers} /> : <div className="history-detail" aria-live="polite"><div className="history-empty"><span>◎</span><h2>从一个会话开始</h2><p>选择历史会话，查看对话与工作过程</p></div></div>}
+      {route.id ? <HistoryDetail key={route.id} id={route.id} canExecute={identity.data?.permissions.includes('work.execute') === true} /> : <div className="history-detail" aria-live="polite"><div className="history-empty"><span>◎</span><h2>从一个会话开始</h2><p>选择历史会话，查看对话与工作过程</p></div></div>}
     </div>
   </>;
 }

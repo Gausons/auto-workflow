@@ -137,15 +137,14 @@ test('HTTP auth, viewer write rejection, and task UI assets', async t => {
   assert.equal((await req(continuation, 'POST', { message: 'test' })).status, 401);
   assert.equal((await req(continuation, 'POST', { message: 'test' }, viewer.token)).status, 403);
   assert.equal((await req(continuation, 'GET', null, viewer.token)).status, 404);
-  const contentAsset = await fetch(base + '/taskContent.js');
-  assert.equal(contentAsset.status, 200);
-  assert.match(contentAsset.headers.get('content-type') || '', /javascript/);
-  const taskCenterAsset = await fetch(base + '/taskCenter.js');
-  assert.equal(taskCenterAsset.status, 200);
-  const taskCenterScript = await taskCenterAsset.text();
-  assert.match(taskCenterScript, /root\.querySelector\(selector\)/, 'task center DOM lookup must query the provided root');
-  assert.doesNotMatch(taskCenterScript, /=>\s*selectFrom\(root, selector\)/, 'task center DOM lookup must not recurse');
-  assert.match(await (await fetch(base + '/')).text(), /id="taskCenter"/);
+  for (const page of ['/tasks', '/tasks/new', '/history/' + 'a'.repeat(64), '/settings/account']) {
+    const response = await fetch(base + page);
+    assert.equal(response.status, 200, page);
+    assert.match(await response.text(), /id="app"/);
+  }
+  assert.equal((await fetch(base + '/taskCenter.js')).status, 404);
+  assert.equal((await fetch(base + '/assets/missing.js')).status, 404);
+  assert.notEqual((await fetch(base + '/api')).headers.get('content-type'), 'text/html; charset=utf-8');
 });
 
 test('invalid sync batches roll back and cancelled transfers cannot be acknowledged', async t => {
