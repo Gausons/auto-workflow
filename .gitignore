@@ -3,6 +3,8 @@
 !/.gitignore
 !/AGENTS.md
 !/.github/
+!/Dockerfile
+!/.dockerignore
 !/.env.example
 !/README.md
 !/docs/

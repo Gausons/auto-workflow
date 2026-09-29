@@ -5,30 +5,35 @@ umask 077
 
 [[ $EUID == 0 && $# == 1 && $1 =~ ^[0-9a-f]{40}$ ]] || exit 64
 revision=$1
+image="auto-workflow:$revision"
 base=/opt/auto-workflow
 data=/var/lib/auto-workflow
 exec 9>/run/lock/auto-workflow-deploy.lock
 flock -w 900 9
 
-release=$(mktemp -d "$base/releases/${revision}.XXXXXX")
-archive=$(mktemp /var/tmp/auto-workflow-release.XXXXXX)
-previous=$(readlink -f "$base/current")
+archive=$(mktemp /var/tmp/auto-workflow-image.XXXXXX)
+previous_container=''
+legacy=false
 stopped=false
-switched=false
+created=false
+previous_policy='unless-stopped'
 
-# Invoked by the EXIT trap, including failures before the service is stopped.
+# Called indirectly by the EXIT trap.
 # shellcheck disable=SC2317
 recover() {
   result=$?
   trap - EXIT
   rm -f "$archive"
   if [[ $result != 0 && $stopped == true ]]; then
-    if [[ $switched == true ]]; then
-      ln -sfn "$previous" "$base/current.next"
-      mv -Tf "$base/current.next" "$base/current"
+    if [[ $created == true ]]; then docker rm -f auto-workflow || true; fi
+    if [[ -n $previous_container ]]; then
+      docker rename "$previous_container" auto-workflow
+      docker update --restart="$previous_policy" auto-workflow > /dev/null
+      docker start auto-workflow > /dev/null
+    elif [[ $legacy == true ]]; then
+      systemctl start auto-workflow
     fi
-    systemctl restart auto-workflow || true
-    echo 'Deployment failed; previous code restored. Database was not reverted. Check the backup before any data recovery.' >&2
+    echo 'Deployment failed; previous service restored. Database was not reverted; inspect the backup before data recovery.' >&2
   fi
   exit "$result"
 }
@@ -37,41 +42,71 @@ trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
 cat > "$archive"
-chown auto-workflow:auto-workflow "$release" "$archive"
-runuser -u auto-workflow -- tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$release"
-[[ $(cat "$release/REVISION") == "$revision" ]]
-[[ -f "$release/public/build/.vite/manifest.json" && -f "$release/server.ts" ]]
-[[ ! -e "$release/.workflow-data" && ! -L "$release/.workflow-data" ]]
-ln -s "$data/runtime" "$release/.workflow-data"
-cd "$release"
-runuser -u auto-workflow -- env CI=true COREPACK_ENABLE_DOWNLOAD_PROMPT=0 pnpm install --prod --frozen-lockfile --ignore-scripts
-runuser -u auto-workflow -- node --import tsx --input-type=module -e 'await import("./src/database.ts"); await import("./src/issueSources/preload.ts");'
+docker load --input "$archive"
+[[ $(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image") == "$revision" ]]
+[[ $(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image") == linux/amd64 ]]
+# Never mount production data during import validation.
+docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges \
+  "$image" node --import tsx --input-type=module -e 'await import("./src/database.ts"); await import("./src/issueSources/preload.ts");'
 
-# Stop before copying SQLite, including any WAL, to keep the backup consistent.
-backup="$base/backups/$(date -u +%Y%m%dT%H%M%SZ)-${revision}"
-mkdir -p "$backup"
-stopped=true
-systemctl stop auto-workflow
+backup=$(mktemp -d "$base/backups/$(date -u +%Y%m%dT%H%M%SZ)-${revision}.XXXXXX")
+if docker container inspect auto-workflow > /dev/null 2>&1; then
+  previous_policy=$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' auto-workflow)
+  printf '%s\n' "$(docker inspect --format '{{.Config.Image}}' auto-workflow)" > "$backup/PREVIOUS_IMAGE"
+  docker stop --time 20 auto-workflow > /dev/null
+  # Rename before recording the stopped state, so recovery always has a valid name.
+  previous_container="auto-workflow-previous-$(basename "$backup")"
+  if ! docker rename auto-workflow "$previous_container"; then
+    docker start auto-workflow > /dev/null
+    previous_container=''
+    exit 1
+  fi
+  stopped=true
+  docker update --restart=no "$previous_container" > /dev/null
+elif systemctl is-active --quiet auto-workflow; then
+  legacy=true
+  stopped=true
+  readlink -f "$base/current" > "$backup/PREVIOUS_RELEASE"
+  systemctl stop auto-workflow
+else
+  echo 'Expected an existing container or legacy service; refusing an ambiguous migration.' >&2
+  exit 1
+fi
+
+# Stop the only application writer before backing up SQLite and its WAL.
 shopt -s nullglob
 database_files=("$data"/workflow.sqlite*)
 [[ ${#database_files[@]} -gt 0 ]]
 cp -a "${database_files[@]}" "$backup/"
 cp -a /etc/auto-workflow/auto-workflow.env "$backup/"
 tar -czf "$backup/runtime-and-tenants.tar.gz" -C "$data" runtime tenants
-printf '%s\n' "$previous" > "$backup/PREVIOUS_RELEASE"
 
-ln -sfn "$release" "$base/current.next"
-mv -Tf "$base/current.next" "$base/current"
-switched=true
-systemctl start auto-workflow
+# Node parses the mounted dotenv file; Docker --env-file does not unquote values.
+# Fixed process variables override deployment-specific values in the mounted file.
+docker create --name auto-workflow --restart unless-stopped --init \
+  --user "$(id -u auto-workflow):$(id -g auto-workflow)" \
+  --read-only --tmpfs /tmp:rw,nosuid,nodev,size=128m --cap-drop ALL --security-opt no-new-privileges \
+  --log-opt max-size=10m --log-opt max-file=3 \
+  --publish 127.0.0.1:4173:4173 \
+  --mount "type=bind,src=$data,dst=$data" \
+  --mount "type=bind,src=$data/runtime,dst=/app/.workflow-data" \
+  --mount type=bind,src=/etc/auto-workflow,dst=/run/config,readonly \
+  --env HOST=0.0.0.0 --env PORT=4173 --env NODE_ENV=production \
+  --env "DATABASE_PATH=$data/workflow.sqlite" --env "TENANT_ENV_DIR=$data/tenants" \
+  --env "CODEX_WORKSPACE_DIR=$data/workspace" --env ACP_ENABLED=false \
+  --env CODEX_EXECUTABLE=/nonexistent/codex \
+  "$image" > /dev/null
+created=true
+docker start auto-workflow > /dev/null
 for ((attempt = 0; attempt < 30; attempt++)); do
-  if curl --fail --silent --max-time 3 http://127.0.0.1:4173/devices > /dev/null &&
-      [[ $(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 3 http://127.0.0.1:4173/api/auth/session) == 401 ]]; then
+  if docker exec auto-workflow node scripts/deploy/container-health.mjs; then
+    if [[ $legacy == true ]]; then systemctl disable auto-workflow; fi
+    printf '%s\n' "$image" > "$base/DOCKER_IMAGE"
     stopped=false
-    printf 'Deployed %s\nBackup: %s\n' "$revision" "$backup"
+    printf 'Deployed container %s\nBackup: %s\n' "$image" "$backup"
     exit 0
   fi
   sleep 2
 done
-echo 'Health checks failed.' >&2
+echo 'Container health checks failed.' >&2
 exit 1

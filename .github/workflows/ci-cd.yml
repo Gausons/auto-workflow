@@ -44,14 +44,24 @@ jobs:
           path: test-results/
           retention-days: 7
           if-no-files-found: ignore
-      - name: Package the tested revision
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      - name: Build and verify Docker image
         run: |
-          stage=$(mktemp -d)
-          git archive "$GITHUB_SHA" | tar -x -C "$stage"
-          cp -R public/build "$stage/public/build"
-          printf '%s\n' "$GITHUB_SHA" > "$stage/REVISION"
-          tar -czf release.tar.gz -C "$stage" .
+          docker build --build-arg REVISION="$GITHUB_SHA" -t "auto-workflow:$GITHUB_SHA" .
+          trap 'docker logs workflow-smoke; docker rm -f workflow-smoke' EXIT
+          docker run -d --name workflow-smoke --read-only --tmpfs /tmp --cap-drop ALL \
+            --security-opt no-new-privileges --mount type=volume,dst=/var/lib/auto-workflow \
+            --mount type=volume,dst=/app/.workflow-data "auto-workflow:$GITHUB_SHA"
+          for attempt in $(seq 1 30); do
+            if docker exec workflow-smoke node scripts/deploy/container-health.mjs; then break; fi
+            sleep 2
+          done
+          docker exec workflow-smoke node scripts/deploy/container-health.mjs
+          docker restart workflow-smoke
+          sleep 3
+          docker exec workflow-smoke node scripts/deploy/container-health.mjs
+      - name: Export verified image
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: docker save "auto-workflow:$GITHUB_SHA" | gzip > release.tar.gz
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         with:

@@ -390,7 +390,7 @@ test/         Node.js 测试
 
 仓库使用 [CI / CD](https://github.com/Gausons/auto-workflow/actions/workflows/ci-cd.yml) 工作流。每个 PR、main 推送和手动运行都会安装锁定依赖，执行类型检查、全部单元/组件测试、Chromium 浏览器测试和部署脚本检查。Node 固定为 22.23.3，pnpm 固定为 package.json 中的 10.33.2。
 
-main 的检查通过后自动发布到 `https://autoworkflow.top`；PR 不读取生产凭据，也不发布。手动发布在 Actions 页面选择该工作流的 Run workflow，并选择 main。已被新提交替代的旧版本会跳过发布。发布包仅包含该提交的 Git 文件和已测试的前端构建产物，不包含本地环境文件、数据库或会话数据。
+main 的检查通过后自动发布到 `https://autoworkflow.top`；PR 不读取生产凭据，也不发布。手动发布在 Actions 页面选择该工作流的 Run workflow，并选择 main。已被新提交替代的旧版本会跳过发布。CI 使用多阶段 Dockerfile 构建镜像，验证容器页面、静态资源、认证边界和重启，再通过 SSH 传输压缩镜像。镜像标记为 `auto-workflow:<commit SHA>`，生产服务器无需访问镜像仓库。`.dockerignore` 使用允许列表，环境文件、数据库和会话数据不进入镜像。
 
 GitHub 的 `production` Environment 只允许 main 分支，包含以下配置：
 
@@ -401,29 +401,46 @@ GitHub 的 `production` Environment 只允许 main 分支，包含以下配置�
 | Variable | `DEPLOY_HOST` | 生产服务器地址 |
 | Variable | `DEPLOY_USER` | 受限账号 `workflow-deploy` |
 
-生产 SSH 密钥只允许执行 `deploy <commit SHA>`，不能开启交互 shell 或端口转发。服务器上的 `/usr/local/bin/auto-workflow-ci-ssh` 和 `/usr/local/sbin/auto-workflow-deploy` 分别来自 `scripts/deploy/ssh-entrypoint.sh` 与 `scripts/deploy/release.sh`，归 root 所有；修改这些脚本后需由管理员检查并重新安装，普通应用发布不会自动替换它们。`/opt/auto-workflow`、`releases` 父目录和 `backups` 归 root 管理，每个应用版本目录归 `auto-workflow` 运行账号。
+生产 SSH 密钥只允许执行 `deploy <commit SHA>`，不能开启交互 shell 或端口转发。服务器上的 `/usr/local/bin/auto-workflow-ci-ssh` 和 `/usr/local/sbin/auto-workflow-deploy` 分别来自 `scripts/deploy/ssh-entrypoint.sh` 与 `scripts/deploy/release.sh`，归 root 所有；修改这些脚本后需由管理员检查并重新安装，普通镜像发布不会自动替换它们。部署账号不加入 docker 组。
 
-发布使用独立版本目录和服务器文件锁，先安装生产依赖，再短暂停服备份 SQLite、环境配置、runtime 和 tenants，最后切换 current 链接并启动。会验证网页返回 200、未登录的成员接口返回 401，随后在 GitHub 验证公网 HTTPS。失败时恢复上一版代码并重启；数据库不会自动回退，以免覆盖发布期间的数据或重复执行 Agent 指令。若数据库迁移与旧代码不兼容，需要停服并核对备份后人工恢复。公网检查失败只报告失败，不自动回滚已启动的服务。
+发布持有服务器文件锁，先载入镜像并验证版本标签及导入能力，再停旧容器、备份数据库和配置，启动新容器。首次迁移时停止旧 `auto-workflow.service`，容器验证成功后禁用该服务的开机启动。后续由 Docker 的 `unless-stopped` 策略负责开机启动和进程退出重启。健康检查失败时恢复旧容器或首次迁移前的 systemd 服务；数据库不会自动回退，以免覆盖数据或重复执行 Agent 指令。若数据库迁移与旧代码不兼容，需要停服并核对备份后人工恢复。公网 HTTPS 检查失败只报告失败，不自动回滚已启动的容器。
 
-版本和备份分别保存在 `/opt/auto-workflow/releases/` 与 `/opt/auto-workflow/backups/`。备份包含敏感数据，仅 root 可读，不上传 GitHub；当前不自动删除旧版本或备份，需按磁盘容量定期清理。数据库备份目录中的 `PREVIOUS_RELEASE` 记录发布前版本。
+备份保存在 `/opt/auto-workflow/backups/`，包含敏感数据，仅 root 可读，不上传 GitHub。`PREVIOUS_IMAGE`（首次迁移时为 `PREVIOUS_RELEASE`）记录前一版本，`/opt/auto-workflow/DOCKER_IMAGE` 记录当前版本。旧容器停止并关闭自动重启，保留供回退；当前不自动清理旧镜像、容器和备份，需定期检查磁盘。
 
-### SSH 服务器部署与维护
+### Docker 部署与维护
 
-工作台可以在 Linux 服务器上通过 systemd 运行，由 Nginx 提供 HTTPS；开发机连接器继续在开发机运行。生产进程直接执行 `node --import tsx --import ./src/issueSources/preload.ts server.ts`，不使用会构建资源并清理端口的 `pnpm start` 前置脚本。部署前使用与开发环境一致的 pnpm 版本安装锁定依赖并运行 `pnpm build`。
+生产容器名为 `auto-workflow`，以宿主机 `auto-workflow` 用户的 UID/GID 运行，根文件系统只读，不挂载 Docker socket。Node 直接运行 TypeScript，不调用带端口清理逻辑的 `pnpm start`。Nginx 在宿主机提供 HTTPS，代理到仅绑定 `127.0.0.1:4173` 的容器端口。容器内监听 `0.0.0.0:4173`。开发机连接器继续在开发机运行。
 
-当前公网入口为 `https://autoworkflow.top`；`www.autoworkflow.top` 的 HTTP/HTTPS 请求跳转到主域名。开发机连接器使用 `WORKBENCH_URL=https://autoworkflow.top`。
+数据与配置挂载：
 
-当前部署目录约定：应用 `/opt/auto-workflow/current`，环境配置 `/etc/auto-workflow/auto-workflow.env`，数据库位于 `/var/lib/auto-workflow/`；发布目录的 `.workflow-data` 链接到 `/var/lib/auto-workflow/runtime`，后续更新需保留此链接。新服务器使用独立数据库，首次使用需注册个人账号，不会自动复制开发机账号、会话或配置。
+| 宿主机路径 | 容器路径 | 用途 |
+| --- | --- | --- |
+| `/var/lib/auto-workflow` | 原路径 | SQLite、租户配置和工作目录 |
+| `/var/lib/auto-workflow/runtime` | `/app/.workflow-data` | 会话交付和其他运行数据 |
+| `/etc/auto-workflow` | `/run/config`（只读） | 环境配置 |
+
+Node 使用 `--env-file-if-exists=/run/config/auto-workflow.env` 解析环境文件，支持原有带引号的值；绑定端口、数据库路径和禁用服务器 Agent 等部署参数由容器环境变量覆盖。修改宿主机环境文件后执行 `docker restart auto-workflow` 生效，CI/CD 不覆盖此文件。容器内 `localhost` 指容器自身；本地 Mac 的 AI 代理仍需提供服务器可访问的地址。
 
 ```bash
 # 在服务器上执行
-systemctl status auto-workflow nginx
-journalctl -u auto-workflow -n 100 --no-pager
-systemctl restart auto-workflow
-systemctl list-timers auto-workflow-cert-renew.timer
+ docker ps --filter name=auto-workflow
+ docker logs --tail 100 auto-workflow
+ docker inspect --format '{{.State.Health.Status}}' auto-workflow
+ docker restart auto-workflow
+ systemctl status docker nginx
+ systemctl list-timers auto-workflow-cert-renew.timer
 ```
 
-服务只监听 `127.0.0.1:4173`，公网开放 Nginx 的 80/443；80 用于证书验证和跳转 HTTPS。IP 地址证书有效期短，`auto-workflow-cert-renew.timer` 每天检查两次并在续期后重载 Nginx。备份时包含数据库、环境配置与 runtime 目录，SQLite 备份需使用一致性备份或停服备份，不能只复制正在写入的主数据库文件。
+本地验证镜像（需要运行 Docker）：
+
+```bash
+docker build -t auto-workflow:local .
+docker run --rm --name auto-workflow-local -p 127.0.0.1:4174:4173 \
+  -v workflow-local-data:/var/lib/auto-workflow \
+  -v workflow-local-runtime:/app/.workflow-data auto-workflow:local
+```
+
+当前公网入口为 `https://autoworkflow.top`；`www.autoworkflow.top` 跳转到主域名。80 端口用于证书验证和 HTTPS 跳转；`auto-workflow-cert-renew.timer` 保持原有证书续期任务。数据库、环境配置与 runtime 目录都在容器外，删除或替换容器不会删除它们。SQLite 备份需停服或使用一致性备份，不能只复制正在写入的主数据库文件。
 
 开发机从本地服务切换到云端时，设置 `WORKBENCH_URL` 为新的 HTTPS 地址，使用云端个人账号，并给 `WORKBENCH_DEVICE_DIR` 指定新目录（例如 `.workflow-data/device-cloud`）。原状态目录绑定旧服务，不能直接复用。连接器保持运行后，在手机浏览器的“设备与 Agent”页面选择该设备新建远端任务。
 
