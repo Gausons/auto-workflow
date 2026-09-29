@@ -2,6 +2,7 @@
 /*
 !/.gitignore
 !/AGENTS.md
+!/.github/
 !/.env.example
 !/README.md
 !/docs/

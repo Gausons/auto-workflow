@@ -386,6 +386,27 @@ test/         Node.js 测试
 
 依赖方向：`src/` 和 `web/src/` 可以引用 `shared/`；共享层不依赖服务端或浏览器 UI。浏览器专用的运行配置、时间线与渲染工具位于 `web/src/`。浏览器资源统一由 Vite 构建，不再单独编译 `public/` 中的 TypeScript。
 
+### GitHub CI / CD
+
+仓库使用 [CI / CD](https://github.com/Gausons/auto-workflow/actions/workflows/ci-cd.yml) 工作流。每个 PR、main 推送和手动运行都会安装锁定依赖，执行类型检查、全部单元/组件测试、Chromium 浏览器测试和部署脚本检查。Node 固定为 22.23.3，pnpm 固定为 package.json 中的 10.33.2。
+
+main 的检查通过后自动发布到 `https://autoworkflow.top`；PR 不读取生产凭据，也不发布。手动发布在 Actions 页面选择该工作流的 Run workflow，并选择 main。已被新提交替代的旧版本会跳过发布。发布包仅包含该提交的 Git 文件和已测试的前端构建产物，不包含本地环境文件、数据库或会话数据。
+
+GitHub 的 `production` Environment 只允许 main 分支，包含以下配置：
+
+| 类型 | 名称 | 用途 |
+| --- | --- | --- |
+| Secret | `DEPLOY_SSH_KEY` | 专用部署账号的 SSH 私钥 |
+| Secret | `DEPLOY_KNOWN_HOSTS` | 通过可信 SSH 连接获取并固定的服务器主机公钥 |
+| Variable | `DEPLOY_HOST` | 生产服务器地址 |
+| Variable | `DEPLOY_USER` | 受限账号 `workflow-deploy` |
+
+生产 SSH 密钥只允许执行 `deploy <commit SHA>`，不能开启交互 shell 或端口转发。服务器上的 `/usr/local/bin/auto-workflow-ci-ssh` 和 `/usr/local/sbin/auto-workflow-deploy` 分别来自 `scripts/deploy/ssh-entrypoint.sh` 与 `scripts/deploy/release.sh`，归 root 所有；修改这些脚本后需由管理员检查并重新安装，普通应用发布不会自动替换它们。`/opt/auto-workflow`、`releases` 父目录和 `backups` 归 root 管理，每个应用版本目录归 `auto-workflow` 运行账号。
+
+发布使用独立版本目录和服务器文件锁，先安装生产依赖，再短暂停服备份 SQLite、环境配置、runtime 和 tenants，最后切换 current 链接并启动。会验证网页返回 200、未登录的成员接口返回 401，随后在 GitHub 验证公网 HTTPS。失败时恢复上一版代码并重启；数据库不会自动回退，以免覆盖发布期间的数据或重复执行 Agent 指令。若数据库迁移与旧代码不兼容，需要停服并核对备份后人工恢复。公网检查失败只报告失败，不自动回滚已启动的服务。
+
+版本和备份分别保存在 `/opt/auto-workflow/releases/` 与 `/opt/auto-workflow/backups/`。备份包含敏感数据，仅 root 可读，不上传 GitHub；当前不自动删除旧版本或备份，需按磁盘容量定期清理。数据库备份目录中的 `PREVIOUS_RELEASE` 记录发布前版本。
+
 ### SSH 服务器部署与维护
 
 工作台可以在 Linux 服务器上通过 systemd 运行，由 Nginx 提供 HTTPS；开发机连接器继续在开发机运行。生产进程直接执行 `node --import tsx --import ./src/issueSources/preload.ts server.ts`，不使用会构建资源并清理端口的 `pnpm start` 前置脚本。部署前使用与开发环境一致的 pnpm 版本安装锁定依赖并运行 `pnpm build`。
