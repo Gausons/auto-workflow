@@ -16,6 +16,8 @@ previous=$(readlink -f "$base/current")
 stopped=false
 switched=false
 
+# Invoked by the EXIT trap, including failures before the service is stopped.
+# shellcheck disable=SC2317
 recover() {
   result=$?
   trap - EXIT
