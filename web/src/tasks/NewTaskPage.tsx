@@ -45,11 +45,11 @@ export function NewTaskPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [projectIndex, setProjectIndex] = useState(0);
   const [cwd, setCwd] = useState('');
+  const [branchCwd, setBranchCwd] = useState('');
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
-  const [branch, setBranch] = useState<BranchState | null>(null);
-  const [branchError, setBranchError] = useState('');
-  const [branchBusy, setBranchBusy] = useState(false);
+  const [branchActionError, setBranchActionError] = useState('');
+  const [branchMutating, setBranchMutating] = useState(false);
   const [branchSearch, setBranchSearch] = useState('');
   const [newBranch, setNewBranch] = useState('');
   const [picking, setPicking] = useState(false);
@@ -72,6 +72,17 @@ export function NewTaskPage() {
   const snapshot = useQuery({ queryKey: ['task-center', 'snapshot'], queryFn: ({ signal }) => apiRequest<TaskCenterData>('/api/task-center', { signal }), enabled: active && hasSessionToken() });
   const identity = useQuery({ queryKey: ['task-center', 'identity'], queryFn: ({ signal }) => apiRequest<{ permissions: string[] }>('/api/bootstrap', { signal }), enabled: active && hasSessionToken() });
   const project = targets.data?.projects[projectIndex];
+  const canEdit = identity.data?.permissions.includes('work.execute') === true;
+  const branchDirectoryPending = cwd.trim() !== branchCwd;
+  const branchKey = ['task-center', 'git', project?.deviceId || '', project?.id || '', project?.cwd || '', branchCwd] as const;
+  const branchQuery = useQuery({
+    queryKey: branchKey,
+    queryFn: ({ signal }) => apiRequest<BranchState>('/api/task-center/git', { method: 'POST', body: JSON.stringify({ action: 'list', projectId: project?.id, deviceId: project?.deviceId, cwd: branchCwd }), signal }),
+    enabled: active && canEdit && project?.deviceId === 'local' && !branchDirectoryPending, retry: false
+  });
+  const branch = branchDirectoryPending ? undefined : branchQuery.data;
+  const branchBusy = branchDirectoryPending || branchQuery.isFetching || branchMutating;
+  const branchError = branchDirectoryPending ? '' : branchActionError || (branchQuery.error ? errorMessage(branchQuery.error) : '');
   const defaultModel = project?.models?.find(item => item.id === project.defaultModel);
   const selectedModel = project?.models?.find(item => item.id === (model || project.defaultModel));
   const efforts = selectedModel?.reasoningEfforts?.length ? selectedModel.reasoningEfforts : project?.reasoningEfforts || [];
@@ -79,7 +90,7 @@ export function NewTaskPage() {
   const effectiveEffort = effort || defaultEffort;
   const effortIndex = Math.max(0, efforts.findIndex(item => item.id === effectiveEffort));
   const effortProgress = `${effortIndex / Math.max(1, efforts.length - 1) * 100}%`;
-  const busy = branchBusy || picking;
+  const busy = branchMutating || picking;
   const create = useMutation({
     retry: false,
     mutationFn: async () => {
@@ -111,16 +122,21 @@ export function NewTaskPage() {
     if (!sourceSessionId || !snapshot.data || content.trim()) return;
     setContent(snapshot.data.sessions.find(item => item.id === sourceSessionId)?.title || '');
   }, [sourceSessionId, snapshot.data]);
-  useEffect(() => { setBranch(null); setBranchError(''); }, [project?.id, project?.deviceId, cwd]);
-  async function loadBranches(action: 'list' | 'switch' | 'create' = 'list', name = '') {
-    if (!project || branchBusy) return;
-    setBranchBusy(true); setBranchError('');
+  useEffect(() => {
+    const timer = setTimeout(() => setBranchCwd(cwd.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [cwd]);
+  useEffect(() => { setBranchActionError(''); setBranchSearch(''); }, [project?.id, project?.deviceId, cwd]);
+  async function loadBranches(action: 'switch' | 'create', name: string) {
+    if (!project || branchMutating || branchDirectoryPending) return;
+    setBranchMutating(true); setBranchActionError('');
     try {
+      await queryClient.cancelQueries({ queryKey: branchKey });
       const result = await apiRequest<BranchState>('/api/task-center/git', { method: 'POST', body: JSON.stringify({ action, branch: name, projectId: project.id, deviceId: project.deviceId, cwd }) });
-      setBranch(result);
+      queryClient.setQueryData(branchKey, result);
       if (action === 'create') setNewBranch('');
-    } catch (failure) { setBranchError(errorMessage(failure)); }
-    finally { setBranchBusy(false); }
+    } catch (failure) { setBranchActionError(errorMessage(failure)); }
+    finally { setBranchMutating(false); }
   }
   async function chooseDirectory() {
     if (!project || picking) return;
@@ -134,7 +150,6 @@ export function NewTaskPage() {
     if (!create.isPending && !busy && identity.data?.permissions.includes('work.execute')) { setError(''); create.mutate(); }
   }
   if (!active) return null;
-  const canEdit = identity.data?.permissions.includes('work.execute') === true;
   const blocked = create.isPending || busy;
   return <>
     <header className="tc-heading"><div><p className="eyebrow">跨设备 · 跨 Agent</p><h1>新建任务</h1></div><a className="button secondary" href="#tasks">返回任务中心</a></header>
@@ -150,7 +165,7 @@ export function NewTaskPage() {
             {!!project.commonDirectories?.length && <><p className="tc-create-hint">常用目录</p><div className="tc-directory-options">{project.commonDirectories.slice(0, 4).map(path => <button key={path} type="button" title={path} aria-label={path} aria-pressed={path === cwd} disabled={blocked} onClick={() => setCwd(path)}>▱ <span>{runDirectoryName(path)}<small>{path}</small></span></button>)}</div></>}
           </div></details>
           <label className="tc-target-control" title="执行位置">▣ <select aria-label="执行位置" value={projectIndex} disabled={blocked} onChange={event => { setProjectIndex(Number(event.target.value)); setCwd(''); setModel(''); setEffort(''); }}>{targets.data?.projects.map((item, index) => <option key={`${item.deviceId}:${item.id}`} value={index}>{item.name} · {item.deviceName}{item.online ? '' : '（离线）'}</option>)}</select></label>
-          {project.deviceId === 'local' && <details className="tc-config-menu tc-branch-menu" name="create-config" onToggle={event => { if (event.currentTarget.open && !branch && !branchBusy) void loadBranches(); }}><summary aria-label="Git 分支">⑂ <span>{branch?.current || 'Git 分支'}</span><span aria-hidden="true">⌄</span></summary><div className="tc-config-panel">
+          {project.deviceId === 'local' && <details className="tc-config-menu tc-branch-menu" name="create-config" onToggle={event => { if (event.currentTarget.open && !branchBusy) void branchQuery.refetch(); }}><summary aria-label="Git 分支">⑂ <span>{branch?.repository ? branch.current || '分离 HEAD' : branchBusy ? '读取分支…' : branchError ? '分支读取失败' : branch ? '非 Git 目录' : 'Git 分支'}</span><span aria-hidden="true">⌄</span></summary><div className="tc-config-panel">
             {branchBusy ? <p role="status">正在处理分支…</p> : branchError ? <p role="alert">{branchError}</p> : branch?.repository ? <><input aria-label="搜索分支" value={branchSearch} onChange={event => setBranchSearch(event.target.value)} placeholder="搜索分支" /><p className="tc-create-hint">当前：{branch.current || '分离 HEAD'} · 未提交：{branch.changes} 项</p><div className="tc-branch-options">{branch.branches.filter(name => name.toLowerCase().includes(branchSearch.toLowerCase())).map(name => <button key={name} type="button" disabled={blocked} aria-pressed={name === branch.current} onClick={() => void loadBranches('switch', name)}>{name}{name === branch.current ? ' ✓' : ''}</button>)}</div><label className="tc-create-setting">新分支<input aria-label="新分支名称" value={newBranch} onChange={event => setNewBranch(event.target.value)} maxLength={200} /></label><button type="button" className="button secondary" disabled={blocked || !newBranch.trim()} onClick={() => void loadBranches('create', newBranch.trim())}>创建并切换</button></> : <p className="tc-create-hint">当前目录不是 Git 仓库。</p>}
           </div></details>}
         </> : <p className="tc-create-hint" role="alert">{targets.data?.localError || '未发现可用 Agent，仍可创建任务。'}</p>}

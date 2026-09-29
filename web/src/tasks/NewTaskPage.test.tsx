@@ -16,6 +16,7 @@ function setup(permissions = ['work.execute'], failExecute = false) {
     const status = path === '/api/task-center/execute' && failExecute ? 500 : 200;
     const payload = path === '/api/bootstrap' ? { permissions }
       : path === '/api/task-center/codex' ? targets
+        : path === '/api/task-center/git' ? { repository: true, current: body.cwd === '/repo/work' ? 'feature/work' : 'main', changes: 0, branches: ['main', 'feature/work'] }
         : path === '/api/task-center' && init?.method !== 'POST' ? snapshot
           : path === '/api/task-center' && body.action === 'create' ? { taskId: 'task-1', revision: 1 }
             : path === '/api/task-center/execute' && failExecute ? { message: 'Agent 未启动' } : {};
@@ -37,6 +38,18 @@ describe('NewTaskPage', () => {
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
   });
 
+  it('shows the current branch before opening the menu and refreshes it when the directory changes', async () => {
+    const fetchMock = setup();
+    const user = userEvent.setup();
+    expect(await screen.findByText('main')).toBeTruthy();
+    await user.click(screen.getByLabelText('工作目录：/repo'));
+    fireEvent.change(screen.getByLabelText('工作目录'), { target: { value: '/repo/work' } });
+    expect(await screen.findByText('feature/work')).toBeTruthy();
+    const lists = fetchMock.mock.calls.filter(([path]) => path === '/api/task-center/git').map(([, init]) => JSON.parse(String(init?.body)));
+    expect(lists).toContainEqual({ action: 'list', projectId: 'project-1', deviceId: 'local', cwd: '' });
+    expect(lists).toContainEqual({ action: 'list', projectId: 'project-1', deviceId: 'local', cwd: '/repo/work' });
+  });
+
   it('creates once and executes with selected target, directory, model and effort', async () => {
     const fetchMock = setup();
     const user = userEvent.setup();
@@ -49,8 +62,9 @@ describe('NewTaskPage', () => {
     fireEvent.change(screen.getByRole('slider', { name: '思考强度' }), { target: { value: '1' } });
     await user.click(screen.getByRole('button', { name: '创建并发送任务' }));
 
-    await waitFor(() => expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(2));
-    const writes = fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST').map(([, init]) => JSON.parse(String(init.body)));
+    const writesForTask = () => fetchMock.mock.calls.filter(([path, init]) => init?.method === 'POST' && ['/api/task-center', '/api/task-center/execute'].includes(path));
+    await waitFor(() => expect(writesForTask()).toHaveLength(2));
+    const writes = writesForTask().map(([, init]) => JSON.parse(String(init.body)));
     expect(writes[0]).toEqual({ action: 'create', content: '修复登录', sessionId: null });
     expect(writes[1]).toMatchObject({ taskId: 'task-1', revision: 1, projectId: 'project-1', deviceId: 'local', cwd: '/repo/work', model: 'gpt-6-sol', reasoningEffort: 'high' });
   });
@@ -85,6 +99,6 @@ describe('NewTaskPage', () => {
     await screen.findByRole('option', { name: /Codex/ });
     window.dispatchEvent(new CustomEvent('bugflow:create-task-from-session', { detail: { sessionId } }));
     expect(await screen.findByDisplayValue('来源会话')).toBeTruthy();
-    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+    expect(fetchMock.mock.calls.some(([path, init]) => init?.method === 'POST' && ['/api/task-center', '/api/task-center/execute'].includes(path))).toBe(false);
   });
 });

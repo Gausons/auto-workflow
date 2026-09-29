@@ -6,7 +6,16 @@ export function resolveCodexExecutable({ executable, environment = process.env, 
   try { accessSync(file, constants.X_OK); return statSync(file).isFile(); } catch { return false; }
 } }: { executable?: string; environment?: NodeJS.ProcessEnv; platform?: NodeJS.Platform; usable?: (file: string) => boolean } = {}) {
   const configured = executable && executable !== 'codex' ? executable : environment.CODEX_EXECUTABLE;
-  if (configured?.trim()) return configured.trim();
+  if (configured?.trim()) {
+    const selected = configured.trim();
+    // Recent desktop builds moved their bundled CLI under codex-cli/bin.
+    // Resolve only this known in-app relocation; other explicit paths stay exact.
+    if (platform === 'darwin' && /(?:^|\/)(?:Codex|ChatGPT)\.app\/Contents\/Resources\/codex$/.test(selected) && !usable(selected)) {
+      const moved = path.join(path.dirname(selected), 'codex-cli', 'bin', 'codex');
+      if (usable(moved)) return moved;
+    }
+    return selected;
+  }
   const home = environment.HOME || environment.USERPROFILE;
   const pathCandidates = (environment.PATH || '').split(platform === 'win32' ? ';' : ':').filter(Boolean).map(dir => path.join(dir, platform === 'win32' ? 'codex.exe' : 'codex'));
   const candidates: string[] = [];

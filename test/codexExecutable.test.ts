@@ -19,3 +19,10 @@ test('finds the current ChatGPT bundled Codex before an older PATH installation'
   const bundled = '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex';
   assert.equal(resolveCodexExecutable({ environment: { PATH: '/opt/homebrew/bin' }, platform: 'darwin', usable: file => file === bundled || file === '/opt/homebrew/bin/codex' }), bundled);
 });
+test('an explicit desktop path follows the CLI relocation within the same app', () => {
+  const previous = '/Applications/ChatGPT.app/Contents/Resources/codex';
+  const current = '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex';
+  assert.equal(resolveCodexExecutable({ environment: { CODEX_EXECUTABLE: previous }, platform: 'darwin', usable: file => file === current }), current);
+  assert.equal(resolveCodexExecutable({ environment: { CODEX_EXECUTABLE: previous }, platform: 'darwin', usable: file => file === previous || file === current }), previous);
+  assert.equal(resolveCodexExecutable({ environment: { CODEX_EXECUTABLE: previous }, platform: 'darwin', usable: () => false }), previous);
+});

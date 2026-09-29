@@ -134,6 +134,21 @@ test('Codex ACP uses the desktop model catalog and routes unsupported new models
   assert.equal(fallbackStarts[0]?.model, 'gpt-6-sol');
 });
 
+test('desktop model synchronization keeps the currently selected ACP default when supported', async () => {
+  let started: TestJob | undefined;
+  const preferred = new AcpPreferredRunner({
+    synchronizeModels: true,
+    primary: { projects: async () => [{ id: 'acp:codex', cwd: '/repo', protocol: 'acp', models: [{ id: 'gpt-6-luna', name: '6 Luna' }], defaultModel: 'gpt-6-luna' }], start: async (job: TestJob) => { started = job; }, close() {} },
+    fallback: { projects: async () => [{ id: 'workspace:repo', cwd: '/repo', models: [{ id: 'gpt-6-astra', name: '6 Astra' }, { id: 'gpt-6-sol', name: '6 Sol' }, { id: 'gpt-6-luna', name: '6 Luna', defaultReasoningEffort: 'medium' }], defaultModel: 'gpt-6-astra' }], close() {} }
+  });
+  const [project] = await preferred.projects('/repo');
+  assert.equal(project.defaultModel, 'gpt-6-luna');
+  assert.equal(project.defaultReasoningEffort, 'medium');
+  assert.ok(project.models?.some(model => model.id === 'gpt-6-sol'));
+  await preferred.start({ id: 'default-model', protocol: 'acp', projectId: project.id, agent: 'codex' });
+  assert.equal(started?.model, 'gpt-6-luna');
+});
+
 test('Codex ACP task sessions are named and opened in the desktop client', async () => {
   const nativeId = '12345678-1234-1234-1234-123456789abc';
   class FakeConnection extends EventEmitter {

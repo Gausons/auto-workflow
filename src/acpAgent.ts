@@ -448,8 +448,10 @@ export class AcpPreferredRunner {
         return projects.map((project) => {
           const catalog = fallbackProjects.find((candidate) => candidate.cwd === project.cwd) || fallbackProjects[0];
           if (!catalog?.models?.length) return project;
-          this.synchronizedDefaultModel = catalog.defaultModel || '';
-          return { ...project, models: catalog.models, defaultModel: catalog.defaultModel, defaultReasoningEffort: catalog.defaultReasoningEffort, reasoningEfforts: catalog.reasoningEfforts, appServerProjectId: catalog.appServerProjectId };
+          const defaultModel = catalog.models.some((model) => model.id === project.defaultModel) ? project.defaultModel : catalog.defaultModel;
+          this.synchronizedDefaultModel = defaultModel || '';
+          const defaultReasoningEffort = catalog.models.find((model) => model.id === defaultModel)?.defaultReasoningEffort || project.defaultReasoningEffort || catalog.defaultReasoningEffort;
+          return { ...project, models: catalog.models, defaultModel, defaultReasoningEffort, reasoningEfforts: catalog.reasoningEfforts, appServerProjectId: catalog.appServerProjectId };
         });
       } catch { return projects; }
     }
