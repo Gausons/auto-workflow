@@ -640,8 +640,7 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
   return {
     workspace: () => state.config.codexWorkspaceDir,
     async handleApi(req: IncomingMessage, res: ServerResponse, url: URL, principal: Principal) {
-      const historyRead = req.method === 'GET' && (url.pathname.startsWith('/api/agent-sessions') || url.pathname.startsWith('/api/sessions'));
-      const mutation = !historyRead && (req.method !== 'GET' || url.pathname !== '/api/bootstrap');
+      const mutation = req.method !== 'GET';
       if (mutation && mutationPending) { sendJson(res, 409, { error: 'tenant_busy', message: '当前组织正在处理其他请求，请稍后重试' }); req.resume(); return; }
       if (mutation) mutationPending = true;
       try { await requestIdentity.run(principal, () => handleApi(req, res, url)); }
