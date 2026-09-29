@@ -386,13 +386,11 @@ test/         Node.js 测试
 
 依赖方向：`src/` 和 `web/src/` 可以引用 `shared/`；共享层不依赖服务端或浏览器 UI。浏览器专用的运行配置、时间线与渲染工具位于 `web/src/`。浏览器资源统一由 Vite 构建，不再单独编译 `public/` 中的 TypeScript。
 
-## License
-
-[MIT](./LICENSE)
-
 ### SSH 服务器部署与维护
 
 工作台可以在 Linux 服务器上通过 systemd 运行，由 Nginx 提供 HTTPS；开发机连接器继续在开发机运行。生产进程直接执行 `node --import tsx --import ./src/issueSources/preload.ts server.ts`，不使用会构建资源并清理端口的 `pnpm start` 前置脚本。部署前使用与开发环境一致的 pnpm 版本安装锁定依赖并运行 `pnpm build`。
+
+当前公网入口为 `https://autoworkflow.top`；`www.autoworkflow.top` 的 HTTP/HTTPS 请求跳转到主域名。开发机连接器使用 `WORKBENCH_URL=https://autoworkflow.top`。
 
 当前部署目录约定：应用 `/opt/auto-workflow/current`，环境配置 `/etc/auto-workflow/auto-workflow.env`，数据库位于 `/var/lib/auto-workflow/`；发布目录的 `.workflow-data` 链接到 `/var/lib/auto-workflow/runtime`，后续更新需保留此链接。新服务器使用独立数据库，首次使用需注册个人账号，不会自动复制开发机账号、会话或配置。
 
@@ -407,3 +405,7 @@ systemctl list-timers auto-workflow-cert-renew.timer
 服务只监听 `127.0.0.1:4173`，公网开放 Nginx 的 80/443；80 用于证书验证和跳转 HTTPS。IP 地址证书有效期短，`auto-workflow-cert-renew.timer` 每天检查两次并在续期后重载 Nginx。备份时包含数据库、环境配置与 runtime 目录，SQLite 备份需使用一致性备份或停服备份，不能只复制正在写入的主数据库文件。
 
 开发机从本地服务切换到云端时，设置 `WORKBENCH_URL` 为新的 HTTPS 地址，使用云端个人账号，并给 `WORKBENCH_DEVICE_DIR` 指定新目录（例如 `.workflow-data/device-cloud`）。原状态目录绑定旧服务，不能直接复用。连接器保持运行后，在手机浏览器的“设备与 Agent”页面选择该设备新建远端任务。
+
+## License
+
+[MIT](./LICENSE)
