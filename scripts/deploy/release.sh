@@ -30,7 +30,7 @@ recover() {
   fi
   exit "$result"
 }
-trap recover EXIT
+trap 'recover' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
