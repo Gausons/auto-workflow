@@ -1701,8 +1701,8 @@ body[data-view="new-task"] .tc-create { flex: 1; width: 100%; max-width: 900px; 
 .tc-create-send button[type=submit] { flex-shrink: 0; }
 .tc-model-menu { min-width: 0; }
 .tc-model-menu .tc-config-panel { left: auto; right: 0; }
-body[data-view="new-task"] .tc-model-menu > summary { gap: 5px; min-height: 36px; padding: 7px 11px; background: #ededee; border-radius: 12px; }
-body[data-view="new-task"] .tc-model-menu > summary:hover, body[data-view="new-task"] .tc-model-menu[open] > summary { background: #e4e4e6; }
+.tc-model-menu > summary { gap: 5px; min-height: 36px; padding: 7px 11px; background: #ededee; border-radius: 12px; }
+.tc-model-menu > summary:hover, .tc-model-menu[open] > summary { background: #e4e4e6; }
 .tc-model-chevron { margin-left: 2px; color: #666; }
 .tc-model-menu .tc-model-panel { width: 300px; padding: 12px 14px 14px; border-color: #e6e6e8; border-radius: 17px; box-shadow: 0 14px 42px #00000018; }
 .tc-model-card-header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; min-height: 26px; }

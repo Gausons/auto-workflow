@@ -4,8 +4,9 @@ import { createPortal } from 'react-dom';
 import { apiRequest } from '../api/client.js';
 import { pendingHistoryMessages } from '../../../public/historyTimeline.js';
 import { renderMessages } from '../../../public/historyView.js';
-import { historyRunConfig, runDirectoryName, runEffortLabel } from '../../../public/agentRunConfig.js';
+import { historyRunConfig, runDirectoryName } from '../../../public/agentRunConfig.js';
 import type { AgentProject, HistoryMessage, InteractionRequest, Session } from '../../../public/taskTypes.js';
+import { ModelEffortMenu } from '../tasks/ModelEffortMenu.js';
 import overlayStyles from '../styles/Overlay.module.css';
 
 interface ComposerJob { id: string; status: string; prompt: string; message?: string; output?: string; turnId?: string | null; conversationId?: string; createdAt?: string; releaseStatus?: string; executionTransport?: string; request?: InteractionRequest | null }
@@ -40,14 +41,14 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
   const [newStatus, setNewStatus] = useState('');
   const [projectIndex, setProjectIndex] = useState<number | null>(null);
   const [cwd, setCwd] = useState('');
+  const [branchCwd, setBranchCwd] = useState('');
   const [directoryRequestId, setDirectoryRequestId] = useState('');
   const [model, setModel] = useState('');
   const [effort, setEffort] = useState('');
-  const [branch, setBranch] = useState<BranchState | null>(null);
-  const [branchError, setBranchError] = useState('');
+  const [branchActionError, setBranchActionError] = useState('');
   const [branchSearch, setBranchSearch] = useState('');
   const [newBranch, setNewBranch] = useState('');
-  const [branchBusy, setBranchBusy] = useState(false);
+  const [branchMutating, setBranchMutating] = useState(false);
   const [picking, setPicking] = useState(false);
   const [responding, setResponding] = useState(false);
   const [decision, setDecision] = useState('decline');
@@ -75,9 +76,18 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
     setProjectIndex(config.projectIndex);
     setCwd(config.cwd);
   }, [targets.data, projectIndex, session]);
-  const selectedModel = project?.models?.find(item => item.id === (model || project.defaultModel));
-  const efforts = selectedModel?.reasoningEfforts || project?.reasoningEfforts || [];
-  const disabled = branchBusy || picking;
+  const branchDirectoryPending = cwd.trim() !== branchCwd;
+  const branchKey = ['task-center', 'git', project?.deviceId || '', project?.id || '', project?.cwd || '', branchCwd] as const;
+  const branchQuery = useQuery({
+    queryKey: branchKey,
+    queryFn: ({ signal }) => apiRequest<BranchState>('/api/task-center/git', { method: 'POST', body: JSON.stringify({ action: 'list', projectId: project?.id, deviceId: project?.deviceId, cwd: branchCwd }), signal }),
+    enabled: canEdit && project?.deviceId === 'local' && !branchDirectoryPending,
+    retry: false
+  });
+  const branch = branchDirectoryPending ? undefined : branchQuery.data;
+  const branchBusy = branchDirectoryPending || branchQuery.isFetching || branchMutating;
+  const branchError = branchDirectoryPending ? '' : branchActionError || (branchQuery.error ? errorMessage(branchQuery.error) : '');
+  const disabled = branchMutating || picking;
   const pending = pendingHistoryMessages(syncedMessages || historyMessages, executions);
   const send = useMutation({ retry: false, mutationFn: ({ message, id }: { message: string; id: string }) => apiRequest<{ executionId: string }>(`/api/agent-sessions/${encodeURIComponent(session.id)}/continue`, { method: 'POST', body: JSON.stringify({ message, requestId: id }) }), onSuccess: (result, variables) => {
     const draft = drafts.get(session.id)!;
@@ -105,7 +115,8 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
     if (draft && !draft.text.trim()) { draft.text = job.prompt; draft.requestId = ''; setText(job.prompt); }
     restored.current.add(job.id);
   }, [job?.id, job?.status, session.id]);
-  useEffect(() => { setBranch(null); setBranchError(''); }, [project?.id, project?.deviceId, cwd]);
+  useEffect(() => { const timer = setTimeout(() => setBranchCwd(cwd.trim()), 300); return () => clearTimeout(timer); }, [cwd]);
+  useEffect(() => { setBranchActionError(''); setBranchSearch(''); }, [project?.id, project?.deviceId, cwd]);
   function updateText(value: string) {
     setText(value);
     const draft = drafts.get(session.id) || { text: '', requestId: '', sentText: '' };
@@ -146,12 +157,16 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
     } catch (failure) { setNewStatus(errorMessage(failure)); }
     finally { setPicking(false); }
   }
-  async function branchAction(action: 'list' | 'switch' | 'create', name = '') {
-    if (!project || branchBusy) return;
-    setBranchBusy(true); setBranchError('');
-    try { setBranch(await apiRequest<BranchState>('/api/task-center/git', { method: 'POST', body: JSON.stringify({ action, branch: name, projectId: project.id, deviceId: project.deviceId, cwd }) })); if (action === 'create') setNewBranch(''); }
-    catch (failure) { setBranchError(errorMessage(failure)); }
-    finally { setBranchBusy(false); }
+  async function branchAction(action: 'switch' | 'create', name: string) {
+    if (!project || branchMutating || branchDirectoryPending) return;
+    setBranchMutating(true); setBranchActionError('');
+    try {
+      await queryClient.cancelQueries({ queryKey: branchKey });
+      const result = await apiRequest<BranchState>('/api/task-center/git', { method: 'POST', body: JSON.stringify({ action, branch: name, projectId: project.id, deviceId: project.deviceId, cwd }) });
+      queryClient.setQueryData(branchKey, result);
+      if (action === 'create') setNewBranch('');
+    } catch (failure) { setBranchActionError(errorMessage(failure)); }
+    finally { setBranchMutating(false); }
   }
   const canSend = canEdit && canSendNative && !send.isPending && !create.isPending && !disabled && !(job && busy.has(job.status)) && job?.releaseStatus !== 'releasing' && !!text.trim();
   const statusText = send.isPending ? '正在发送…' : job ? `${names[job.status] || job.status} · ${job.message || ''}${job.executionTransport === 'desktop-ipc' ? ' · 由客户端执行；审批和问题请在客户端处理' : ''}${job.releaseStatus === 'releasing' ? ' · 正在释放网页连接' : job.releaseStatus === 'released' ? ' · 网页连接已释放' : job.releaseStatus === 'failed' ? ' · 会话释放失败，请检查服务进程' : ''}` : session.managed ? '已继承原会话上下文，直接输入下一条消息即可。' : canSendNative ? '消息将追加到原会话，沿用其上下文与配置。' : '选择其他 Agent 新开会话，即可带上上下文继续。';
@@ -160,11 +175,11 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
       {targets.isPending ? <p className="tc-create-hint" role="status">正在读取运行配置…</p> : targets.isError ? <p role="alert">{errorMessage(targets.error)}</p> : project ? <>
         <details className="tc-config-menu tc-directory-menu" name="create-config"><summary aria-label={`工作目录：${cwd || project.cwd || '默认目录'}`}>▱ <span>{runDirectoryName(cwd || project.cwd || '')}</span><span aria-hidden="true">⌄</span></summary><div className="tc-config-panel"><label className="tc-create-setting">工作目录<input value={cwd} onChange={event => { setCwd(event.target.value); setDirectoryRequestId(''); }} placeholder={project.cwd || '输入工作目录'} maxLength={2000} disabled={disabled} /></label><div className="tc-actions"><button type="button" className="button secondary" disabled={disabled} onClick={() => void chooseDirectory()}>选择目录</button><button type="button" className="button ghost" disabled={disabled} onClick={() => { setCwd(''); setDirectoryRequestId(''); }}>使用默认目录</button></div>{!!project.commonDirectories?.length && <div className="tc-directory-options">{project.commonDirectories.slice(0, 4).map(path => <button key={path} type="button" onClick={() => { setCwd(path); setDirectoryRequestId(''); }}>{runDirectoryName(path)}<small>{path}</small></button>)}</div>}</div></details>
         <label className="tc-target-control">▣ <select aria-label="执行位置" value={index} onChange={event => { setProjectIndex(Number(event.target.value)); setCwd(''); setDirectoryRequestId(''); setModel(''); setEffort(''); }}>{projects.map((item, at) => <option key={`${item.deviceId}:${item.id}`} value={at}>{item.name} · {item.deviceName}{item.online ? '' : '（离线）'}</option>)}</select></label>
-        {project.deviceId === 'local' && <details className="tc-config-menu tc-branch-menu" name="create-config" onToggle={event => { if (event.currentTarget.open && !branch && !branchBusy) void branchAction('list'); }}><summary aria-label="Git 分支">⑂ <span>{branch?.current || 'Git 分支'}</span> ⌄</summary><div className="tc-config-panel">{branchBusy ? <p role="status">正在处理分支…</p> : branchError ? <p role="alert">{branchError}</p> : branch?.repository ? <><input aria-label="搜索分支" value={branchSearch} onChange={event => setBranchSearch(event.target.value)} placeholder="搜索分支" /><p className="tc-create-hint">当前：{branch.current || '分离 HEAD'} · 未提交：{branch.changes} 项</p><div className="tc-branch-options">{branch.branches.filter(name => name.toLowerCase().includes(branchSearch.toLowerCase())).map(name => <button key={name} type="button" aria-pressed={name === branch.current} onClick={() => void branchAction('switch', name)}>{name}{name === branch.current ? ' ✓' : ''}</button>)}</div><label className="tc-create-setting">新分支<input aria-label="新分支名称" value={newBranch} onChange={event => setNewBranch(event.target.value)} maxLength={200} /></label><button type="button" className="button secondary" disabled={!newBranch.trim()} onClick={() => void branchAction('create', newBranch.trim())}>创建并切换</button></> : <p className="tc-create-hint">当前目录不是 Git 仓库。</p>}</div></details>}
+        {project.deviceId === 'local' && <details className="tc-config-menu tc-branch-menu" name="create-config" onToggle={event => { if (event.currentTarget.open && !branchBusy) void branchQuery.refetch(); }}><summary aria-label="Git 分支">⑂ <span>{branch?.repository ? branch.current || '分离 HEAD' : branchBusy ? '读取分支…' : branchError ? '分支读取失败' : branch ? '非 Git 目录' : 'Git 分支'}</span><span aria-hidden="true">⌄</span></summary><div className="tc-config-panel">{branchBusy ? <p role="status">正在处理分支…</p> : branchError ? <p role="alert">{branchError}</p> : branch?.repository ? <><input aria-label="搜索分支" value={branchSearch} onChange={event => setBranchSearch(event.target.value)} placeholder="搜索分支" /><p className="tc-create-hint">当前：{branch.current || '分离 HEAD'} · 未提交：{branch.changes} 项</p><div className="tc-branch-options">{branch.branches.filter(name => name.toLowerCase().includes(branchSearch.toLowerCase())).map(name => <button key={name} type="button" disabled={disabled} aria-pressed={name === branch.current} onClick={() => void branchAction('switch', name)}>{name}{name === branch.current ? ' ✓' : ''}</button>)}</div><label className="tc-create-setting">新分支<input aria-label="新分支名称" value={newBranch} onChange={event => setNewBranch(event.target.value)} maxLength={200} /></label><button type="button" className="button secondary" disabled={disabled || !newBranch.trim()} onClick={() => void branchAction('create', newBranch.trim())}>创建并切换</button></> : <p className="tc-create-hint">当前目录不是 Git 仓库。</p>}</div></details>}
       </> : <p role="alert" className="tc-create-hint">{targets.data?.localError || '没有可用 Agent'}</p>}</div>
       <form className="conversation-composer" onSubmit={submit}><label className="history-sr-only" htmlFor="historyReply">发送消息</label><textarea id="historyReply" rows={3} maxLength={12000} placeholder="继续讨论，或描述下一步需要完成的工作…" value={text} onChange={event => updateText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} disabled={send.isPending || create.isPending || disabled} required />
         <div className="history-compose-footer"><div className="tc-create-tools">{session.agent === 'codex' && session.sessionId ? <a className="conversation-context" href={`codex://threads/${encodeURIComponent(session.sessionId)}`}>在 Codex 中打开 ↗</a> : <span className="conversation-context">{session.agentLabel || session.agent} · {session.model || '默认配置'}</span>}<span className="history-meta">⌘ / Ctrl + Enter</span></div><div className="tc-create-send"><div className="conversation-new-controls">
-          {project && <details className="tc-config-menu tc-model-menu" name="create-config"><summary aria-label="模型与思考强度">{selectedModel?.name || model || project.defaultModel || '默认模型'} <span className="tc-effort-label">{runEffortLabel(effort || selectedModel?.defaultReasoningEffort || project.defaultReasoningEffort || '') || '默认'}</span> ⌄</summary><div className="tc-config-panel"><label className="tc-create-setting">模型<select aria-label="模型" value={model} onChange={event => { setModel(event.target.value); setEffort(''); }}><option value="">默认模型</option>{project.models?.map(item => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}</select></label><label className="tc-create-setting">思考强度<select aria-label="思考强度" value={effort} onChange={event => setEffort(event.target.value)}><option value="">默认强度</option>{efforts.map(item => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}</select></label></div></details>}
+          {project && <ModelEffortMenu project={project} model={model} effort={effort} disabled={create.isPending || send.isPending || disabled} onModelChange={setModel} onEffortChange={setEffort} />}
           <button type="button" className="button secondary conversation-new-button" disabled={!project || create.isPending || send.isPending || disabled} onClick={createSession}>带上下文新开会话 →</button></div><button type="submit" aria-label="发送消息" title="发送消息" disabled={!canSend}>↑</button></div></div><p className="conversation-new-status" role="status">{newStatus}</p>
       </form></div><p className="history-meta" role="status">{statusText}</p>{status.isError && <p role="alert">{errorMessage(status.error)}</p>}{error && <p role="alert">{error}</p>}
       <div className="history-compose-actions">{job && <>{['queued', 'running', 'waiting'].includes(job.status) && <button type="button" disabled={control.isPending} onClick={() => control.mutate({ executionId: job.id, action: 'stop' })}>停止</button>}{job.status === 'waiting' && job.request && <button type="button" onClick={() => setResponding(true)}>处理请求</button>}{job.status === 'unknown' && <button type="button" disabled={control.isPending} onClick={() => control.mutate({ executionId: job.id, action: 'reconcile' })}>核对结果</button>}{!busy.has(job.status) && <button type="button" onClick={() => { void syncHistory(session.id).then(messages => setSyncedMessages(messages)); void queryClient.invalidateQueries({ queryKey: ['history', 'detail', session.id] }); }}>刷新原始记录</button>}{['failed', 'interrupted', 'blocked'].includes(job.status) && <><button type="button" onClick={() => updateText(job.prompt)}>重新编辑本轮消息</button><button type="button" onClick={() => void navigator.clipboard.writeText(job.prompt).catch(() => setError('无法自动复制，请使用输入框中的文本。'))}>复制本轮消息</button></>}</>}</div>
