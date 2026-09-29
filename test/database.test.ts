@@ -88,7 +88,7 @@ test('transfer receipt survives reopen, stays tenant-scoped and cannot change a 
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
 });
 
-test('migrations 006 and 007 upgrade an existing v5 database without changing its session snapshots', async () => {
+test('migrations 006 through 008 upgrade an existing v5 database without changing its session snapshots', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'context-upgrade-'));
   const filename = path.join(root, 'workflow.sqlite');
   try {
@@ -98,14 +98,14 @@ test('migrations 006 and 007 upgrade an existing v5 database without changing it
     first.saveSessionContext('a', context);
     first.close();
     const old = new DatabaseSync(filename);
-    old.exec('DROP TABLE context_transfer_manifests; DROP TABLE context_transfer_objects; DROP TABLE context_transfers; PRAGMA user_version = 5;');
+    old.exec('DROP TABLE auth_identities; DROP TABLE context_transfer_manifests; DROP TABLE context_transfer_objects; DROP TABLE context_transfers; PRAGMA user_version = 5;');
     old.close();
     const upgraded = openDatabase(filename);
     try {
       assert.deepEqual(upgraded.readSessionContext('a', context.id), context);
       assert.equal(upgraded.readContextTransfer('a', 'missing'), undefined);
       const check = new DatabaseSync(filename);
-      try { assert.equal(check.prepare('PRAGMA user_version').get()?.user_version, 7); }
+      try { assert.equal(check.prepare('PRAGMA user_version').get()?.user_version, 8); }
       finally { check.close(); }
     } finally { upgraded.close(); }
   } finally { await rm(root, { recursive: true, force: true }); }
@@ -135,7 +135,7 @@ test('detached objects and manifest survive restart, remain tenant scoped, and r
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
 });
 
-test('migration 007 upgrades a v6 database with existing transfer receipts', async () => {
+test('migrations 007 and 008 upgrade a v6 database with existing transfer receipts', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'context-v6-upgrade-'));
   const filename = path.join(root, 'workflow.sqlite');
   try {
@@ -145,7 +145,7 @@ test('migration 007 upgrades a v6 database with existing transfer receipts', asy
     first.recordContextTransfer('a', 'job', 'A', 'B', snapshot);
     first.close();
     const old = new DatabaseSync(filename);
-    old.exec('DROP TABLE context_transfer_manifests; DROP TABLE context_transfer_objects; PRAGMA user_version = 6;');
+    old.exec('DROP TABLE auth_identities; DROP TABLE context_transfer_manifests; DROP TABLE context_transfer_objects; PRAGMA user_version = 6;');
     old.close();
     const upgraded = openDatabase(filename);
     try {

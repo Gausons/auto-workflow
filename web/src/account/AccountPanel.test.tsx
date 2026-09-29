@@ -35,4 +35,12 @@ describe('AccountPanel', () => {
     expect(sessionStorage.getItem('bugflow.sessionToken')).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('lets a Google-only account add a password for device login', async () => {
+    renderAccount();
+    window.dispatchEvent(new CustomEvent('bugflow:bootstrap', { detail: { user: { username: 'person@example.com', displayName: '个人用户', hasPassword: 0, hasGoogle: 1 } } }));
+    expect(await screen.findByText('此账号通过 Google 单点登录。')).toBeTruthy();
+    expect(screen.getByLabelText('设置密码（12–128 位）')).toBeTruthy();
+    expect(screen.queryByLabelText('当前密码')).toBeNull();
+  });
 });

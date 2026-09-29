@@ -114,3 +114,47 @@ test('authenticated HTTP and real ACP subprocess support new conversation, two t
   const download = await fetch(base + `/api/conversations/${id}/transfer/objects/${object.digest}?executionId=${executionId}&deviceId=B`, { headers: { Authorization: `Bearer ${token}` } });
   assert.equal(download.status, 200); assert.deepEqual(Buffer.from(await download.arrayBuffer()), image);
 });
+
+test('remote original-session HTTP enforces authentication and keeps execution on the connector', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'remote-http-'));
+  const setup = 'remote-http-setup-'.repeat(3), password = 'remote-http-test-password';
+  const app = createApp({ rootDir: root, environment: { DEFAULT_TENANT_TOKEN: setup, CODEX_WORKSPACE_DIR: root,
+    ACP_ENABLED: 'false', CODEX_EXECUTABLE: path.join(root, 'missing-codex'), IDE_HISTORY_CODEX_DIR: path.join(root, 'missing'), IDE_HISTORY_CLAUDE_DIR: path.join(root, 'missing') } });
+  app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
+  t.after(async () => { await app.close(); await rm(root, { recursive: true, force: true }); });
+  const address = app.server.address(); assert.ok(address && typeof address === 'object');
+  const base = `http://127.0.0.1:${address.port}`;
+  const req = async (route: string, method = 'GET', body?: unknown, token?: string) => {
+    const response = await fetch(base + route, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    return { status: response.status, data: await response.json() as ApiData };
+  };
+  await req('/api/auth/setup', 'POST', { username: 'owner', password }, setup);
+  const token = (await req('/api/auth/login', 'POST', { tenantId: 'default', username: 'owner', password })).data.token; assert.ok(token);
+  await req('/api/organization/members', 'POST', { username: 'viewer', role: 'viewer', password }, token);
+  const viewer = (await req('/api/auth/login', 'POST', { tenantId: 'default', username: 'viewer', password })).data.token; assert.ok(viewer);
+  const nativeId = randomUUID();
+  const heartbeat = { action: 'heartbeat', deviceId: 'remote', name: '远端设备', agents: ['codex'], capabilities: { resumeCodex: true },
+    codexProjects: [{ id: 'p', name: '项目', agent: 'codex', cwd: root }], sessions: [{ nativeId, agent: 'codex', cwd: root, title: '远端原会话' }] };
+  assert.equal((await req('/api/task-center', 'POST', heartbeat)).status, 401);
+  assert.equal((await req('/api/task-center', 'POST', heartbeat, viewer)).status, 403);
+  assert.equal((await req('/api/task-center', 'POST', heartbeat, token)).status, 200);
+  const sessions = (await req('/api/agent-sessions', 'GET', undefined, token)).data.sessions;
+  assert.ok(sessions?.[0]);
+  const id = sessions[0].id, route = `/api/agent-sessions/${id}/continue`;
+  const detail = (await req(`/api/agent-sessions/${id}`, 'GET', undefined, token)).data;
+  assert.equal((detail.session as { canContinue: boolean }).canContinue, true);
+  const input = { requestId: randomUUID(), message: '继续远端原会话' };
+  assert.equal((await req(route, 'POST', input)).status, 401);
+  assert.equal((await req(route, 'POST', input, viewer)).status, 403);
+  const first = await req(route, 'POST', input, token); assert.equal(first.status, 202);
+  assert.equal((await req(route, 'POST', input, token)).data.executionId, first.data.executionId);
+  assert.equal((await req(route, 'POST', { ...input, requestId: randomUUID() }, token)).status, 409);
+  const execution = (await req(route, 'GET', undefined, token)).data.execution;
+  assert.equal(execution?.status, 'queued'); assert.equal(execution?.deviceId, 'remote'); assert.equal(execution?.resumeThreadId, nativeId);
+  const action = { action: 'claim', executionId: first.data.executionId };
+  assert.equal((await req('/api/task-center/execution-action', 'POST', action, viewer)).status, 403);
+  const mismatch = await fetch(base + route, { headers: { Authorization: `Bearer ${token}`, 'X-Tenant-Id': 'another-team' } });
+  assert.equal(mismatch.status, 403);
+  assert.equal((await req('/api/task-center/execution-action', 'POST', { action: 'stop', executionId: first.data.executionId }, token)).status, 200);
+  assert.equal((await req(route, 'GET', undefined, token)).data.execution?.status, 'interrupted');
+});

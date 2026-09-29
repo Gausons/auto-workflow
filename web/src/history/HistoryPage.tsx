@@ -132,7 +132,7 @@ export function HistoryPage() {
     setFilters(previous => ({ ...previous, ...next, offset: 0 }));
     if (route.id) location.hash = 'history';
   };
-  const sourceText = data && `${data.scope === 'all' ? '全部本地工作区' : '仅组织工作目录'} · ${data.providers.map(provider => `${provider.label}：${sourceLabels[provider.status] || provider.status}${provider.skipped ? `（${provider.skipped} 项未能读取）` : ''}`).join(' · ')}`;
+  const sourceText = data && `${data.scope === 'all' ? '全部本地工作区' : '仅配置的工作目录'} · ${data.providers.map(provider => `${provider.label}：${sourceLabels[provider.status] || provider.status}${provider.skipped ? `（${provider.skipped} 项未能读取）` : ''}`).join(' · ')}`;
   const workspaceOptions = data?.workspaces || [];
   return <>
     <div className="history-heading"><h1>会话</h1><span>Agent 历史记录</span></div>

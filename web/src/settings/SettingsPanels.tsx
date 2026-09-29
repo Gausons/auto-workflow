@@ -80,7 +80,7 @@ export function ConfigPanel() {
   const legacyModel = AI_ASSIGNMENT_MODELS.some(model => model.id === selectedModel) ? '' : selectedModel;
   return <div className="config-band" id="config">
     <form key={formVersion} className="config-form" id="configForm" onSubmit={submit}>
-      <div className="form-heading"><div><h2>对接配置</h2><p>默认数据源为 Jira Cloud。地址、JQL 和凭据在组织环境文件中配置，修改后重启。</p></div></div>
+      <div className="form-heading"><div><h2>对接配置</h2><p>默认数据源为 Jira Cloud。地址、JQL 和凭据在工作台环境文件中配置，修改后重启。</p></div></div>
       <div className="fields-grid">
         <label><span>扩展数据源经办人</span><div className="combo-field">
           <input name="assignee" id="configAssignee" defaultValue={config.assignee || ''} autoComplete="off" placeholder="人员 ID（Jira 请通过 JQL 筛选）" />

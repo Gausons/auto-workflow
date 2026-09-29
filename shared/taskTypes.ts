@@ -73,6 +73,7 @@ export interface Device {
   transport: 'manual' | 'connector';
   online?: boolean;
   codexProjects?: AgentProject[];
+  capabilities?: { resumeCodex?: boolean };
 }
 
 export interface Session {
@@ -103,6 +104,7 @@ export interface Session {
   missing?: boolean;
   managed?: boolean;
   archived?: boolean;
+  canContinue?: boolean;
   preparationError?: string;
   pendingMessage?: string;
   pendingRequestId?: string | null;

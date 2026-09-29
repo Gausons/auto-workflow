@@ -7,6 +7,7 @@ import { CodexDesktopBridge, readDesktopTerminal } from './codexDesktopBridge.js
 import { CodexAppServer } from './codexAppServer.js';
 import { AcpPreferredRunner, AcpTaskRunner, AgentRunnerSet, configuredAcpAgents } from './acpAgent.js';
 import { httpError } from './rbac.js';
+import { remoteContinuationProject } from './remoteSession.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { AgentModel, AgentProject, Execution, ExecutionStatus, InteractionRequest, Task, TaskCenterData, TaskStatus } from '../shared/taskTypes.js';
@@ -528,10 +529,13 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
       if (job.deviceId === 'local') void runner.start!(job); return { executionId: job.id };
     },
     async continueHistory(id: string, input: ContinueInput) {
-      if (!history) throw httpError(503, '历史会话服务不可用');
       if (typeof input?.message !== 'string' || !input.message.trim() || input.message.length > 12000) throw httpError(400, '请输入 1–12000 字符的消息');
       if (typeof input.requestId !== 'string' || !/^[a-f0-9-]{36}$/.test(input.requestId)) throw httpError(400, '发送标识无效');
-      const { session } = await history.detail(id, new URLSearchParams({ limit: '1' }));
+      const stored = database.readTaskCenter(tenantId);
+      const remote = stored.sessions.find(item => item.id === id && item.deviceId !== 'local');
+      if (!remote && !history) throw httpError(503, '历史会话服务不可用');
+      const session = remote ? { ...remote, sessionId: remote.nativeId } : (await history!.detail(id, new URLSearchParams({ limit: '1' }))).session;
+      const deviceId = remote?.deviceId || 'local';
       if (session.agent !== 'codex' || !session.sessionId) throw httpError(422, '此会话暂不支持网页原会话续聊，请在对应 Agent 中继续');
       if (session.archived) throw httpError(409, '请先在 Codex 客户端取消归档，再继续此会话');
       // Resolve the session through the tenant history reader; never accept a native thread ID or cwd from the browser.
@@ -544,8 +548,11 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
           if (repeated.historySessionId !== id || repeated.prompt !== message) throw httpError(409, '发送标识已用于另一条消息');
           return { job: structuredClone(repeated), replay: true };
         }
-        if (data.executions?.some((item) => item.deviceId === 'local' && (active.has(item.status) || item.releaseStatus === 'releasing') && [item.resumeThreadId, item.threadId, item.sessionId].includes(nativeSessionId))) throw httpError(409, '该会话已有执行或结果待核对，请先处理当前执行');
-        const aliases = [id, ...data.sessions.filter((item) => item.deviceId === 'local' && item.agent === 'codex' && item.nativeId === nativeSessionId).map((item) => item.id)];
+        const currentRemote = remote && data.sessions.find(item => item.id === id);
+        const remoteProject = currentRemote && remoteContinuationProject(data, currentRemote);
+        if (remote && (!remoteProject || currentRemote?.nativeId !== nativeSessionId || currentRemote.cwd !== session.cwd)) throw httpError(409, '目标连接器未启用原会话续聊，或会话工作目录不在可执行项目中，请刷新设备后重试');
+        if (data.executions?.some((item) => item.deviceId === deviceId && (active.has(item.status) || item.releaseStatus === 'releasing') && [item.resumeThreadId, item.threadId, item.sessionId].includes(nativeSessionId))) throw httpError(409, '该会话已有执行或结果待核对，请先处理当前执行');
+        const aliases = [id, ...data.sessions.filter((item) => item.deviceId === deviceId && item.agent === 'codex' && item.nativeId === nativeSessionId).map((item) => item.id)];
         let task = data.tasks.find((item) => item.sessionIds.some((sessionId) => aliases.includes(sessionId)));
         const existingTaskId = task?.id;
         if (existingTaskId && (data.executions?.some((item) => item.taskId === existingTaskId && (active.has(item.status) || item.releaseStatus === 'releasing')) || data.handoffs.some((item) => item.taskId === existingTaskId && item.mode === 'continue' && ['pending', 'received'].includes(item.status)))) throw httpError(409, '任务已有执行或交接，请先处理');
@@ -553,17 +560,20 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
           task = { id: randomUUID(), title: session.title.slice(0, 120), status: 'ready', revision: 1, contextVersion: 1, content: session.title, sessionIds: [id], events: [], createdAt: timestamp(), updatedAt: timestamp() };
           data.tasks.push(task);
         }
-        const job: ExecutionRecord = { id: randomUUID(), requestId, historySessionId: id, previousTaskStatus: task.status, resumeThreadId: nativeSessionId, taskId: task.id, deviceId: 'local', agent: 'codex', agentLabel: 'Codex', protocol: 'legacy', cwd: session.cwd, title: task.title, prompt: message, contextVersion: task.contextVersion, status: 'queued', createdAt: timestamp(), updatedAt: timestamp(), message: '已排队，准备继续原会话', output: '', threadId: null, turnId: null };
+        const job: ExecutionRecord = { id: randomUUID(), requestId, historySessionId: id, previousTaskStatus: task.status, resumeThreadId: nativeSessionId, taskId: task.id, deviceId, projectId: remoteProject?.id, agent: 'codex', agentLabel: 'Codex', protocol: 'legacy', cwd: session.cwd, title: task.title, prompt: message, contextVersion: task.contextVersion, status: 'queued', createdAt: timestamp(), updatedAt: timestamp(), message: '已排队，准备继续原会话', output: '', threadId: null, turnId: null };
         (data.executions ||= []).push(job); task.status = 'running'; task.revision++; task.updatedAt = job.createdAt;
         task.events.unshift({ id: randomUUID(), at: job.createdAt, message: '从网页继续原会话' });
         return { job: structuredClone(job), replay: false };
       });
-      if (!result.replay) void runner.start!(result.job);
+      if (!result.replay && result.job.deviceId === 'local') this.launch(result.job);
       return { executionId: result.job.id, taskId: result.job.taskId };
     },
     async historyExecution(id: string) {
-      if (!history) throw httpError(503, '历史会话服务不可用');
-      await history.resolveSource(id);
+      const remote = database.readTaskCenter(tenantId).sessions.some(item => item.id === id && item.deviceId !== 'local');
+      if (!remote) {
+        if (!history) throw httpError(503, '历史会话服务不可用');
+        await history.resolveSource(id);
+      }
       const executions = database.readTaskCenter(tenantId).executions?.filter((item) => item.historySessionId === id) || [];
       const job = executions.at(-1);
       return { executions, execution: job?.status === 'failed' && /already has an active writer/i.test(job.message || '') ? { ...job, status: 'blocked', errorCode: 'CODEX_THREAD_BUSY', message: writerConflictMessage } : job || null };
@@ -587,15 +597,16 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
             if (!actor || device?.owner !== actor.id) throw httpError(403, '只有该设备的连接器账号可以领取和回报执行');
             if (input.action === 'claim') {
               if (saved.status !== 'queued') throw httpError(409, '执行已被领取，不会重复执行');
-              recordExecution(data, { ...saved, status: 'launching', message: '目标设备已领取，准备启动 Codex', updatedAt: timestamp() });
+              recordExecution(data, { ...saved, status: 'launching', message: '目标设备已领取，准备启动 Agent', updatedAt: timestamp() });
               return { job: structuredClone(saved) };
             }
             const report = input.report;
             const reportStatus = report?.status;
-            if (!report || !reportStatus || !['launching', 'running', 'waiting', 'completed', 'failed', 'interrupted', 'unknown'].includes(reportStatus)) throw httpError(400, '执行回报格式无效');
+            if (!report || !reportStatus || !['launching', 'running', 'waiting', 'completed', 'failed', 'interrupted', 'unknown', 'blocked'].includes(reportStatus)) throw httpError(400, '执行回报格式无效');
             if (saved.status === 'queued') throw httpError(409, '请先领取任务');
             if (report.threadId && !/^[a-f0-9-]{36}$/.test(report.threadId)) throw httpError(400, 'Codex 会话标识无效');
             if (report.sessionId !== undefined && report.sessionId !== null && (typeof report.sessionId !== 'string' || !report.sessionId || report.sessionId.length > 250)) throw httpError(400, 'ACP 会话标识无效');
+            if (saved.resumeThreadId && report.threadId && saved.resumeThreadId !== report.threadId) throw httpError(409, '不能替换待恢复的 Codex 会话');
             if (saved.threadId && report.threadId !== undefined && saved.threadId !== report.threadId) throw httpError(409, '不能替换已绑定的 Codex 会话');
             if (saved.sessionId && report.sessionId !== undefined && saved.sessionId !== report.sessionId) throw httpError(409, '不能替换已绑定的 ACP 会话');
             if (['completed', 'failed', 'interrupted'].includes(saved.status) && reportStatus !== saved.status) throw httpError(409, '执行已经结束');

@@ -1122,13 +1122,45 @@ pre {
   font-size: 13px;
 }
 
-.setup-details {
-  margin-top: 24px;
-  padding-top: 20px;
-  border-top: 1px solid var(--line);
+.login-card .google-button {
+  display: block;
+  margin-top: 22px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #172033;
+  text-align: center;
+  text-decoration: none;
 }
 
-.setup-details summary {
+.login-card .google-status {
+  margin: 6px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  text-align: center;
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0 0;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  height: 1px;
+  flex: 1;
+  background: var(--line);
+  content: '';
+}
+
+.login-card .auth-switch {
+  width: 100%;
+  margin-top: 18px;
+  border: 0;
+  background: transparent;
   color: var(--teal);
   cursor: pointer;
 }

@@ -88,10 +88,22 @@ describe('TaskAuxPage', () => {
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
   });
 
+  it('generates connection configuration without exposing the browser token', async () => {
+    setup('#devices', ['read', 'work.execute']);
+    const config = await screen.findByLabelText('设备连接配置');
+    expect((config as HTMLTextAreaElement).value).toContain("WORKBENCH_EXECUTE_CODEX='true'");
+    expect((config as HTMLTextAreaElement).value).not.toContain('WORKBENCH_TENANT');
+    expect((config as HTMLTextAreaElement).value).not.toContain('test-token');
+    await userEvent.setup().click(screen.getByRole('checkbox'));
+    expect((config as HTMLTextAreaElement).value).toContain("WORKBENCH_EXECUTE_CODEX='false'");
+    expect(screen.getByText('pnpm device:connect')).toBeTruthy();
+  });
+
   it('shows device status from the snapshot', async () => {
     setup('#devices', ['read']);
     expect(await screen.findByText('测试设备')).toBeTruthy();
     expect(screen.getByText('在线')).toBeTruthy();
-    expect(screen.getByText('pnpm device:sync')).toBeTruthy();
+    expect(screen.getByText('当前账号没有接入设备和远程执行任务的权限。')).toBeTruthy();
+    expect(screen.queryByLabelText('设备连接配置')).toBeNull();
   });
 });

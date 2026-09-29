@@ -44,7 +44,7 @@ export function NewTaskPage() {
   const [sourceSessionId, setSourceSessionId] = useState<string | null>(() => requestedSourceId);
   const [content, setContent] = useState('');
   const [files, setFiles] = useState<File[]>([]);
-  const [projectIndex, setProjectIndex] = useState(0);
+  const [projectIndex, setProjectIndex] = useState(() => new URLSearchParams(location.search).has('deviceId') ? -1 : 0);
   const [cwd, setCwd] = useState('');
   const [branchCwd, setBranchCwd] = useState('');
   const [model, setModel] = useState('');
@@ -72,6 +72,16 @@ export function NewTaskPage() {
   const targets = useQuery({ queryKey: ['task-center', 'targets'], queryFn: ({ signal }) => apiRequest<Targets>('/api/task-center/codex', { signal }), enabled: active && hasSessionToken(), retry: false });
   const snapshot = useQuery({ queryKey: ['task-center', 'snapshot'], queryFn: ({ signal }) => apiRequest<TaskCenterData>('/api/task-center', { signal }), enabled: active && hasSessionToken() });
   const identity = useQuery({ queryKey: ['task-center', 'identity'], queryFn: ({ signal }) => apiRequest<{ permissions: string[] }>('/api/bootstrap', { signal }), enabled: active && hasSessionToken() });
+  const appliedDevice = useRef(false);
+  useEffect(() => {
+    if (appliedDevice.current || !targets.data) return;
+    appliedDevice.current = true;
+    const deviceId = new URLSearchParams(location.search).get('deviceId');
+    if (!deviceId) return;
+    const index = targets.data.projects.findIndex(item => item.deviceId === deviceId);
+    if (index >= 0) setProjectIndex(index);
+    else setError('该设备暂未提供可执行项目，请先检查连接器。');
+  }, [targets.data]);
   const project = targets.data?.projects[projectIndex];
   const canEdit = identity.data?.permissions.includes('work.execute') === true;
   const branchDirectoryPending = cwd.trim() !== branchCwd;

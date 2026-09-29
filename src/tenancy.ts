@@ -1,5 +1,5 @@
 import { sourceEnvironmentPrefixes } from "./issueSources/index.ts";
-import { existsSync, readFileSync, realpathSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, mkdirSync } from 'node:fs';
 import { parseEnv } from 'node:util';
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
@@ -29,12 +29,9 @@ export const generateToken = () => randomBytes(32).toString('base64url');
 export function provisionDefaultTenant(database: TenantDatabase, rootDir: string, environment: Environment) {
   if (database.getTenant('default')) return false;
   const token = environment.DEFAULT_TENANT_TOKEN || generateToken();
-  // Save the generated token before inserting its hash, so an interrupted initialization is recoverable.
+  // The token remains an internal compatibility field. New personal accounts register without it.
   const dir = path.dirname(databasePath(rootDir, environment));
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (!environment.DEFAULT_TENANT_TOKEN) {
-    writeFileSync(path.join(dir, 'default-token'), `${token}\n`, { mode: 0o600 });
-  }
   database.createTenant({ id: 'default', name: '默认团队', token });
   return true;
 }

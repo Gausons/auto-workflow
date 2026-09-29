@@ -1,12 +1,18 @@
 import { ROLES, httpError, permissionsFor, publicIdentity } from './rbac.js';
+import { randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { Environment } from './issueSources/types.js';
 
 type Database = ReturnType<typeof import('./database.js').openDatabase>;
 type Principal = NonNullable<ReturnType<Database['authenticateSession']>>;
 type SendJson = (response: ServerResponse, status: number, value: unknown) => void;
 
-export function createAuthHandler(database: Database) {
+interface AuthOptions { environment?: Environment; fetchImpl?: typeof fetch }
+
+export function createAuthHandler(database: Database, { environment = {}, fetchImpl = fetch }: AuthOptions = {}) {
   const attempts = new Map<string, { count: number; until: number }>();
+  const googleExchanges = new Map<string, { session: { token: string; expiresAt: number }; expiresAt: number }>();
+  const googleStates = new Map<string, { expiresAt: number }>();
   let passwordOperations = 0;
   function rateLimit(key: string, limit = 10) {
     const now = Date.now();
@@ -26,17 +32,122 @@ export function createAuthHandler(database: Database) {
     if (!principal) throw httpError(401, '登录会话创建失败');
     return { ...session, ...publicIdentity(principal) };
   };
+  const googleConfigured = () => Boolean(environment.GOOGLE_CLIENT_ID && environment.GOOGLE_CLIENT_SECRET);
+  const googleRedirectUri = (req: IncomingMessage) => {
+    if (environment.GOOGLE_REDIRECT_URI) {
+      const configured = new URL(environment.GOOGLE_REDIRECT_URI);
+      const local = ['localhost', '127.0.0.1', '::1'].includes(configured.hostname);
+      if (!['http:', 'https:'].includes(configured.protocol) || (configured.protocol !== 'https:' && !local)) throw httpError(500, 'GOOGLE_REDIRECT_URI 必须使用 HTTPS；本机 localhost 可使用 HTTP');
+      return configured.toString();
+    }
+    const host = req.headers.host || '';
+    if (!/^[a-zA-Z0-9.:[\]-]+$/.test(host)) throw httpError(500, '请配置 GOOGLE_REDIRECT_URI');
+    const encrypted = 'encrypted' in req.socket && Boolean(req.socket.encrypted);
+    return `${encrypted ? 'https' : 'http'}://${host}/api/auth/google/callback`;
+  };
+  const oauthCookie = (value: string, secure: boolean, clear = false) => `bugflow.oauthState=${value}; Path=/api/auth/google; HttpOnly; SameSite=Lax; ${secure ? 'Secure; ' : ''}${clear ? 'Max-Age=0; ' : 'Max-Age=600; '}`;
+  const cookieValue = (req: IncomingMessage, name: string) => (req.headers.cookie || '').split(';').map(value => value.trim()).find(value => value.startsWith(`${name}=`))?.slice(name.length + 1) || '';
+  const redirectAuth = (res: ServerResponse, query: string, clearCookie?: string) => {
+    if (clearCookie) res.setHeader('Set-Cookie', clearCookie);
+    res.writeHead(303, { Location: `/?${query}` });
+    res.end();
+  };
+  const beginGoogle = (req: IncomingMessage) => {
+    if (!googleConfigured()) throw httpError(503, 'Google 登录尚未配置');
+    const redirectUri = googleRedirectUri(req);
+    const state = randomBytes(32).toString('base64url');
+    const now = Date.now();
+    for (const [key, value] of googleStates) if (value.expiresAt <= now) googleStates.delete(key);
+    if (googleStates.size >= 10000) throw httpError(429, 'Google 登录请求过多，请稍后重试');
+    googleStates.set(state, { expiresAt: now + 10 * 60_000 });
+    const authorization = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+    authorization.search = new URLSearchParams({ client_id: environment.GOOGLE_CLIENT_ID!, redirect_uri: redirectUri,
+      response_type: 'code', scope: 'openid email profile', state, prompt: 'select_account' }).toString();
+    return { authorization: authorization.toString(), cookie: oauthCookie(state, redirectUri.startsWith('https:')) };
+  };
 
   return async function handleAuth(req: IncomingMessage, res: ServerResponse, url: URL, token: unknown, principal: Principal | null, sendJson: SendJson) {
     const endpoint = url.pathname;
+    if (endpoint === '/api/auth/providers' && req.method === 'GET') {
+      sendJson(res, 200, { google: googleConfigured() });
+      return true;
+    }
+    if (endpoint === '/api/auth/register' && req.method === 'POST') {
+      rateLimit(`register:${req.socket.remoteAddress}`, 10);
+      const body = await readAuthJson(req);
+      const session = await expensive(() => database.registerPersonal(body));
+      sendJson(res, 201, sessionResponse(session));
+      return true;
+    }
     if (endpoint === '/api/auth/login' && req.method === 'POST') {
       rateLimit(`ip:${req.socket.remoteAddress}`, 100);
       const body = await readAuthJson(req);
-      const key = `login:${String(body.tenantId).slice(0, 64)}:${String(body.username).trim().toLowerCase().slice(0, 80)}`;
+      const key = `login:${String(body.username).trim().toLowerCase().slice(0, 80)}`;
       rateLimit(key);
-      const session = await expensive(() => database.login(body.tenantId, body.username, body.password));
+      const session = await expensive(() => typeof body.tenantId === 'string'
+        ? database.login(body.tenantId, body.username, body.password)
+        : database.loginPersonal(body.username, body.password));
       attempts.delete(key);
       sendJson(res, 200, sessionResponse(session));
+      return true;
+    }
+    if (endpoint === '/api/auth/google/start' && req.method === 'GET') {
+      if (!googleConfigured()) {
+        redirectAuth(res, `auth_error=${encodeURIComponent('Google 单点登录尚未配置，请先设置 GOOGLE_CLIENT_ID 和 GOOGLE_CLIENT_SECRET')}`);
+        return true;
+      }
+      rateLimit(`google:${req.socket.remoteAddress}`, 100);
+      const flow = beginGoogle(req);
+      res.setHeader('Set-Cookie', flow.cookie);
+      res.writeHead(302, { Location: flow.authorization });
+      res.end();
+      return true;
+    }
+    if (endpoint === '/api/auth/google/callback' && req.method === 'GET') {
+      const redirectUri = googleRedirectUri(req);
+      const clearCookie = oauthCookie('', redirectUri.startsWith('https:'), true);
+      try {
+        if (!googleConfigured()) throw httpError(503, 'Google 登录尚未配置');
+        const state = url.searchParams.get('state') || '';
+        const flow = googleStates.get(state);
+        googleStates.delete(state);
+        if (!state || state !== cookieValue(req, 'bugflow.oauthState') || !flow || flow.expiresAt <= Date.now()) throw httpError(400, 'Google 登录状态已失效，请重试');
+        if (url.searchParams.get('error')) throw httpError(401, 'Google 登录已取消');
+        const code = url.searchParams.get('code');
+        if (!code || code.length > 4096) throw httpError(400, 'Google 登录返回无效');
+        const tokenResponse = await fetchImpl('https://oauth2.googleapis.com/token', { method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: AbortSignal.timeout(15000),
+          body: new URLSearchParams({ code, client_id: environment.GOOGLE_CLIENT_ID!, client_secret: environment.GOOGLE_CLIENT_SECRET!, redirect_uri: redirectUri, grant_type: 'authorization_code' }) });
+        const tokenData = await tokenResponse.json().catch(() => ({})) as Record<string, unknown>;
+        if (!tokenResponse.ok || typeof tokenData.access_token !== 'string') throw httpError(502, '无法完成 Google 登录');
+        const profileResponse = await fetchImpl('https://openidconnect.googleapis.com/v1/userinfo', {
+          headers: { Authorization: `Bearer ${tokenData.access_token}` }, signal: AbortSignal.timeout(15000) });
+        const profile = await profileResponse.json().catch(() => ({})) as Record<string, unknown>;
+        if (!profileResponse.ok || typeof profile.sub !== 'string' || profile.sub.length > 255 || typeof profile.email !== 'string' || profile.email_verified !== true) {
+          throw httpError(401, 'Google 账号邮箱未验证');
+        }
+        const googleProfile = { subject: profile.sub, email: profile.email,
+          displayName: typeof profile.name === 'string' ? profile.name.slice(0, 80) : profile.email };
+        const session = database.loginWithGoogle(googleProfile);
+        const exchange = randomBytes(32).toString('base64url');
+        const now = Date.now();
+        for (const [key, value] of googleExchanges) if (value.expiresAt <= now) googleExchanges.delete(key);
+        if (googleExchanges.size >= 10000) throw httpError(429, 'Google 登录请求过多，请稍后重试');
+        googleExchanges.set(exchange, { session, expiresAt: now + 60_000 });
+        redirectAuth(res, `google_login=${encodeURIComponent(exchange)}`, clearCookie);
+      } catch (caught: unknown) {
+        const message = caught instanceof Error ? caught.message : 'Google 登录失败';
+        redirectAuth(res, `auth_error=${encodeURIComponent(message)}`, clearCookie);
+      }
+      return true;
+    }
+    if (endpoint === '/api/auth/google/exchange' && req.method === 'POST') {
+      const body = await readAuthJson(req);
+      const code = typeof body.code === 'string' ? body.code : '';
+      const exchange = googleExchanges.get(code);
+      googleExchanges.delete(code);
+      if (!exchange || exchange.expiresAt <= Date.now()) throw httpError(401, 'Google 登录结果已失效，请重试');
+      sendJson(res, 200, sessionResponse(exchange.session));
       return true;
     }
     if (endpoint === '/api/auth/setup' && ['GET', 'POST'].includes(req.method || '')) {

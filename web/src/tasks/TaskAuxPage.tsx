@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
+import { DeviceConnectionGuide } from './DeviceConnectionGuide.js';
 import { renderMessages } from '../components/historyView.js';
 import type { HistoryMessage, Session, Task, TaskCenterData } from '../../../shared/taskTypes.js';
 
@@ -101,7 +102,7 @@ export function TaskAuxPage() {
   });
   const identity = useQuery({
     queryKey: ['task-center', 'identity'],
-    queryFn: ({ signal }) => apiRequest<{ permissions: string[] }>('/api/bootstrap', { signal }),
+    queryFn: ({ signal }) => apiRequest<{ permissions: string[]; user?: { username: string }; tenant?: { id: string } }>('/api/bootstrap', { signal }),
     enabled: Boolean(view) && hasSessionToken()
   });
   if (!view) return null;
@@ -117,8 +118,13 @@ export function TaskAuxPage() {
       <a href="#devices" aria-current={view === 'devices' ? 'page' : undefined}>设备与 Agent<span>{data?.devices.length || 0}</span></a></nav>
     {snapshot.isPending ? <p role="status">正在汇总任务与会话…</p> : snapshot.isError ? <p role="alert">加载失败：{errorMessage(snapshot.error)} <button className="button secondary" type="button" onClick={() => void snapshot.refetch()}>重试</button></p> : data && (view === 'devices' ?
       <section className="tc-devices">{data.devices.map(device => <article key={device.id}><div className="tc-actions"><h2>{device.name}</h2><span className="tc-tag">{device.online ? '在线' : '离线'}</span></div>
-        <p>{device.agents.join(' · ') || '未发现 Agent'}</p><p className="tc-meta">{device.transport === 'manual' ? '工作台所在设备 · 手动复制上下文接续' : `连接器 · 最近心跳 ${time(device.lastSeen)}`}</p></article>)}
-        <article><h2>连接另一台设备</h2><p>在设备上运行项目中的同步连接器，将会话目录和设备状态同步到同一工作台，并接收交接包。</p><code>pnpm device:sync</code><p className="tc-meta">连接参数见 README「多设备任务中心」。连接器不会启动 Agent 或执行交接指令。</p></article>
+        <p>{device.agents.join(' · ') || '未发现 Agent'}</p><p className="tc-meta">{device.transport === 'manual' ? '工作台所在设备' : `连接器 · 最近心跳 ${time(device.lastSeen)}`}</p>
+        {device.transport === 'connector' && <><p>{device.codexProjects?.length ? `可远程执行 · ${device.codexProjects.length} 个项目` : '仅同步 · 未提供可执行项目'}{device.capabilities?.resumeCodex ? ' · 支持 Codex 原会话续聊' : ''}</p>
+          {device.codexProjects?.map(project => <p className="tc-meta" key={project.id}>{project.name} · {project.cwd}</p>)}
+          {!device.online && <p className="tc-callout">设备离线，已提交的任务会等待重新连接；执行结果未知时请先核对。</p>}
+          {!!device.codexProjects?.length && identity.data?.permissions.includes('work.execute') && <a className="button secondary" href={`/tasks/new?deviceId=${encodeURIComponent(device.id)}`}>新建远端任务</a>}</>}
+        </article>)}
+        {identity.data?.permissions.includes('work.execute') ? <DeviceConnectionGuide username={identity.data.user?.username} /> : <article><h2>连接本机 Agent</h2><p>当前账号没有接入设备和远程执行任务的权限。</p></article>}
       </section> : <section className="tc-inbox"><div className="tc-actions"><h2>未归属会话</h2><label className="tc-search">搜索会话<input value={search} onChange={event => setSearch(event.target.value)} placeholder="任务名、Agent 或工作目录" maxLength={200} /></label></div>
         <p className="tc-meta">自动汇总的历史记录需要手动关联任务；远端设备需运行同步连接器。</p>
         {visible.length ? visible.map(session => <InboxSession key={session.id} session={session} data={data} canEdit={identity.data?.permissions.includes('work.execute') === true} refresh={refresh} />)

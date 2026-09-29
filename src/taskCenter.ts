@@ -31,6 +31,7 @@ interface TaskCommand extends InputRecord {
   name?: unknown;
   agents?: unknown;
   codexProjects?: unknown;
+  capabilities?: unknown;
   sessions?: unknown;
   mode?: string;
   agent?: unknown;
@@ -157,10 +158,11 @@ export function createTaskCenter({ database, tenantId, history }: { database: Ta
           const id = required(input.deviceId, 80);
           if (!/^[a-zA-Z0-9_-]+$/.test(id) || id === 'local') throw httpError(400, '设备标识无效');
           let device = data.devices.find(d => d.id === id);
-          if (device && device.owner !== actor.id) throw httpError(403, '设备属于其他成员');
+          if (device && device.owner !== actor.id) throw httpError(403, '设备属于其他账号');
           if (!Array.isArray(input.agents) || input.agents.length > 20) throw httpError(400, 'Agent 列表无效');
           const devicePatch: Device = { id, owner: actor.id, name: required(input.name, 120), agents: input.agents.map(agent => required(agent, 80)), lastSeen: now(), transport: 'connector' };
           if (!device) { device = devicePatch; data.devices.push(device); } else Object.assign(device, devicePatch);
+          device.capabilities = { resumeCodex: inputRecord(input.capabilities).resumeCodex === true };
           if (input.codexProjects !== undefined) {
             if (!Array.isArray(input.codexProjects) || input.codexProjects.length > 100) throw httpError(400, 'Codex 项目列表无效');
             device.codexProjects = input.codexProjects.map(value => { const p = inputRecord(value); return ({
@@ -180,7 +182,7 @@ export function createTaskCenter({ database, tenantId, history }: { database: Ta
             const createdAt = typeof s.createdAt === 'string' && Number.isFinite(Date.parse(s.createdAt)) ? new Date(s.createdAt).toISOString() : undefined;
             const updatedAt = typeof s.updatedAt === 'string' && Number.isFinite(Date.parse(s.updatedAt)) ? new Date(s.updatedAt).toISOString() : now();
             const item: Session = { id, nativeId, deviceId: device.id, agent, agentLabel: agent, title: required(s.title, 120), cwd: text(s.cwd ?? '', 2000), createdAt,
-              status: text(s.status ?? 'unknown', 80), updatedAt,
+              status: text(s.status ?? 'unknown', 80), archived: s.archived === true, updatedAt,
               excerpt: text(s.excerpt ?? '', 24000), partial: true };
             const old = data.sessions.findIndex(session => session.id === id);
             if (old < 0) data.sessions.push(item); else data.sessions[old] = item;

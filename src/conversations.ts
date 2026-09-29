@@ -7,6 +7,7 @@ import type { SummaryResult } from './contextModelSummary.js';
 import type { Environment } from './issueSources/types.js';
 import { deliverRecord } from './sessionDelivery/records.js';
 import { httpError } from './rbac.js';
+import { remoteContinuationProject } from './remoteSession.js';
 import { verifyBundle, verifySnapshot } from '@auto-workflow/context-engine';
 import { detachSnapshot, restoreDetachedSnapshot, verifyDetachedManifest, type DetachedManifest } from '@auto-workflow/context-engine/detached-bundle';
 
@@ -171,12 +172,13 @@ export function createConversations({ database, tenantId, history, delivery, exe
       return { sessions: matches.slice(offset, offset + limit), total: matches.length, offset, limit, providers, scope: catalog.scope, workspace, workspaces: [...counts].map(([path, count]) => ({ path, count })).sort((a, b) => a.path.localeCompare(b.path)) };
     },
     remoteDetail(id: string, params = new URLSearchParams()) {
-      const s = read().sessions.find(session => session.id === id && session.deviceId !== 'local' && session.source !== 'conversation');
+      const data = read();
+      const s = data.sessions.find(session => session.id === id && session.deviceId !== 'local' && session.source !== 'conversation');
       if (!s) return null;
       const offset = Number(params.get('offset') || 0), limit = Number(params.get('limit') || 100);
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw httpError(400, '分页参数无效');
       const messages = s.excerpt ? [{ role: 'assistant', text: s.excerpt, timestamp: s.updatedAt }] : [];
-      return { session: { ...s, sessionId: s.nativeId, partial: true }, messages: messages.slice(offset, offset + limit), total: messages.length, offset, limit };
+      return { session: { ...s, sessionId: s.nativeId, canContinue: Boolean(remoteContinuationProject(data, s)), partial: true }, messages: messages.slice(offset, offset + limit), total: messages.length, offset, limit };
     },
     detail(id: string, params = new URLSearchParams()) {
       const data = read(), session = managed(id, data);

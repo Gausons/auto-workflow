@@ -1,11 +1,10 @@
 import { expect, test } from '@playwright/test';
 
-const token = 'test-only-token-for-web-e2e-2026-long-enough';
 const password = 'Test-Web-E2E-Password-2026';
 
 test.beforeAll(async ({ request }) => {
-  const setup = await request.post('/api/auth/setup', { headers: { Authorization: `Bearer ${token}` }, data: { username: 'owner', displayName: 'E2E 所有者', password } });
-  expect(setup.ok() || setup.status() === 409).toBeTruthy();
+  const registration = await request.post('/api/auth/register', { data: { username: 'owner', displayName: 'E2E 用户', password } });
+  expect(registration.ok() || registration.status() === 409).toBeTruthy();
 });
 
 async function login(page: import('@playwright/test').Page) {
@@ -31,7 +30,7 @@ test('login, normal URLs, old hash links and deep refresh', async ({ page }) => 
   await page.getByRole('link', { name: '设置', exact: true }).click();
   await page.getByRole('link', { name: /我的账号/ }).click();
   await expect(page).toHaveURL(/\/settings\/account$/);
-  await expect(page.getByText('owner · E2E 所有者')).toBeVisible();
+  await expect(page.getByText('owner · E2E 用户')).toBeVisible();
 });
 
 test('creates one task without silently starting an unavailable Agent', async ({ page }) => {
@@ -48,7 +47,7 @@ test('creates one task without silently starting an unavailable Agent', async ({
 });
 
 test('viewer cannot create or execute tasks', async ({ page, request }) => {
-  const owner = await request.post('/api/auth/login', { data: { tenantId: 'default', username: 'owner', password } });
+  const owner = await request.post('/api/auth/login', { data: { username: 'owner', password } });
   const { token: ownerToken } = await owner.json() as { token: string };
   const created = await request.post('/api/organization/members', { headers: { Authorization: `Bearer ${ownerToken}` }, data: { username: 'viewer', displayName: '只读测试', role: 'viewer', password } });
   expect(created.ok()).toBeTruthy();
@@ -105,4 +104,54 @@ test('Agent request reply and unknown-result reconciliation never resubmit execu
   await expect.poll(() => controls.length).toBe(2);
   expect(controls[1]).toMatchObject({ executionId: 'job-control', action: 'reconcile' });
   expect(executeWrites).toHaveLength(0);
+});
+
+test('device setup selects remote target and browser controls a remote original session', async ({ page, request }) => {
+  const loginResult = await request.post('/api/auth/login', { data: { username: 'owner', password } });
+  const { token: connectorToken } = await loginResult.json() as { token: string };
+  const headers = { Authorization: `Bearer ${connectorToken}` };
+  const nativeId = 'c5d32f71-0be1-4507-a9b8-6b843fe29d20';
+  const deviceId = 'browser-remote';
+  const heartbeat = await request.post('/api/task-center', { headers, data: { action: 'heartbeat', deviceId, name: '浏览器远端开发机', agents: ['codex'], capabilities: { resumeCodex: true }, codexProjects: [{ id: 'remote-project', name: '远端项目', cwd: '/remote/repo', agent: 'codex' }], sessions: [{ nativeId, agent: 'codex', title: '远端续聊回归', cwd: '/remote/repo' }] } });
+  expect(heartbeat.ok()).toBeTruthy();
+  await login(page);
+  await page.getByRole('navigation', { name: '主导航' }).getByRole('link', { name: '设备与 Agent', exact: true }).click();
+  await expect(page).toHaveURL(/\/devices$/);
+  await expect(page.getByRole('navigation', { name: '主导航' }).getByRole('link', { name: '设备与 Agent', exact: true })).toHaveAttribute('aria-current', 'page');
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '连接本机 Agent' })).toBeVisible();
+  await expect(page.getByLabel('设备连接配置')).toContainText("WORKBENCH_EXECUTE_CODEX='true'");
+  expect(await page.getByLabel('设备连接配置').inputValue()).not.toContain(connectorToken);
+  const device = page.locator('article').filter({ has: page.getByRole('heading', { name: '浏览器远端开发机' }) });
+  await expect(device).toContainText('支持 Codex 原会话续聊');
+  await device.getByRole('link', { name: '新建远端任务' }).click();
+  await expect(page).toHaveURL(/deviceId=browser-remote/);
+  await expect(page.getByRole('combobox', { name: '执行位置' })).toHaveValue('0');
+  await expect(page.getByRole('combobox', { name: '执行位置' })).toContainText('远端项目');
+  const list = await request.get('/api/agent-sessions', { headers });
+  const { sessions } = await list.json() as { sessions: Array<{ id: string; deviceId: string }> };
+  const session = sessions.find(item => item.deviceId === deviceId)!;
+  await page.goto(`/history/${session.id}`);
+  await page.getByRole('textbox', { name: '发送消息' }).fill('继续远端测试');
+  await page.getByRole('button', { name: '发送消息', exact: true }).click();
+  await expect(page.getByText(/已排队，准备继续原会话/)).toBeVisible();
+  const status = await request.get(`/api/agent-sessions/${session.id}/continue`, { headers });
+  const { execution } = await status.json() as { execution: { id: string; resumeThreadId: string; deviceId: string } };
+  expect(execution.resumeThreadId).toBe(nativeId); expect(execution.deviceId).toBe(deviceId);
+  expect((await request.post('/api/task-center/execution-action', { headers, data: { action: 'claim', executionId: execution.id } })).ok()).toBeTruthy();
+  const report = { threadId: nativeId, status: 'waiting', request: { method: 'item/commandExecution/requestApproval', params: { command: 'echo fixture' } }, output: '受控远端输出' };
+  expect((await request.post('/api/task-center/execution-action', { headers, data: { action: 'report', executionId: execution.id, report } })).ok()).toBeTruthy();
+  await page.getByRole('button', { name: '处理请求' }).click();
+  await page.getByRole('button', { name: '发送回复', exact: true }).click();
+  await expect(page.getByText(/等待目标设备处理操作/)).toBeVisible();
+  const pending = await request.get(`/api/agent-sessions/${session.id}/continue`, { headers });
+  const current = await pending.json() as { execution: { control: { id: string; action: string; decision: string } } };
+  expect(current.execution.control).toMatchObject({ action: 'respond', decision: 'decline' });
+  await request.post('/api/task-center/execution-action', { headers, data: { action: 'report', executionId: execution.id, controlAck: current.execution.control.id, report: { ...report, request: null, status: 'running' } } });
+  await page.getByRole('button', { name: '停止', exact: true }).click();
+  const stopped = await request.get(`/api/agent-sessions/${session.id}/continue`, { headers });
+  const stop = await stopped.json() as { execution: { control: { id: string; action: string } } };
+  expect(stop.execution.control.action).toBe('stop');
+  await request.post('/api/task-center/execution-action', { headers, data: { action: 'report', executionId: execution.id, controlAck: stop.execution.control.id, report: { ...report, request: null, status: 'interrupted' } } });
+  await expect(page.getByRole('button', { name: '重新编辑本轮消息' })).toBeVisible();
 });

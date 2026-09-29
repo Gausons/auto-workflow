@@ -172,7 +172,7 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
       state.assignmentPeople = normalizeAssignmentPeople(await readJson(req), { fallback: [] }); await persistAssignmentPeople(); sendJson(res, 200, getBootstrap()); return;
     }
     if (req.method === 'PUT' && url.pathname === '/api/config') {
-      if (hasBackgroundWork()) { sendJson(res, 409, { error: 'tenant_busy', message: '当前组织有后台任务执行中，请稍后修改配置' }); return; }
+      if (hasBackgroundWork()) { sendJson(res, 409, { error: 'tenant_busy', message: '当前账号有后台任务执行中，请稍后修改配置' }); return; }
       const body = await readJson(req);
       validateWorkspace(body.codexWorkspaceDir ?? state.config.codexWorkspaceDir);
       updateConfig(body); await switchIssueUserContext(state.config); await persistConfig(); configureScheduler(state.scheduler.enabled);
@@ -641,7 +641,7 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
     workspace: () => state.config.codexWorkspaceDir,
     async handleApi(req: IncomingMessage, res: ServerResponse, url: URL, principal: Principal) {
       const mutation = req.method !== 'GET';
-      if (mutation && mutationPending) { sendJson(res, 409, { error: 'tenant_busy', message: '当前组织正在处理其他请求，请稍后重试' }); req.resume(); return; }
+      if (mutation && mutationPending) { sendJson(res, 409, { error: 'tenant_busy', message: '当前账号正在处理其他请求，请稍后重试' }); req.resume(); return; }
       if (mutation) mutationPending = true;
       try { await requestIdentity.run(principal, () => handleApi(req, res, url)); }
       catch (caught: unknown) { const error = asError(caught); error.message = sanitizeError(error); throw error; }

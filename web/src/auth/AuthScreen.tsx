@@ -1,24 +1,41 @@
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { apiRequest, saveSessionToken } from '../api/client.js';
 
 const AUTH_REQUIRED_EVENT = 'bugflow:auth-required';
 
 interface LoginResponse { token: string }
-interface SetupResponse { tenant: { id: string }; message: string }
-interface AuthScreenProps {
-  hasSession: boolean;
-  reload?: () => void;
-}
+interface AuthScreenProps { hasSession: boolean; reload?: () => void }
 
 const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 export function AuthScreen({ hasSession, reload = () => location.reload() }: AuthScreenProps) {
+  const params = new URLSearchParams(location.search);
   const [active, setActive] = useState(!hasSession);
-  const [notice, setNotice] = useState('');
-  const [tenantId, setTenantId] = useState('default');
-  const [username, setUsername] = useState('');
-  const setupDetails = useRef<HTMLDetailsElement>(null);
+  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [notice, setNotice] = useState(params.get('auth_error') || '');
+  const googleHandled = useRef(false);
+  const providers = useQuery({ queryKey: ['auth', 'providers'], queryFn: () => apiRequest<{ google: boolean }>('/api/auth/providers'), retry: false });
+  const complete = ({ token }: LoginResponse) => { saveSessionToken(token); reload(); };
+  const login = useMutation({
+    mutationFn: (input: Record<string, FormDataEntryValue>) => apiRequest<LoginResponse>('/api/auth/login', {
+      method: 'POST', body: JSON.stringify(input)
+    }),
+    onSuccess: complete
+  });
+  const register = useMutation({
+    mutationFn: (input: Record<string, FormDataEntryValue>) => apiRequest<LoginResponse>('/api/auth/register', {
+      method: 'POST', body: JSON.stringify(input)
+    }),
+    onSuccess: complete
+  });
+  const googleExchange = useMutation({
+    mutationFn: (code: string) => apiRequest<LoginResponse>('/api/auth/google/exchange', {
+      method: 'POST', body: JSON.stringify({ code })
+    }),
+    onSuccess: complete,
+    onError: error => setNotice(messageOf(error))
+  });
 
   useEffect(() => {
     const handleRequired = (event: Event) => {
@@ -32,62 +49,43 @@ export function AuthScreen({ hasSession, reload = () => location.reload() }: Aut
     return () => window.removeEventListener(AUTH_REQUIRED_EVENT, handleRequired);
   }, []);
 
-  const login = useMutation({
-    mutationFn: (input: Record<string, FormDataEntryValue>) => apiRequest<LoginResponse>('/api/auth/login', {
-      method: 'POST', body: JSON.stringify(input)
-    }),
-    onSuccess: ({ token }) => { saveSessionToken(token); reload(); }
-  });
-  const setup = useMutation({
-    mutationFn: ({ token, input }: { token: string; input: Record<string, FormDataEntryValue> }) => apiRequest<SetupResponse>('/api/auth/setup', {
-      method: 'POST', body: JSON.stringify(input)
-    }, token.trim()),
-    onSuccess: (data, variables) => {
-      setTenantId(data.tenant.id);
-      setUsername(String(variables.input.username || ''));
-      setNotice(data.message);
-      if (setupDetails.current) setupDetails.current.open = false;
-    }
-  });
+  useEffect(() => {
+    const code = new URLSearchParams(location.search).get('google_login');
+    if (!code || googleHandled.current) return;
+    googleHandled.current = true;
+    history.replaceState(history.state, '', `${location.pathname}${location.hash}`);
+    googleExchange.mutate(code);
+  }, [googleExchange]);
 
-  if (!active) return <div className="login-card"><p role="status">正在加载工作台…</p></div>;
-
-  const submitLogin = (event: React.FormEvent<HTMLFormElement>) => {
+  if (!active || googleExchange.isPending) return <div className="login-card"><p role="status">正在完成登录…</p></div>;
+  const submit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setNotice('');
-    login.mutate(Object.fromEntries(new FormData(event.currentTarget)));
+    const input = Object.fromEntries(new FormData(event.currentTarget));
+    if (mode === 'login') login.mutate(input); else register.mutate(input);
   };
-  const submitSetup = (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const { token, ...input } = Object.fromEntries(new FormData(form));
-    setup.mutate({ token: String(token || ''), input }, { onSuccess: () => form.reset() });
-  };
+  const pending = login.isPending || register.isPending;
+  const error = mode === 'login' ? login.error : register.error;
 
   return <div className="login-card">
-    <p className="eyebrow">BugFlow · 组织工作台</p>
-    <h1>登录你的组织</h1>
-    <form id="loginForm" onSubmit={submitLogin}>
-      <label htmlFor="loginOrganization">组织 ID</label>
-      <input id="loginOrganization" name="tenantId" value={tenantId} onChange={event => setTenantId(event.target.value)} required autoComplete="organization" />
-      <label htmlFor="loginUsername">用户名</label>
-      <input id="loginUsername" name="username" value={username} onChange={event => setUsername(event.target.value)} required autoComplete="username" />
-      <label htmlFor="loginPassword">密码</label>
-      <input id="loginPassword" name="password" type="password" required autoComplete="current-password" maxLength={128} />
-      <p id="loginError" className="login-error" role="alert">{login.error ? messageOf(login.error) : notice}</p>
-      <button className="button primary" type="submit" disabled={login.isPending}>{login.isPending ? '登录中…' : '登录'}</button>
+    <p className="eyebrow">BugFlow · 个人工作台</p>
+    <h1>{mode === 'login' ? '登录' : '注册个人账号'}</h1>
+    <p>{mode === 'login' ? '继续处理你的缺陷、任务和 Agent 会话。' : '每个账号拥有独立的数据和设置。'}</p>
+    <a className="button google-button" href="/api/auth/google/start">使用 Google 单点登录</a>
+    {providers.data?.google === false && <p className="google-status">Google 单点登录尚未配置</p>}
+    {providers.isError && <p className="google-status">暂时无法检查 Google 单点登录配置</p>}
+    <div className="auth-divider"><span>或</span></div>
+    <form id={mode === 'login' ? 'loginForm' : 'registerForm'} onSubmit={submit}>
+      <label htmlFor="authUsername">用户名{mode === 'register' ? '（推荐使用邮箱）' : ''}</label>
+      <input id="authUsername" name="username" required minLength={3} maxLength={254} autoComplete="username" />
+      {mode === 'register' && <><label htmlFor="authDisplayName">显示名称</label><input id="authDisplayName" name="displayName" required maxLength={80} autoComplete="name" /></>}
+      <label htmlFor="authPassword">密码{mode === 'register' ? '（12–128 位）' : ''}</label>
+      <input id="authPassword" name="password" type="password" required minLength={mode === 'register' ? 12 : undefined} maxLength={128} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} />
+      <p className="login-error" role="alert">{error ? messageOf(error) : notice}</p>
+      <button className="button primary" type="submit" disabled={pending}>{pending ? '请稍候…' : mode === 'login' ? '登录' : '注册并进入'}</button>
     </form>
-    <details className="setup-details" id="setupDetails" ref={setupDetails}>
-      <summary>首次使用？初始化组织所有者</summary>
-      <p>使用原组织令牌创建首位所有者。初始化后，所有成员均使用个人账号登录。</p>
-      <form id="setupForm" onSubmit={submitSetup}>
-        <label>组织初始化令牌<input name="token" type="password" required autoComplete="off" /></label>
-        <label>所有者用户名<input name="username" required minLength={3} maxLength={80} autoComplete="username" /></label>
-        <label>显示名称<input name="displayName" required maxLength={80} autoComplete="name" /></label>
-        <label>密码（12–128 位）<input name="password" type="password" required minLength={12} maxLength={128} autoComplete="new-password" /></label>
-        <p id="setupError" className="login-error" role="alert">{setup.error ? messageOf(setup.error) : ''}</p>
-        <button className="button primary" type="submit" disabled={setup.isPending}>{setup.isPending ? '创建中…' : '创建组织所有者'}</button>
-      </form>
-    </details>
+    <button className="auth-switch" type="button" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setNotice(''); }}>
+      {mode === 'login' ? '首次使用？注册个人账号' : '已有账号？返回登录'}
+    </button>
   </div>;
 }

@@ -25,7 +25,7 @@ export function openDatabase(filename: string) {
   const db = new DatabaseSync(filename);
   db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
   const version = Number(db.prepare('PRAGMA user_version').get()?.user_version || 0);
-  if (version > 7) { db.close(); throw new Error('数据库版本高于当前程序支持的版本'); }
+  if (version > 8) { db.close(); throw new Error('数据库版本高于当前程序支持的版本'); }
   if (version === 0) {
     transaction(() => {
       db.exec(readFileSync(new URL('../migrations/001_initial.sql', import.meta.url), 'utf8'));
@@ -68,6 +68,12 @@ export function openDatabase(filename: string) {
     transaction(() => {
       db.exec(readFileSync(new URL('../migrations/007_context_objects.sql', import.meta.url), 'utf8'));
       db.exec('PRAGMA user_version = 7');
+    });
+  }
+  if (version < 8) {
+    transaction(() => {
+      db.exec(readFileSync(new URL('../migrations/008_external_identities.sql', import.meta.url), 'utf8'));
+      db.exec('PRAGMA user_version = 8');
     });
   }
 

@@ -13,14 +13,14 @@ import type { Environment } from './src/issueSources/types.js';
 
 const projectDir = path.dirname(fileURLToPath(import.meta.url));
 type TenantRuntime = ReturnType<typeof createTenantRuntime>;
-interface AppOptions { rootDir?: string; environment?: Environment }
+interface AppOptions { rootDir?: string; environment?: Environment; fetchImpl?: typeof fetch }
 type ErrorLike = Error & { statusCode?: number };
 const asError = (value: unknown): ErrorLike => value instanceof Error ? value as ErrorLike : new Error(String(value));
 
-export function createApp({ rootDir = projectDir, environment = loadEnvironment(rootDir) }: AppOptions = {}) {
+export function createApp({ rootDir = projectDir, environment = loadEnvironment(rootDir), fetchImpl }: AppOptions = {}) {
   const filename = databasePath(rootDir, environment);
   const database = openDatabase(filename);
-  const handleAuth = createAuthHandler(database);
+  const handleAuth = createAuthHandler(database, { environment, fetchImpl });
   const serveWeb = createStaticHandler(projectDir);
   const runtimes = new Map<string, TenantRuntime>();
   const environments = new Map<string, Environment>();
@@ -72,10 +72,10 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
         const token = /^Bearer ([^\s]+)$/i.exec(authorization)?.[1];
         const principal = database.authenticateSession(token);
         if (principal && req.headers['x-tenant-id'] && req.headers['x-tenant-id'] !== principal.tenant.id) {
-          return sendJson(res, 403, { error: 'tenant_mismatch', message: '登录会话不属于指定组织' });
+          return sendJson(res, 403, { error: 'tenant_mismatch', message: '登录会话不属于指定账号空间' });
         }
         if (await handleAuth(req, res, url, token, principal, sendJson)) return;
-        if (!principal) return sendJson(res, 401, { error: 'unauthorized', message: '请使用组织成员账号登录；首次使用请先初始化组织所有者' });
+        if (!principal) return sendJson(res, 401, { error: 'unauthorized', message: '请登录个人账号' });
         const { tenant, user } = principal;
         const permission = permissionForRoute(req.method, url.pathname);
         if (!permission) return sendJson(res, 404, { error: 'not_found', message: '接口不存在' });
@@ -119,7 +119,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const address = app.server.address();
     console.log(`Auto bug workflow workbench: http://${host}:${typeof address === 'object' && address ? address.port : port}`);
     console.log(`Database: ${app.filename}`);
-    console.log(`首次初始化组织所有者：使用 DEFAULT_TENANT_TOKEN 或 ${path.join(path.dirname(app.filename), 'default-token')}；初始化后使用成员账号登录。`);
+    console.log('首次使用请在登录页注册个人账号，也可以配置 Google 登录。');
   });
   let stopping = false;
   const shutdown = () => {

@@ -23,7 +23,7 @@ describe('AuthScreen', () => {
   });
 
   it('logs in and stores the member session', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ token: 'member-token' }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ token: 'member-token' }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
     vi.stubGlobal('fetch', fetchMock);
     const reload = renderAuth();
     const user = userEvent.setup();
@@ -38,7 +38,7 @@ describe('AuthScreen', () => {
   });
 
   it('shows a structured login error without storing a token', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ message: '用户名或密码错误' }), { status: 401, headers: { 'Content-Type': 'application/json' } })));
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(path === '/api/auth/providers' ? { google: false } : { message: '用户名或密码错误' }), { status: path === '/api/auth/providers' ? 200 : 401, headers: { 'Content-Type': 'application/json' } }))));
     renderAuth();
     const user = userEvent.setup();
 
@@ -50,19 +50,34 @@ describe('AuthScreen', () => {
     expect(sessionStorage.getItem('bugflow.sessionToken')).toBeNull();
   });
 
-  it('initializes an owner and copies the identity into the login form', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ tenant: { id: 'default' }, message: '组织所有者已创建' }), { status: 201, headers: { 'Content-Type': 'application/json' } })));
-    renderAuth();
+  it('keeps personal registration available and stores its session', async () => {
+    const fetchMock = vi.fn().mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(path === '/api/auth/providers' ? { google: false, registration: false } : { token: 'registered-token' }), { status: path === '/api/auth/providers' ? 200 : 201, headers: { 'Content-Type': 'application/json' } })));
+    vi.stubGlobal('fetch', fetchMock);
+    const reload = renderAuth();
     const user = userEvent.setup();
 
-    await user.click(screen.getByText('首次使用？初始化组织所有者'));
-    await user.type(screen.getByLabelText('组织初始化令牌'), 'setup-token');
-    await user.type(screen.getByLabelText('所有者用户名'), 'new-owner');
+    await user.click(await screen.findByText('首次使用？注册个人账号'));
+    await user.type(screen.getByLabelText('用户名（推荐使用邮箱）'), 'new-owner');
     await user.type(screen.getByLabelText('显示名称'), '新所有者');
     await user.type(screen.getByLabelText('密码（12–128 位）'), 'long-enough-password');
-    await user.click(screen.getByRole('button', { name: '创建组织所有者' }));
+    await user.click(screen.getByRole('button', { name: '注册并进入' }));
 
-    expect(await screen.findByText('组织所有者已创建')).toBeTruthy();
-    expect(screen.getByLabelText('用户名')).toHaveProperty('value', 'new-owner');
+    await waitFor(() => expect(reload).toHaveBeenCalledOnce());
+    expect(sessionStorage.getItem('bugflow.sessionToken')).toBe('registered-token');
+    expect(fetchMock).toHaveBeenCalledWith('/api/auth/register', expect.objectContaining({ method: 'POST' }));
+  });
+
+  it('shows Google SSO when configured', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ google: true }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    renderAuth();
+    expect((await screen.findByRole('link', { name: '使用 Google 单点登录' })).getAttribute('href')).toBe('/api/auth/google/start');
+    expect(screen.queryByText('Google 单点登录尚未配置')).toBeNull();
+  });
+
+  it('keeps Google SSO visible and explains when it is not configured', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ google: false }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    renderAuth();
+    expect((await screen.findByRole('link', { name: '使用 Google 单点登录' })).getAttribute('href')).toBe('/api/auth/google/start');
+    expect(await screen.findByText('Google 单点登录尚未配置')).toBeTruthy();
   });
 });

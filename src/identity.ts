@@ -12,6 +12,8 @@ interface PublicUser {
   enabled: number;
   createdAt: string;
   updatedAt: string;
+  hasPassword: number;
+  hasGoogle: number;
 }
 interface StoredUser extends PublicUser { password_hash: string }
 interface Actor { id: string; username?: string }
@@ -20,6 +22,7 @@ interface UserUpdate { role?: unknown; enabled?: unknown; displayName?: unknown 
 interface CreateUserOptions { actor?: Actor | null; bootstrap?: boolean; authorizeBootstrap?: () => void }
 interface Principal { tenant: { id: string; name?: string }; user: PublicUser; expiresAt?: number }
 interface PasswordChange { currentPassword?: unknown; password?: unknown }
+interface GoogleProfile { subject: string; email: string; displayName: string }
 type Transaction = <T>(operation: () => T) => T;
 
 const derive = (password: string, salt: string): Promise<Buffer> => new Promise((resolve, reject) => {
@@ -27,7 +30,7 @@ const derive = (password: string, salt: string): Promise<Buffer> => new Promise(
 });
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const scryptOptions = { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
-const PUBLIC_COLUMNS = 'id, tenant_id AS tenantId, username, display_name AS displayName, role, enabled, created_at AS createdAt, updated_at AS updatedAt';
+const PUBLIC_COLUMNS = "id, tenant_id AS tenantId, username, display_name AS displayName, role, enabled, created_at AS createdAt, updated_at AS updatedAt, CASE WHEN password_hash LIKE 'external$%' THEN 0 ELSE 1 END AS hasPassword, EXISTS(SELECT 1 FROM auth_identities ai WHERE ai.tenant_id = organization_users.tenant_id AND ai.user_id = organization_users.id AND ai.provider = 'google') AS hasGoogle";
 export const SESSION_DURATION_MS = 24 * 60 * 60 * 1000;
 
 export async function hashPassword(password: unknown) {
@@ -40,15 +43,37 @@ export async function hashPassword(password: unknown) {
 async function verifyPassword(password: unknown, encoded: unknown) {
   // Also perform password derivation for unknown usernames to avoid a fast enumeration path.
   const fallback = `scrypt$${'0'.repeat(32)}$${'0'.repeat(128)}`;
-  const [, salt, expected] = (typeof encoded === 'string' ? encoded : fallback).split('$');
+  const candidate = typeof encoded === 'string' && encoded.startsWith('scrypt$') ? encoded : fallback;
+  const [, salt, expected] = candidate.split('$');
   const key = await derive(typeof password === 'string' ? password : '', salt);
-  return timingSafeEqual(key, Buffer.from(expected, 'hex')) && typeof encoded === 'string';
+  return timingSafeEqual(key, Buffer.from(expected, 'hex')) && candidate === encoded;
 }
 
 export function createIdentityStore(db: DatabaseSync, transaction: Transaction) {
   const getUser = (tenantId: string, id: string) => db.prepare(`SELECT ${PUBLIC_COLUMNS} FROM organization_users WHERE tenant_id = ? AND id = ?`).get(tenantId, id) as unknown as PublicUser | undefined;
   const listUsers = (tenantId: string) => db.prepare(`SELECT ${PUBLIC_COLUMNS} FROM organization_users WHERE tenant_id = ? ORDER BY created_at, id`).all(tenantId) as unknown as PublicUser[];
   const hasUsers = (tenantId: string) => Boolean(db.prepare('SELECT 1 FROM organization_users WHERE tenant_id = ? LIMIT 1').get(tenantId));
+
+  function personalInput(input: UserInput) {
+    const username = typeof input.username === 'string' ? input.username.trim().toLowerCase() : '';
+    if (!/^[a-z0-9][a-z0-9._@+-]{2,253}$/.test(username)) throw httpError(400, '用户名需为 3–254 位字母、数字、点、下划线、加号、短横线或 @');
+    const displayName = typeof input.displayName === 'string' ? input.displayName.trim() : username;
+    if (!displayName || displayName.length > 80) throw httpError(400, '显示名称需为 1–80 个字符');
+    return { username, displayName };
+  }
+  function googleEmail(profile: GoogleProfile) {
+    const email = profile.email.trim().toLowerCase();
+    if (email.length > 254 || !/^[^\s@]+@[^\s@]+$/.test(email)) throw httpError(400, 'Google 账号邮箱无效');
+    return email;
+  }
+  function personalTenant(displayName: string) {
+    if (!hasUsers('default')) return 'default';
+    const tenantId = `personal-${randomUUID().replaceAll('-', '').slice(0, 24)}`;
+    const now = new Date().toISOString();
+    db.prepare('INSERT INTO tenants VALUES (?, ?, ?, ?)').run(tenantId, displayName, digest(randomBytes(32).toString('base64url')), now);
+    db.prepare('INSERT INTO tenant_settings(tenant_id) VALUES (?)').run(tenantId);
+    return tenantId;
+  }
 
   function audit(tenantId: string, actor: Actor | null | undefined, action: string, target = '', detail: unknown = {}) {
     db.prepare('INSERT INTO audit_events(tenant_id, actor_id, actor_name, action, target, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -68,10 +93,7 @@ export function createIdentityStore(db: DatabaseSync, transaction: Transaction) 
     }
   }
   async function createUser(tenantId: string, input: UserInput, { actor, bootstrap = false, authorizeBootstrap = () => {} }: CreateUserOptions = {}): Promise<PublicUser> {
-    const username = typeof input.username === 'string' ? input.username.trim().toLowerCase() : '';
-    if (!/^[a-z0-9][a-z0-9._@-]{2,79}$/.test(username)) throw httpError(400, '用户名需为 3–80 位字母、数字、点、下划线、短横线或 @');
-    const displayName = typeof input.displayName === 'string' ? input.displayName.trim() : username;
-    if (!displayName || displayName.length > 80) throw httpError(400, '显示名称需为 1–80 个字符');
+    const { username, displayName } = personalInput(input);
     const requestedRole = bootstrap ? 'owner' : input.role ?? 'viewer';
     validateRole(requestedRole);
     const role = requestedRole;
@@ -140,6 +162,18 @@ export function createIdentityStore(db: DatabaseSync, transaction: Transaction) 
     db.prepare('INSERT INTO user_sessions VALUES (?, ?, ?, ?, ?)').run(digest(token), tenantId, userId, expiresAt, new Date().toISOString());
     return { token, expiresAt };
   }
+  async function registerPersonal(input: UserInput) {
+    const { username, displayName } = personalInput(input);
+    const passwordHash = await hashPassword(input.password);
+    return transaction(() => {
+      if (db.prepare('SELECT 1 FROM organization_users WHERE username = ?').get(username)) throw httpError(409, '用户名已被注册');
+      const tenantId = personalTenant(displayName);
+      const id = randomUUID(), now = new Date().toISOString();
+      db.prepare('INSERT INTO organization_users VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)').run(id, tenantId, username, displayName, passwordHash, 'owner', now, now);
+      audit(tenantId, { id, username }, 'account.registered', id, { method: 'password' });
+      return issueSession(tenantId, id);
+    });
+  }
   async function login(tenantId: unknown, username: unknown, password: unknown) {
     if (typeof tenantId !== 'string' || typeof username !== 'string' || typeof password !== 'string' || password.length > 128 || username.length > 80 || tenantId.length > 63) throw httpError(401, '组织、用户名或密码不正确');
     const row = db.prepare('SELECT * FROM organization_users WHERE tenant_id = ? AND username = ?').get(tenantId, username.trim().toLowerCase()) as unknown as StoredUser | undefined;
@@ -150,6 +184,45 @@ export function createIdentityStore(db: DatabaseSync, transaction: Transaction) 
     const session = issueSession(tenantId, row.id);
     audit(tenantId, getUser(tenantId, row.id), 'auth.login');
     return session;
+  }
+  async function loginPersonal(username: unknown, password: unknown) {
+    const normalized = typeof username === 'string' ? username.trim().toLowerCase() : '';
+    const rows = typeof username === 'string' && username.length <= 254
+      ? db.prepare('SELECT *, tenant_id AS tenantId FROM organization_users WHERE username = ? ORDER BY tenant_id').all(normalized) as unknown as StoredUser[]
+      : [];
+    const row = rows.find(candidate => candidate.tenantId === 'default') || (rows.length === 1 ? rows[0] : undefined);
+    const valid = await verifyPassword(password, row?.password_hash);
+    const fresh = row && db.prepare('SELECT * FROM organization_users WHERE tenant_id = ? AND id = ?').get(row.tenantId, row.id) as unknown as StoredUser | undefined;
+    if (!row || !valid || !fresh?.enabled || fresh.password_hash !== row.password_hash) throw httpError(401, '用户名或密码不正确');
+    const session = issueSession(row.tenantId, row.id);
+    audit(row.tenantId, getUser(row.tenantId, row.id), 'auth.login');
+    return session;
+  }
+  function loginWithGoogle(profile: GoogleProfile) {
+    const existing = db.prepare("SELECT tenant_id AS tenantId, user_id AS userId FROM auth_identities WHERE provider = 'google' AND subject = ?")
+      .get(profile.subject) as { tenantId: string; userId: string } | undefined;
+    if (existing) {
+      const user = getUser(existing.tenantId, existing.userId);
+      if (!user?.enabled) throw httpError(401, '账号已停用');
+      const session = issueSession(existing.tenantId, existing.userId);
+      audit(existing.tenantId, user, 'auth.google_login');
+      return session;
+    }
+    const email = googleEmail(profile), displayName = profile.displayName || email;
+    return transaction(() => {
+      const concurrent = db.prepare("SELECT tenant_id AS tenantId, user_id AS userId FROM auth_identities WHERE provider = 'google' AND subject = ?")
+        .get(profile.subject) as { tenantId: string; userId: string } | undefined;
+      if (concurrent) return issueSession(concurrent.tenantId, concurrent.userId);
+      const tenantId = personalTenant(displayName);
+      const username = db.prepare('SELECT 1 FROM organization_users WHERE username = ?').get(email)
+        ? `google-${digest(profile.subject).slice(0, 24)}`
+        : email;
+      const id = randomUUID(), now = new Date().toISOString();
+      db.prepare('INSERT INTO organization_users VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)').run(id, tenantId, username, displayName, `external$${randomBytes(32).toString('hex')}`, 'owner', now, now);
+      db.prepare("INSERT INTO auth_identities VALUES ('google', ?, ?, ?, ?, ?)").run(profile.subject, tenantId, id, email, now);
+      audit(tenantId, { id, username }, 'account.registered', id, { method: 'google' });
+      return issueSession(tenantId, id);
+    });
   }
   function authenticateSession(token: unknown) {
     if (typeof token !== 'string' || token.length > 512) return null;
@@ -163,8 +236,9 @@ export function createIdentityStore(db: DatabaseSync, transaction: Transaction) 
   }
   async function changePassword(principal: Principal, input: PasswordChange) {
     const row = db.prepare('SELECT password_hash FROM organization_users WHERE tenant_id = ? AND id = ?').get(principal.tenant.id, principal.user.id) as unknown as { password_hash: string } | undefined;
-    if (typeof input.currentPassword !== 'string' || input.currentPassword.length > 128 || !await verifyPassword(input.currentPassword, row?.password_hash)) throw httpError(400, '当前密码不正确');
     if (!row) throw httpError(400, '当前密码不正确');
+    const hasPassword = row.password_hash.startsWith('scrypt$');
+    if (hasPassword && (typeof input.currentPassword !== 'string' || input.currentPassword.length > 128 || !await verifyPassword(input.currentPassword, row.password_hash))) throw httpError(400, '当前密码不正确');
     const nextHash = await hashPassword(input.password);
     transaction(() => {
       const fresh = db.prepare('SELECT password_hash, enabled FROM organization_users WHERE tenant_id = ? AND id = ?').get(principal.tenant.id, principal.user.id) as unknown as { password_hash: string; enabled: number } | undefined;
@@ -175,7 +249,7 @@ export function createIdentityStore(db: DatabaseSync, transaction: Transaction) 
     });
   }
   return {
-    hasUsers, createUser, getUser, listUsers, updateUser, resetPassword, login, authenticateSession, changePassword, audit,
+    hasUsers, createUser, getUser, listUsers, updateUser, resetPassword, registerPersonal, login, loginPersonal, loginWithGoogle, authenticateSession, changePassword, audit,
     logout: (token: string) => db.prepare('DELETE FROM user_sessions WHERE token_hash = ?').run(digest(token)),
     listAudit: (tenantId: string) => (db.prepare('SELECT id, actor_name AS actorName, action, target, detail, created_at AS createdAt FROM audit_events WHERE tenant_id = ? ORDER BY id DESC LIMIT 200').all(tenantId) as unknown as Array<{ id: number; actorName: string; action: string; target: string; detail: string; createdAt: string }>).map(row => ({ ...row, detail: JSON.parse(row.detail) as unknown }))
   };

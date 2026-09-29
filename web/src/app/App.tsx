@@ -5,7 +5,6 @@ import { RouterProvider } from 'react-router/dom';
 import { apiRequest, clearSessionToken, hasSessionToken } from '../api/client.js';
 import { AuthScreen } from '../auth/AuthScreen.js';
 import { AccountPanel } from '../account/AccountPanel.js';
-import { MembersPanel } from '../members/MembersPanel.js';
 import { WorkbenchPage } from '../workbench/WorkbenchPage.js';
 import { HistoryPage } from '../history/HistoryPage.js';
 import { AssignmentPanel, ConfigPanel } from '../settings/SettingsPanels.js';
@@ -13,12 +12,11 @@ import { TaskAuxPage } from '../tasks/TaskAuxPage.js';
 import { TaskPage, rememberTask } from '../tasks/TaskPage.js';
 import { NewTaskPage, rememberSourceSession } from '../tasks/NewTaskPage.js';
 
-interface Identity { username: string; displayName: string; role: 'owner' | 'admin' | 'operator' | 'viewer' }
+interface Identity { username: string; displayName: string; role: 'owner' | 'admin' | 'operator' | 'viewer'; hasPassword: number; hasGoogle: number }
 interface Bootstrap { tenant?: { id: string; name: string }; user?: Identity; permissions?: string[]; config?: { issueSourceConfigured?: boolean; [key: string]: unknown } }
-const roleLabel: Record<string, string> = { owner: '组织所有者', admin: '管理员', operator: '操作员', viewer: '只读成员' };
 const titles: Record<string, [string, string]> = {
   '/tasks': ['任务中心', '跨设备、跨 Agent 管理工作'], '/tasks/new': ['新建任务', '描述目标并选择 Agent'], '/inbox': ['未归属会话', '将历史会话关联到任务'], '/devices': ['设备与 Agent', '查看连接状态与可用执行目标'],
-  '/workbench': ['缺陷工作台', '同步缺陷并直接生成 Agent 任务'], '/history': ['Agent 历史会话', '查看本地 Agent 工作记录'], '/settings': ['设置', '管理工作台和组织偏好']
+  '/workbench': ['缺陷工作台', '同步缺陷并直接生成 Agent 任务'], '/history': ['Agent 历史会话', '查看本地 Agent 工作记录'], '/settings': ['设置', '管理工作台和账号偏好']
 };
 
 function pathForHash(hash: string) {
@@ -27,8 +25,9 @@ function pathForHash(hash: string) {
   if (['tasks', 'inbox', 'devices', 'workbench', 'history'].includes(value)) return `/${value}`;
   if (/^history\/[a-f0-9]{64}$/.test(value)) return `/${value}`;
   if (value === 'settings') return '/settings/assignment';
-  if (/^settings\/(assignment|config|members|account)$/.test(value)) return `/${value}`;
-  if (['assignment', 'config', 'members', 'account'].includes(value)) return `/settings/${value}`;
+  if (/^settings\/(assignment|config|account)$/.test(value)) return `/${value}`;
+  if (value === 'settings/members' || value === 'members') return '/settings/account';
+  if (['assignment', 'config', 'account'].includes(value)) return `/settings/${value}`;
   return null;
 }
 
@@ -42,12 +41,12 @@ function RouteRefresh({ children }: { children: React.ReactNode }) {
 
 function SettingsPage() {
   const { section } = useParams();
-  const current = ['assignment', 'config', 'members', 'account'].includes(section || '') ? section : 'assignment';
+  const current = ['assignment', 'config', 'account'].includes(section || '') ? section : section === 'members' ? 'account' : 'assignment';
   const items = [
     ['assignment', '⌁', '分配规则', '人员与职责'], ['config', '⇄', '对接配置', '数据源与执行'],
-    ['members', '♙', '组织成员', '角色与权限'], ['account', '○', '我的账号', '登录与安全']
+    ['account', '○', '我的账号', '登录与安全']
   ];
-  return <section className="page settings-page"><header className="page-heading settings-heading"><div><h1>设置</h1><p>管理分配策略、外部服务、组织成员与个人账号</p></div></header><div className="settings-layout"><nav className="settings-nav" aria-label="设置导航">{items.map(([id, icon, title, subtitle]) => <Link key={id} to={`/settings/${id}`} className={current === id ? 'active' : ''} aria-current={current === id ? 'page' : undefined}><span aria-hidden="true">{icon}</span><span><strong>{title}</strong><small>{subtitle}</small></span></Link>)}</nav><div className="settings-content"><div className="settings-panel">{current === 'assignment' ? <AssignmentPanel /> : current === 'config' ? <ConfigPanel /> : current === 'members' ? <MembersPanel /> : <AccountPanel />}</div></div></div></section>;
+  return <section className="page settings-page"><header className="page-heading settings-heading"><div><h1>设置</h1><p>管理分配策略、外部服务与个人账号</p></div></header><div className="settings-layout"><nav className="settings-nav" aria-label="设置导航">{items.map(([id, icon, title, subtitle]) => <Link key={id} to={`/settings/${id}`} className={current === id ? 'active' : ''} aria-current={current === id ? 'page' : undefined}><span aria-hidden="true">{icon}</span><span><strong>{title}</strong><small>{subtitle}</small></span></Link>)}</nav><div className="settings-content"><div className="settings-panel">{current === 'assignment' ? <AssignmentPanel /> : current === 'config' ? <ConfigPanel /> : <AccountPanel />}</div></div></div></section>;
 }
 
 function Shell() {
@@ -95,8 +94,8 @@ function Shell() {
     clearSessionToken(); window.location.assign('/tasks');
   }
   return <div className="app-shell" id="workspaceShell"><aside className="sidebar"><div className="brand"><svg className="brand-mark" viewBox="0 0 36 36" aria-hidden="true"><rect x="4" y="5" width="28" height="26" rx="6" /><path d="M11 14h18M11 21h10M24 20l4 4-4 4" /></svg><div><strong>BugFlow</strong><span>多设备 Agent 工作台</span></div></div>
-    <nav className="nav-list" aria-label="主导航"><Link className={`nav-create-task ${view === 'new-task' ? 'active' : ''}`} to="/tasks/new"><span className="nav-icon" aria-hidden="true">＋</span><span>新建任务</span></Link><Link className={['tasks', 'inbox', 'devices'].includes(view) ? 'active' : ''} to="/tasks"><span className="nav-icon" aria-hidden="true">▣</span><span>任务中心</span></Link><Link className={view === 'workbench' ? 'active' : ''} to="/workbench"><span className="nav-icon" aria-hidden="true">◇</span><span>缺陷工作台</span></Link><Link className={view === 'history' ? 'active' : ''} to="/history"><span className="nav-icon" aria-hidden="true">◷</span><span>Agent 历史会话</span></Link></nav>
-    <Link className={`settings-link ${view === 'settings' ? 'active' : ''}`} to="/settings/assignment"><span className="nav-icon" aria-hidden="true">⚙</span><span>设置</span></Link><div className="sidebar-note"><span className={`status-dot ${bootstrap.config?.issueSourceConfigured ? 'online' : ''}`} /><span>{bootstrap.config?.issueSourceConfigured ? '数据源已连接' : '数据源未配置'}</span></div><div className="tenant-panel"><span>当前团队</span><strong>{bootstrap.tenant?.name || ''} ({bootstrap.tenant?.id || ''})</strong><span>{bootstrap.user?.displayName || ''} · {roleLabel[bootstrap.user?.role || ''] || ''}</span><button className="button secondary" type="button" onClick={() => void logout()}>退出 / 切换团队</button></div></aside>
+    <nav className="nav-list" aria-label="主导航"><Link className={`nav-create-task ${view === 'new-task' ? 'active' : ''}`} to="/tasks/new"><span className="nav-icon" aria-hidden="true">＋</span><span>新建任务</span></Link><Link className={['tasks', 'inbox'].includes(view) ? 'active' : ''} to="/tasks"><span className="nav-icon" aria-hidden="true">▣</span><span>任务中心</span></Link><Link className={view === 'workbench' ? 'active' : ''} to="/workbench"><span className="nav-icon" aria-hidden="true">◇</span><span>缺陷工作台</span></Link><Link className={view === 'history' ? 'active' : ''} to="/history"><span className="nav-icon" aria-hidden="true">◷</span><span>Agent 历史会话</span></Link><Link className={view === 'devices' ? 'active' : ''} aria-current={view === 'devices' ? 'page' : undefined} to="/devices"><span className="nav-icon" aria-hidden="true">▤</span><span>设备与 Agent</span></Link></nav>
+    <Link className={`settings-link ${view === 'settings' ? 'active' : ''}`} to="/settings/assignment"><span className="nav-icon" aria-hidden="true">⚙</span><span>设置</span></Link><div className="sidebar-note"><span className={`status-dot ${bootstrap.config?.issueSourceConfigured ? 'online' : ''}`} /><span>{bootstrap.config?.issueSourceConfigured ? '数据源已连接' : '数据源未配置'}</span></div><div className="tenant-panel"><span>当前账号</span><strong>{bootstrap.user?.displayName || ''}</strong><span>{bootstrap.user?.username || ''}</span><button className="button secondary" type="button" onClick={() => void logout()}>退出登录</button></div></aside>
     <main className="main"><header className="topbar"><div><p className="eyebrow">{title[1]}</p><h1>{title[0]}</h1></div><div className="top-actions" id="workbenchActions" /></header><Outlet /></main></div>;
 }
 

@@ -1,0 +1,5 @@
+.guide { display: grid; gap: 12px; min-width: 0; }
+.guide label { display: grid; gap: 6px; }
+.guide input:not([type='checkbox']) { width: 100%; min-width: 0; box-sizing: border-box; }
+.guide ol { padding-left: 24px; line-height: 1.8; }
+.config { width: 100%; box-sizing: border-box; font-family: monospace; font-size: 12px; white-space: pre; overflow: auto; }

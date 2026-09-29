@@ -1,6 +1,6 @@
 # Agent 任务工作台
 
-面向研发团队的缺陷与 Agent 任务工作台：从 Jira 同步问题、生成分配建议，把缺陷转换成可维护的任务上下文，再交给本机或远端的 Codex、Claude Code 等 ACP Agent 执行。
+面向个人研发工作的缺陷与 Agent 任务工作台：从 Jira 同步问题、生成分配建议，把缺陷转换成可维护的任务上下文，再交给本机或远端的 Codex、Claude Code 等 ACP Agent 执行。
 
 > 当前版本不再使用“执行流水线”。缺陷会直接生成任务中心任务，不会创建中间流水线、节点或任务包。
 
@@ -11,11 +11,11 @@
 - **任务中心**：维护目标、约束、结论、下一步、文件与版本；同一缺陷只生成一个任务。
 - **Agent 执行**：从任务直接启动 ACP Agent，处理确认与提问，停止或核对执行状态。
 - **会话交付**：汇总 Codex、Claude Code 的本地或远端会话，支持接续、分支和引用。
-- **团队协作**：提供组织、成员、角色、审计和多租户数据隔离。
+- **个人账号**：支持用户名和密码注册、登录，也可使用 Google 账号登录。
 
 ## 系统架构
 
-工作台采用单个 Node.js HTTP 服务，统一提供 React 静态资源与业务 API；每个租户独立创建业务运行时，远端设备通过连接器访问同一组受认证保护的接口。
+工作台采用单个 Node.js HTTP 服务，统一提供 React 静态资源与业务 API；个人账号的数据由服务端隔离保存，远端设备通过连接器访问同一组受认证保护的接口。
 
 ```mermaid
 flowchart TB
@@ -23,7 +23,7 @@ flowchart TB
 
   subgraph Workbench["工作台服务 · Node.js + TypeScript"]
     HTTP["server.ts · 原生 HTTP 入口<br/>静态资源 / 登录认证 / RBAC / 审计"]
-    Runtime["tenantRuntime.ts<br/>租户配置、工作目录隔离与业务路由"]
+    Runtime["tenantRuntime.ts<br/>个人配置、工作目录与业务路由"]
     Issues["缺陷同步与智能分配<br/>issueSources / assignmentEngine"]
     Tasks["任务中心<br/>taskCenter"]
     Sessions["历史会话与上下文交接<br/>agentHistory / sessionDelivery / conversations"]
@@ -52,13 +52,13 @@ flowchart TB
     Connector --> RemoteAgent
   end
 
-  DB[("SQLite<br/>租户 / 成员 / 缺陷 / 任务 / 执行 / 上下文与传输对象")]
+  DB[("SQLite<br/>账号 / 缺陷 / 任务 / 执行 / 上下文与传输对象")]
   Files["工作台本地文件<br/>Agent 历史 / 上下文 Markdown / 图片与附件"]
   Jira["Jira"]
   AI["模型 API<br/>分配建议 / 可选上下文归纳"]
 
   Web <-->|HTTP API 与静态资源| HTTP
-  Runtime -->|租户范围内读写| DB
+  Runtime -->|账号数据读写| DB
   Issues <-->|同步 / 分配| Jira
   Issues --> AI
   Sessions --> AI
@@ -72,7 +72,7 @@ flowchart TB
 ```
 
 - **前后端边界**：`web/src/` 经 Vite 构建到 `public/build/`，由 HTTP 入口提供；`shared/` 只存放前后端共享类型与纯业务函数。
-- **权限与数据边界**：HTTP 入口统一认证和检查角色权限；租户运行时及数据访问层限定租户范围，设备交接进一步校验连接器账号、设备和执行归属。
+- **账号与数据边界**：HTTP 入口统一认证；数据访问层限定个人账号范围，设备交接进一步校验连接器账号、设备和执行归属。
 - **执行与交接边界**：任务归属、执行调度和未知结果核对由工作台及执行器负责。共享上下文包负责来源适配、快照和数据包校验；Markdown 呈现、HTTP 传输与 Agent 启停仍由宿主模块完成。
 - **跨设备数据流**：来源设备冻结记录，经工作台传递 v3 清单与原始图片对象，目标设备校验并生成上下文文件后执行。代码仓库和普通附件文件需另行准备，连接器默认只同步，启用执行需设置 `WORKBENCH_EXECUTE_CODEX=true`。
 
@@ -118,20 +118,11 @@ pnpm dev
 
 默认监听 [http://127.0.0.1:4173](http://127.0.0.1:4173)。端口被占用时，启动脚本会先结束占用 `4173` 端口的旧进程。
 
-### 2. 初始化组织所有者
+### 2. 注册个人账号
 
-首次启动会自动创建 ID 为 `default` 的组织。打开登录页，展开“首次使用？初始化组织所有者”，使用初始化令牌创建首位所有者。
+打开登录页，选择“首次使用？注册个人账号”，填写用户名、显示名称和密码即可进入。注册入口始终开放，每个账号拥有独立的数据和设置；登录时只需用户名和密码，不需要组织 ID 或初始化令牌。
 
-令牌来源：
-
-- `.env` 中设置了 `DEFAULT_TENANT_TOKEN`：使用该值；
-- 未设置：服务启动后从 `.workflow-data/default-token` 读取自动生成的令牌。
-
-```bash
-cat .workflow-data/default-token
-```
-
-初始化完成后，所有成员都使用各自的用户名和密码登录，初始化令牌不能再次用于登录。
+也可以配置 Google 单点登录。用户首次通过 Google 登录时自动创建独立的个人账号，之后由 Google 身份直接识别并登录。
 
 ### 3. 配置 Jira
 
@@ -152,7 +143,7 @@ CODEX_WORKSPACE_DIR=/absolute/path/to/your/repository
 
 ## 配置说明
 
-完整示例见 [`.env.example`](./.env.example)。根目录 `.env` 是默认组织的配置，修改环境文件后需要重启服务。
+完整示例见 [`.env.example`](./.env.example)。根目录 `.env` 是工作台配置，修改环境文件后需要重启服务。
 
 ### 服务与存储
 
@@ -161,11 +152,21 @@ CODEX_WORKSPACE_DIR=/absolute/path/to/your/repository
 | `HOST` | `127.0.0.1` | HTTP 监听地址 |
 | `PORT` | `4173` | HTTP 监听端口 |
 | `DATABASE_PATH` | `.workflow-data/workflow.sqlite` | SQLite 数据库路径 |
-| `TENANT_ENV_DIR` | `.workflow-data/tenants` | 各组织独立环境文件目录 |
-| `DEFAULT_TENANT_TOKEN` | 自动生成 | 默认组织的首次初始化令牌，至少 32 个字符 |
 | `CODEX_WORKSPACE_DIR` | 项目根目录 | 默认 Agent 工作目录 |
 
 如需通过局域网或反向代理访问，可设置 `HOST=0.0.0.0`。请在可信网络中部署，并在对外开放时配置 HTTPS、访问控制和备份策略。
+
+### Google 单点登录
+
+在 Google Cloud 控制台创建“Web 应用”OAuth 客户端，并将工作台回调地址加入授权重定向 URI。回调地址必须完全匹配，包括协议、主机、端口和路径：
+
+```dotenv
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-client-secret
+GOOGLE_REDIRECT_URI=https://workbench.example.com/api/auth/google/callback
+```
+
+本机默认可使用 `http://localhost:4173/api/auth/google/callback`。公网部署应使用 HTTPS。服务端只请求 `openid email profile`，Google 客户端密钥和访问令牌不会发送到浏览器。通过 Google 单点登录注册的账号可以在“设置 → 我的账号”中补充密码，供设备连接器登录。
 
 ### Jira
 
@@ -221,25 +222,45 @@ IDE_HISTORY_CLAUDE_DIR=
 IDE_HISTORY_SCOPE=all
 ```
 
-`IDE_HISTORY_SCOPE=workspace` 时，只显示 `CODEX_WORKSPACE_DIR` 及其子目录中的记录。原始记录只作为参考，不能作为新的系统指令直接执行；符合条件的本机 Codex 历史会话可从网页继续，其他历史数据保持只读。
+`IDE_HISTORY_SCOPE=workspace` 时，只显示 `CODEX_WORKSPACE_DIR` 及其子目录中的记录。原始记录只作为参考，不能作为新的系统指令直接执行；符合条件的本机 Codex 历史会话可从网页继续，受支持的远端 Codex 项目历史也可通过连接器继续，其他历史数据保持只读。
 
 ## 多设备执行
+
+### 从网页连接开发机并远程控制
+
+在浏览器点击左侧主导航“设备与 Agent”（`/devices`，任务中心内也有同名标签），使用“连接本机 Agent”向导填写服务地址、设备名和开发机项目路径，复制连接配置。在开发机准备好本项目与依赖，将配置保存为项目根目录的 `.env.device`，在本机填写账号密码后运行：
+
+```bash
+chmod 600 .env.device
+pnpm device:connect
+```
+
+`device:connect` 使用 Node 的 `--env-file=.env.device` 加载配置；已有进程环境变量优先。配置文件已被 Git 忽略，网页生成器不会导出浏览器令牌，也不会保存账号密码。需要 Node.js 22.16+；Windows 可使用文件权限设置限制配置文件访问。连接器仍以前台进程运行，需要保持终端或通过你自己的进程管理器运行；本次没有安装系统常驻服务。
+
+向导默认启用远程执行，并仅同步所选工作目录内的历史元数据。设备卡片区分在线/离线、仅同步/可执行和原会话续聊能力。“新建远端任务”会预选该设备；网页可查看输出、回应审批与提问、停止执行或核对未知结果。恢复本机原有 Codex 历史时，在历史会话页面打开该设备的会话直接发送消息；当前仅允许连接器公布的 Codex 项目目录，已归档会话不能续聊。工作台创建的 ACP 会话仍通过既有会话恢复协议继续。
+
+网络链路为 `浏览器 → 工作台服务 ← 开发机连接器 → 本机 Agent`。开发机主动发起 HTTP 请求，无需开放入站端口；浏览器与开发机都必须能访问工作台服务。`localhost` 只代表各自所在机器，跨设备时须填写可达的工作台地址。对外部署使用 HTTPS 反向代理；本版本沿用约 3 秒一次的执行同步与网页轮询，并非 Happy 的 WebSocket 或端到端加密实现。服务端会保存执行消息和输出，需部署在可信环境中。
+
+原会话续聊通过目标设备的 `thread/resume` 和 `turn/start` 执行，服务端不会代为启动本地 Agent。相同发送标识只创建一次执行；连接器启动前重新核对本机历史与工作目录。遇到原会话占用或恢复失败时明确报错，不创建替代会话。设备离线时新消息排队，队列中的执行可取消；进程中断或结果未知时不会自动重发。审批、停止和核对操作先记录本地回执再执行，异常退出后不重复提交已接收的操作。
+
+连接器状态目录会绑定工作台地址和账号；切换账号或服务地址必须设置独立的 `WORKBENCH_DEVICE_DIR`，避免把旧执行日志发送到错误的工作台。旧状态目录第一次升级运行时绑定当前身份。登录会话过期后连接器停止；重新登录启动即可，日志保留以便核对。正常退出会关闭 Agent 连接并保存未结束执行的待核对状态。
+
+### 使用环境变量接入
 
 在另一台设备上运行连接器，可将其 Agent 和历史会话注册到工作台：
 
 ```bash
 WORKBENCH_URL=https://workbench.example.com \
-WORKBENCH_TOKEN='<成员登录会话令牌>' \
+WORKBENCH_TOKEN='<登录会话令牌>' \
 WORKBENCH_DEVICE_NAME='开发机 MacBook' \
 CODEX_WORKSPACE_DIR=/absolute/path/to/repository \
 pnpm device:sync
 ```
 
-也可以让连接器使用成员账号登录：
+也可以让连接器使用个人账号登录：
 
 ```bash
 WORKBENCH_URL=https://workbench.example.com \
-WORKBENCH_TENANT=default \
 WORKBENCH_USERNAME=developer \
 WORKBENCH_PASSWORD='<password>' \
 pnpm device:sync
@@ -268,9 +289,9 @@ pnpm device:sync
 
 来源任务仍在工作台执行时，新会话会等待本轮结束再自动读取最终记录；执行结果未知时先核对，不自动重复发送。该等待机制只跟踪工作台管理的执行，外部客户端正在运行的会话应先结束当前轮次。ACP 连续聊天复用连接，重连时仅在 Agent 支持 `session/load` 时恢复；不支持恢复会明确报错，不偷偷改为另一个原生会话。
 
-同设备远端交接仍在连接器本地冻结来源记录并生成自包含 MD，不要求 `WORKBENCH_SYNC_EXCERPTS`。跨设备 A→B 时，A 的连接器冻结完整原始记录，经当前租户的工作台传送带校验摘要的快照；B 的连接器仅在快照就绪后领取执行，在用户选定的 B 工作目录生成自包含 MD 和原始图片输入，再启动 Agent。工作台所在设备也可以是来源或目标。图片字节会经过工作台，不缩放或重新编码；旧版单次快照传输请求上限为 85 MB，新版按独立对象传输。上传和下载按设备连接器账号及目标执行归属校验，交接失败不会用同步摘要代替，也不会在启动结果未知时自动重试。再次从已交接会话切换时复用已保存的完整快照。代码、普通附件和原 Agent 的隐藏状态不会复制。旧的手工交接记录与原会话续聊功能保留。
+同设备远端交接仍在连接器本地冻结来源记录并生成自包含 MD，不要求 `WORKBENCH_SYNC_EXCERPTS`。跨设备 A→B 时，A 的连接器冻结完整原始记录，经工作台传送带校验摘要的快照；B 的连接器仅在快照就绪后领取执行，在用户选定的 B 工作目录生成自包含 MD 和原始图片输入，再启动 Agent。工作台所在设备也可以是来源或目标。图片字节会经过工作台，不缩放或重新编码；旧版单次快照传输请求上限为 85 MB，新版按独立对象传输。上传和下载按设备连接器账号及目标执行归属校验，交接失败不会用同步摘要代替，也不会在启动结果未知时自动重试。再次从已交接会话切换时复用已保存的完整快照。代码、普通附件和原 Agent 的隐藏状态不会复制。旧的手工交接记录与原会话续聊功能保留。
 
-会话提取、快照校验与打包已抽为 `packages/context-engine/` 工作区包，Codex/Claude 历史、Markdown 和问题记录来源位于 `packages/context-adapters/`。新版连接器使用 v3 清单和独立图片对象交接，图片按原始字节上传、按 SHA-256 去重并在目标设备还原；旧连接器仍可读取 v1 快照或 v2 包。来源连接器会先将每次跨设备执行的完整快照冻结在 `WORKBENCH_DEVICE_DIR/executions/context/`，断线或重启后复用同一份记录；文件损坏或交接身份变化会明确失败。重试时会查询该执行缺失的对象，只补传缺失部分。服务端按租户、执行、来源设备和目标设备隔离对象，并保存不可覆盖的传输摘要。单张图片上限 12 MiB，单次图片总量上限 50 MiB；单个对象内部仍按整件重试，分片续传、普通附件文件和代码改动交付尚未接入。
+会话提取、快照校验与打包已抽为 `packages/context-engine/` 工作区包，Codex/Claude 历史、Markdown 和问题记录来源位于 `packages/context-adapters/`。新版连接器使用 v3 清单和独立图片对象交接，图片按原始字节上传、按 SHA-256 去重并在目标设备还原；旧连接器仍可读取 v1 快照或 v2 包。来源连接器会先将每次跨设备执行的完整快照冻结在 `WORKBENCH_DEVICE_DIR/executions/context/`，断线或重启后复用同一份记录；文件损坏或交接身份变化会明确失败。重试时会查询该执行缺失的对象，只补传缺失部分。服务端按账号空间、执行、来源设备和目标设备隔离对象，并保存不可覆盖的传输摘要。单张图片上限 12 MiB，单次图片总量上限 50 MiB；单个对象内部仍按整件重试，分片续传、普通附件文件和代码改动交付尚未接入。
 
 本地 Markdown 文件或已冻结的 v1 快照可独立打成 v3 目录包，复制到另一台机器后校验、导入：
 
@@ -295,45 +316,13 @@ pnpm context:bundle -- import-snapshot /absolute/output/handoff-1 /absolute/impo
 
 网页显示本轮回复和状态，支持停止、处理审批或问题、核对未知结果，并可刷新原始记录。每次 Codex 执行使用独立 App Server 连接；完成、失败或停止后退订并关闭该执行的进程。重复提交同一个发送标识不会重复执行；会话忙碌或恢复失败时不会回退新建。未归属的会话首次续聊会自动创建关联任务，已有任务归属继续保留。
 
-此入口支持工作台所在设备的 Codex 历史；Claude Code、远端片段暂不支持原会话恢复。已归档会话需先在客户端取消归档。恢复遇到写入占用时，服务会尝试通过本地客户端 IPC 发现拥有端并转发本轮消息（实验性内部协议，当前支持 macOS/Linux 的安全 Unix socket）。发现失败则保留未发送状态；提交后结果不确定时不自动重发，也不回退到另一执行通道。客户端桥接的审批和问题在客户端处理，网页读取本轮持久输出并以明确结束事件确认完成。“网页连接已释放”只表示工作台连接清理完毕，不会释放客户端持有的原会话。
+此入口支持工作台所在设备的 Codex 历史，以及已升级并启用执行的远端连接器公布的 Codex 项目历史；远端历史区仍仅展示同步片段，本轮消息与输出通过执行记录显示。外部 Claude Code 历史暂不支持原会话恢复。已归档会话需先在客户端取消归档。恢复遇到写入占用时，服务会尝试通过本地客户端 IPC 发现拥有端并转发本轮消息（实验性内部协议，当前支持 macOS/Linux 的安全 Unix socket）。发现失败则保留未发送状态；提交后结果不确定时不自动重发，也不回退到另一执行通道。客户端桥接的审批和问题在客户端处理，网页读取本轮持久输出并以明确结束事件确认完成。“网页连接已释放”只表示工作台连接清理完毕，不会释放客户端持有的原会话。
 
 真实执行器已经验证拥有端转发、回复读取、完成确认及网页连接释放；尚未完成浏览器点击与客户端界面同步的端到端验收。内部 IPC 协议可能随版本变化，详见[接入验证记录](docs/desktop-continuation-validation.md)。
 
-## 多租户管理
-
-使用内置命令管理组织：
-
-```bash
-pnpm tenant -- list
-pnpm tenant -- add <组织ID> [组织名称]
-pnpm tenant -- users <组织ID>
-pnpm tenant -- reset-password <组织ID> <用户名>
-pnpm tenant -- rotate <组织ID>
-pnpm tenant -- migrate [组织ID]
-```
-
-新增组织后，将该组织的 Jira、Agent 和历史目录等配置写入：
-
-```text
-.workflow-data/tenants/<组织ID>.env
-```
-
-每个组织必须使用独立且互不嵌套的 `CODEX_WORKSPACE_DIR`。组织环境文件只接受 Jira、Issue Source、Agent、AI 和历史会话等受控变量，不会继承其他组织的凭据。
-
-## 角色与权限
-
-| 角色 | 查看数据 | 同步 / 分配 / 执行任务 | 配置与分配规则 | 成员管理 |
-| --- | --- | --- | --- | --- |
-| 组织所有者 | ✓ | ✓ | ✓ | 全部角色 |
-| 管理员 | ✓ | ✓ | ✓ | 操作员、只读成员 |
-| 操作员 | ✓ | ✓ | — | — |
-| 只读成员 | ✓ | — | — | — |
-
-停用成员或重置密码会撤销该成员的现有登录会话。组织所有者和管理员可以查看审计记录。
-
 ## 会话接口
 
-所有接口都需要成员登录会话：
+所有接口都需要个人账号登录会话：
 
 | 接口 | 说明 |
 | --- | --- |
@@ -390,7 +379,7 @@ shared/       前后端共享类型、任务内容和分配模型配置
 public/       HTML 与基础样式；build/ 为 Vite 生成产物
 src/          服务端领域逻辑与集成；http/ 为 HTTP 基础处理
 packages/     context-engine 核心引擎与 context-adapters 数据源适配器
-scripts/      租户管理、多设备连接器等命令
+scripts/      多设备连接器与本地运维命令
 migrations/   SQLite 数据库迁移
 test/         Node.js 测试
 ```
@@ -400,3 +389,21 @@ test/         Node.js 测试
 ## License
 
 [MIT](./LICENSE)
+
+### SSH 服务器部署与维护
+
+工作台可以在 Linux 服务器上通过 systemd 运行，由 Nginx 提供 HTTPS；开发机连接器继续在开发机运行。生产进程直接执行 `node --import tsx --import ./src/issueSources/preload.ts server.ts`，不使用会构建资源并清理端口的 `pnpm start` 前置脚本。部署前使用与开发环境一致的 pnpm 版本安装锁定依赖并运行 `pnpm build`。
+
+当前部署目录约定：应用 `/opt/auto-workflow/current`，环境配置 `/etc/auto-workflow/auto-workflow.env`，数据库位于 `/var/lib/auto-workflow/`；发布目录的 `.workflow-data` 链接到 `/var/lib/auto-workflow/runtime`，后续更新需保留此链接。新服务器使用独立数据库，首次使用需注册个人账号，不会自动复制开发机账号、会话或配置。
+
+```bash
+# 在服务器上执行
+systemctl status auto-workflow nginx
+journalctl -u auto-workflow -n 100 --no-pager
+systemctl restart auto-workflow
+systemctl list-timers auto-workflow-cert-renew.timer
+```
+
+服务只监听 `127.0.0.1:4173`，公网开放 Nginx 的 80/443；80 用于证书验证和跳转 HTTPS。IP 地址证书有效期短，`auto-workflow-cert-renew.timer` 每天检查两次并在续期后重载 Nginx。备份时包含数据库、环境配置与 runtime 目录，SQLite 备份需使用一致性备份或停服备份，不能只复制正在写入的主数据库文件。
+
+开发机从本地服务切换到云端时，设置 `WORKBENCH_URL` 为新的 HTTPS 地址，使用云端个人账号，并给 `WORKBENCH_DEVICE_DIR` 指定新目录（例如 `.workflow-data/device-cloud`）。原状态目录绑定旧服务，不能直接复用。连接器保持运行后，在手机浏览器的“设备与 Agent”页面选择该设备新建远端任务。

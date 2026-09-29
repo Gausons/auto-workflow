@@ -8,7 +8,7 @@ import { HistoryComposer } from './HistoryComposer.js';
 const id = 'a'.repeat(64);
 const session = { id, sessionId: id, agent: 'codex', deviceId: 'local', title: '测试会话', cwd: '/repo', updatedAt: '2026-09-27T00:00:00Z' } satisfies Session;
 
-function setup(status: unknown = { execution: null, executions: [] }, failSend = false, projects: unknown[] = []) {
+function setup(status: unknown = { execution: null, executions: [] }, failSend = false, projects: unknown[] = [], selectedSession: Session = session) {
   const writes: Array<{ path: string; body: Record<string, unknown> }> = [];
   let failures = failSend ? 1 : 0;
   const fetchMock = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
@@ -23,12 +23,24 @@ function setup(status: unknown = { execution: null, executions: [] }, failSend =
   vi.stubGlobal('fetch', fetchMock);
   vi.stubGlobal('crypto', { randomUUID: () => 'request-1' });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  render(<QueryClientProvider client={client}><HistoryComposer session={session} historyMessages={[]} canEdit syncHistory={async () => []} /></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><HistoryComposer session={selectedSession} historyMessages={[]} canEdit syncHistory={async () => []} /></QueryClientProvider>);
   return writes;
 }
 
 describe('HistoryComposer', () => {
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+  it('sends to an enabled remote original session without a local desktop link', async () => {
+    const remote = { ...session, id: 'b'.repeat(64), deviceId: 'remote', canContinue: true };
+    const writes = setup(undefined, false, [], remote);
+    const user = userEvent.setup();
+    expect(screen.queryByRole('link', { name: /在 Codex 中打开/ })).toBeNull();
+    await user.type(screen.getByRole('textbox', { name: '发送消息' }), '继续远端工作');
+    await user.click(screen.getByRole('button', { name: '发送消息' }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]?.path).toBe(`/api/agent-sessions/${remote.id}/continue`);
+    expect(writes[0]?.body.message).toBe('继续远端工作');
+  });
 
   it('retains the draft and requestId when an uncertain send is retried', async () => {
     const writes = setup(undefined, true);
