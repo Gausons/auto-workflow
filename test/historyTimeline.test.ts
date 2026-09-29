@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pendingHistoryMessages } from '../public/historyTimeline.js';
+import { pendingHistoryMessages } from '../web/src/history/historyTimeline.js';
 
 const job = { id: 'job-1', turnId: 'turn-1', prompt: '查金价', output: '金价回复', status: 'completed', createdAt: '2026-09-20T01:00:00Z' };
 const saved = [{ role: 'user', text: job.prompt, turnId: job.turnId }, { role: 'assistant', text: job.output, turnId: job.turnId }];

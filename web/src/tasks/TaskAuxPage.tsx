@@ -1,8 +1,8 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
-import { renderMessages } from '../../../public/historyView.js';
-import type { HistoryMessage, Session, Task, TaskCenterData } from '../../../public/taskTypes.js';
+import { renderMessages } from '../components/historyView.js';
+import type { HistoryMessage, Session, Task, TaskCenterData } from '../../../shared/taskTypes.js';
 
 type Route = 'inbox' | 'devices' | null;
 interface SessionPage { messages: HistoryMessage[]; total: number; session?: { partial?: boolean } }

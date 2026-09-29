@@ -6,7 +6,7 @@ import { normalizeIssueState } from './issueStore.js';
 import { createIdentityStore } from './identity.js';
 import type { IssueState } from './issueStore.js';
 import type { WorkIssue } from './issueSources/types.js';
-import type { TaskCenterData } from '../public/taskTypes.js';
+import type { TaskCenterData } from '../shared/taskTypes.js';
 import type { SessionContext } from './contextCompiler.js';
 import { packSnapshot, verifySnapshot, type ContextBundle } from '@auto-workflow/context-engine';
 import { verifyDetachedManifest, type DetachedManifest } from '@auto-workflow/context-engine/detached-bundle';

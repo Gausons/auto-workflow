@@ -1,4 +1,4 @@
-import type { AgentProject } from './taskTypes.js';
+import type { AgentProject } from '../../../shared/taskTypes.js';
 
 export interface AgentRunConfig {
   projects: AgentProject[];

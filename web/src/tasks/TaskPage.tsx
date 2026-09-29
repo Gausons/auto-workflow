@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
-import { renderMarkdown } from '../../../public/historyView.js';
-import { taskActivity, taskTimeline } from '../../../public/taskTimeline.js';
-import { taskContent } from '../../../public/taskContent.js';
-import type { AgentProject, Execution, Handoff, Session, Task, TaskCenterData } from '../../../public/taskTypes.js';
+import { renderMarkdown } from '../components/historyView.js';
+import { taskActivity, taskTimeline } from './taskTimeline.js';
+import { taskContent } from '../../../shared/taskContent.js';
+import type { AgentProject, Execution, Handoff, Session, Task, TaskCenterData } from '../../../shared/taskTypes.js';
 import { SessionRecords } from './TaskAuxPage.js';
 import overlayStyles from '../styles/Overlay.module.css';
 

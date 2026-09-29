@@ -2,10 +2,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../api/client.js';
-import { pendingHistoryMessages } from '../../../public/historyTimeline.js';
-import { renderMessages } from '../../../public/historyView.js';
-import { historyRunConfig, runDirectoryName } from '../../../public/agentRunConfig.js';
-import type { AgentProject, HistoryMessage, InteractionRequest, Session } from '../../../public/taskTypes.js';
+import { pendingHistoryMessages } from './historyTimeline.js';
+import { renderMessages } from '../components/historyView.js';
+import { historyRunConfig, runDirectoryName } from '../tasks/agentRunConfig.js';
+import type { AgentProject, HistoryMessage, InteractionRequest, Session } from '../../../shared/taskTypes.js';
 import { ModelEffortMenu } from '../tasks/ModelEffortMenu.js';
 import overlayStyles from '../styles/Overlay.module.css';
 

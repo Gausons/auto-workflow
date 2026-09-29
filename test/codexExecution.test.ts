@@ -9,7 +9,7 @@ import path from 'node:path';
 import { CodexRunner, createCodexExecution, executionPrompt } from '../src/codexExecution.js';
 import { createTaskCenter } from '../src/taskCenter.js';
 import { openDatabase } from '../src/database.js';
-import type { Actor, Session } from '../public/taskTypes.js';
+import type { Actor, Session } from '../shared/taskTypes.js';
 
 interface CallParams {
   threadId?: string; ephemeral?: boolean; projectId?: string; approvalPolicy?: unknown; model?: string;

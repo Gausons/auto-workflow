@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { taskContent } from '../public/taskContent.js';
+import { taskContent } from '../shared/taskContent.js';
 import { gitBranches, switchGitBranch, decodeAttachments, saveAttachments } from './taskWorkspace.js';
 import { readFile, realpath, stat, rm } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
@@ -9,7 +9,7 @@ import { AcpPreferredRunner, AcpTaskRunner, AgentRunnerSet, configuredAcpAgents 
 import { httpError } from './rbac.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { AgentModel, AgentProject, Execution, ExecutionStatus, InteractionRequest, Task, TaskCenterData, TaskStatus } from '../public/taskTypes.js';
+import type { AgentModel, AgentProject, Execution, ExecutionStatus, InteractionRequest, Task, TaskCenterData, TaskStatus } from '../shared/taskTypes.js';
 
 type ErrorLike = Error & { code?: string | number; stderr?: string };
 type ExecutionRecord = Execution & {
@@ -57,7 +57,7 @@ interface ExecutionRunner {
   close(): void;
 }
 interface HistoryService {
-  detail(id: string, query: URLSearchParams): Promise<{ session: import('../public/taskTypes.js').Session }>;
+  detail(id: string, query: URLSearchParams): Promise<{ session: import('../shared/taskTypes.js').Session }>;
   resolveSource(id: string): Promise<unknown>;
 }
 interface Actor { id?: string }

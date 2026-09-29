@@ -9,7 +9,7 @@ import { openDatabase } from '../src/database.js';
 import { createTaskCenter } from '../src/taskCenter.js';
 import { syncDeviceOnce } from '../scripts/device-sync.js';
 import { createApp } from '../server.js';
-import type { Actor, Task, TaskCenterData } from '../public/taskTypes.js';
+import type { Actor, Task, TaskCenterData } from '../shared/taskTypes.js';
 import type { HistorySession } from '../src/agentHistory/types.js';
 
 const actor: Actor = { id: 'owner' };

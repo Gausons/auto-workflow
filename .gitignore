@@ -16,11 +16,11 @@
 !/pnpm-workspace.yaml
 !/server.ts
 !/tsconfig.json
-!/tsconfig.client.json
 !/tsconfig.web.json
 !/vite.config.ts
 !/playwright.config.ts
 !/src/
+!/shared/
 !/public/
 !/web/
 !/scripts/

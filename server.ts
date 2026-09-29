@@ -1,13 +1,13 @@
 import http from 'node:http';
 import path from 'node:path';
-import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from './src/database.js';
 import { createTenantRuntime } from './src/tenantRuntime.js';
 import { createAuthHandler } from './src/authHttp.js';
+import { createStaticHandler } from './src/http/staticAssets.js';
+import { sendJson } from './src/http/response.js';
 import { permissionForRoute, permissionsFor } from './src/rbac.js';
 import { assertSeparateWorkspaces, canonicalWorkspace, databasePath, loadEnvironment, provisionDefaultTenant, tenantEnvironment } from './src/tenancy.js';
-import type { ServerResponse } from 'node:http';
 import type { Tenant } from './src/database.js';
 import type { Environment } from './src/issueSources/types.js';
 
@@ -21,6 +21,7 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
   const filename = databasePath(rootDir, environment);
   const database = openDatabase(filename);
   const handleAuth = createAuthHandler(database);
+  const serveWeb = createStaticHandler(projectDir);
   const runtimes = new Map<string, TenantRuntime>();
   const environments = new Map<string, Environment>();
   let closing = false;
@@ -86,30 +87,7 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
         await runtimeFor(tenant).handleApi(req, res, url, principal);
         return;
       }
-      if (isWebPagePath(url.pathname) && ['GET', 'HEAD'].includes(req.method || '')) {
-        const template = await readFile(path.join(projectDir, 'public', 'index.html'), 'utf8');
-        const assets = await webEntryAssets();
-        const content = template.replace('/__WEB_ENTRY__', `/${assets.script}`).replace('<!--__WEB_STYLES__-->', assets.styles.map(file => `<link rel="stylesheet" href="/${file}" />`).join('\n    '));
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
-        res.end(req.method === 'HEAD' ? undefined : content);
-        return;
-      }
-      if (/^\/assets\/[A-Za-z0-9._-]+\.(?:js|css)$/.test(url.pathname) && ['GET', 'HEAD'].includes(req.method || '')) {
-        let content: Buffer;
-        try { content = await readFile(path.join(projectDir, 'public', 'build', url.pathname.slice(1))); }
-        catch (error: unknown) {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return sendJson(res, 404, { message: '资源不存在' });
-          throw error;
-        }
-        const type = url.pathname.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/javascript; charset=utf-8';
-        res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'public, max-age=31536000, immutable' });
-        res.end(req.method === 'HEAD' ? undefined : content);
-        return;
-      }
-      if (url.pathname !== '/styles.css' || !['GET', 'HEAD'].includes(req.method || '')) return sendJson(res, 404, { message: '页面不存在' });
-      const content = await readFile(path.join(projectDir, 'public', 'styles.css'));
-      res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'no-cache' });
-      res.end(req.method === 'HEAD' ? undefined : content);
+      await serveWeb(req, res, url);
     } catch (caught: unknown) {
       const error = asError(caught);
       if (!res.headersSent) sendJson(res, error.statusCode || 500, { error: 'request_failed', message: error.message || '服务端错误' });
@@ -129,29 +107,6 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
       finally { database.close(); }
     }
   };
-}
-
-function isWebPagePath(value: string) {
-  if (value === '/' || value === '/index.html') return true;
-  return /^\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\/?$/.test(value) && value !== '/api' && !value.startsWith('/api/') && value !== '/assets' && !value.startsWith('/assets/');
-}
-
-async function webEntryAssets() {
-  const raw = await readFile(path.join(projectDir, 'public', 'build', '.vite', 'manifest.json'), 'utf8');
-  const manifest = JSON.parse(raw) as Record<string, { file?: unknown; isEntry?: unknown; css?: unknown }>;
-  const entry = manifest['web/src/main.tsx'];
-  if (!entry || entry.isEntry !== true || typeof entry.file !== 'string' || !/^assets\/[A-Za-z0-9._-]+\.js$/.test(entry.file)) {
-    throw new Error('Web 构建清单缺少有效入口，请先运行 pnpm build:client');
-  }
-  if (entry.css !== undefined && (!Array.isArray(entry.css) || !entry.css.every(file => typeof file === 'string' && /^assets\/[A-Za-z0-9._-]+\.css$/.test(file)))) {
-    throw new Error('Web 构建清单包含无效样式资源');
-  }
-  return { script: entry.file, styles: (entry.css || []) as string[] };
-}
-
-function sendJson(res: ServerResponse, status: number, data: unknown) {
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify(data));
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

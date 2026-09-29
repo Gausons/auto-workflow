@@ -1,4 +1,4 @@
-import type { Execution, Handoff, Session, Task, TaskCenterData } from './taskTypes.js';
+import type { Execution, Handoff, Session, Task, TaskCenterData } from '../../../shared/taskTypes.js';
 
 type TimelineTask = Pick<Task, 'id' | 'sessionIds'> & { updatedAt?: string; events?: Array<{ id: string; at?: string; message: string }> };
 type TimelineSession = Pick<Session, 'id'> & Partial<Session>;

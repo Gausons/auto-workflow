@@ -7,7 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createAgentHistory } from '../src/agentHistory/index.js';
 import { createSessionDelivery } from '../src/sessionDelivery/index.js';
 import { RemoteCodexWorker } from '../src/remoteCodexWorker.js';
-import type { AgentProject, TaskCenterData } from '../public/taskTypes.js';
+import type { AgentProject, TaskCenterData } from '../shared/taskTypes.js';
 import type { Environment } from '../src/issueSources/types.js';
 import type { HistoryEntry, HistorySession } from '../src/agentHistory/types.js';
 

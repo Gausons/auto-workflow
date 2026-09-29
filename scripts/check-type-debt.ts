@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
-const roots = ['src', 'public', 'test', 'scripts'];
+const roots = ['src', 'shared', 'web/src', 'packages', 'test', 'scripts'];
 const explicitDynamicTypeBudget = 0;
 const debtToken = String.fromCharCode(97, 110, 121);
 const tokenPattern = new RegExp(`\\b${debtToken}\\b`, 'g');
@@ -9,8 +9,8 @@ const tokenPattern = new RegExp(`\\b${debtToken}\\b`, 'g');
 function sourceFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
     const filename = path.join(directory, entry.name);
-    if (entry.isDirectory()) return entry.name === 'build' ? [] : sourceFiles(filename);
-    return entry.isFile() && filename.endsWith('.ts') ? [filename] : [];
+    if (entry.isDirectory()) return ['build', 'dist', 'node_modules'].includes(entry.name) ? [] : sourceFiles(filename);
+    return entry.isFile() && /\.tsx?$/.test(filename) ? [filename] : [];
   });
 }
 

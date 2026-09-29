@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
-import { AI_ASSIGNMENT_MODELS, DEFAULT_AI_ASSIGNMENT_MODEL } from '../../../public/assignmentModels.js';
+import { AI_ASSIGNMENT_MODELS, DEFAULT_AI_ASSIGNMENT_MODEL } from '../../../shared/assignmentModels.js';
 
 interface Person { name: string; employeeId: string; responsibility: string }
 interface Config {

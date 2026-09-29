@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { renderMarkdown, renderMessages } from '../public/historyView.js';
+import { renderMarkdown, renderMessages } from '../web/src/components/historyView.js';
 
 test('history Markdown formats prose while escaping HTML and unsafe links', () => {
   const html = renderMarkdown('**已完成**\n\n- 一项\n- `代码`\n\n<script>alert(1)</script>\n[危险](javascript:alert)\n\n```js\n<b>文本</b>\n```');

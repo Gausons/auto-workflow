@@ -1,5 +1,5 @@
 // Restricted Markdown renderer; attachments are validated separately from message text.
-import type { HistoryMessage } from './taskTypes.js';
+import type { HistoryMessage } from '../../../shared/taskTypes.js';
 type HistoryImage = NonNullable<HistoryMessage['images']>[number];
 const entities: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 export const escape = (text: unknown) => String(text ?? '').replace(/[&<>"']/g, (c) => entities[c] || c);

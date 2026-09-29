@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { PromptImageReference } from '../public/taskTypes.js';
+import type { PromptImageReference } from '../shared/taskTypes.js';
 import type { ContextEntry, SessionContext } from './contextCompiler.js';
 import type { SummaryResult } from './contextModelSummary.js';
 import { httpError } from './rbac.js';

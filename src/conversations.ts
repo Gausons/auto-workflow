@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
-import { taskContent } from '../public/taskContent.js';
-import type { AgentProject, Execution, HistoryMessage, RemoteContextHandoff, Session, TaskCenterData } from '../public/taskTypes.js';
+import { taskContent } from '../shared/taskContent.js';
+import type { AgentProject, Execution, HistoryMessage, RemoteContextHandoff, Session, TaskCenterData } from '../shared/taskTypes.js';
 import { cleanContextEntries, contextPrompt, freezeContext, readContext, type ContextDelivery, type ContextEntry, type SessionContext } from './contextCompiler.js';
 import type { SummaryResult } from './contextModelSummary.js';
 import type { Environment } from './issueSources/types.js';

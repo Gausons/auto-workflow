@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { historyRunConfig, runDirectoryName, runEffortLabel, selectedAgentProject } from '../public/agentRunConfig.js';
+import { historyRunConfig, runDirectoryName, runEffortLabel, selectedAgentProject } from '../web/src/tasks/agentRunConfig.js';
 
 test('history continuation keeps the source working directory and preferred agent', () => {
   const projects = [

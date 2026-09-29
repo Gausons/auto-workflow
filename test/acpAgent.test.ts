@@ -6,7 +6,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { EventEmitter } from 'node:events';
 import { AcpAgentConnection, AcpPreferredRunner, AcpTaskRunner, AgentRunnerSet, configuredAcpAgents, resolveAcpLaunch } from '../src/acpAgent.js';
-import type { Execution } from '../public/taskTypes.js';
+import type { Execution } from '../shared/taskTypes.js';
 
 interface TestJob {
   id: string; agent?: string; protocol?: string; projectId?: string; status?: string; sessionId?: string | null;

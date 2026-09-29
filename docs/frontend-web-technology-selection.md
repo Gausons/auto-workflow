@@ -45,15 +45,20 @@ src/                              现有服务端领域逻辑
 server.ts                         HTTP、认证、RBAC 和静态资源边界
 
 web/
-  index.html
   src/
     app/                          路由、Provider、应用外壳
-    features/                     tasks、history、workbench、settings、auth
+    tasks/、history/、workbench/   业务页面与浏览器逻辑
+    settings/、auth/               配置和登录页面
     components/                   稳定的通用 Web 组件
     api/                          API client、query keys、DTO
     styles/                       tokens 和全局基础样式
-    test/                         浏览器测试辅助代码
+    **/*.test.tsx                 同目录组件测试
+  e2e/                            浏览器回归
+shared/                           前后端共享类型与纯业务函数
+public/                           HTML、基础 CSS；build/ 为 Vite 产物
 ```
+
+`pnpm dev` 使用 Node.js watch 和 Vite build watch，前端重建后手动刷新页面；生产与开发共用 manifest 资源加载方式。
 
 Web 应用保留在 `web/`，不因这次迁移另建 `apps/` 或拆分前端包。仓库现有 pnpm workspace 中的 `packages/` 属于其他服务端模块，与 Web 技术选型无关。
 

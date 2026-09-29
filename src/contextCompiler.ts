@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { PromptImageReference } from '../public/taskTypes.js';
+import type { PromptImageReference } from '../shared/taskTypes.js';
 import { cleanUserContext } from './agentHistory/adapters.js';
 import { SourceRegistry, freezeSnapshot } from '@auto-workflow/context-engine';
 import { sessionDeliverySource, type SessionDelivery } from '@auto-workflow/context-adapters/session-delivery';

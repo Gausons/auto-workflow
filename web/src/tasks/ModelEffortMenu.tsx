@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
-import { runEffortLabel } from '../../../public/agentRunConfig.js';
-import type { AgentProject } from '../../../public/taskTypes.js';
+import { runEffortLabel } from './agentRunConfig.js';
+import type { AgentProject } from '../../../shared/taskTypes.js';
 
 interface ModelEffortMenuProps {
   project: AgentProject;

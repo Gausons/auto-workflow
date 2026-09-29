@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { taskTimeline, taskActivity } from '../public/taskTimeline.js';
+import { taskTimeline, taskActivity } from '../web/src/tasks/taskTimeline.js';
 
 test('backfilled history uses original time, executions nest once and missing sources remain visible', () => {
   const task = { id: 't', updatedAt: '2026-09-18T15:00:00Z', sessionIds: ['old', 'new', 'gone'], events: [{ id: 'linked', at: '2026-09-18T15:00:00Z', message: '关联历史' }] };

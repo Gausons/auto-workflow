@@ -7,7 +7,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as acp from '@agentclientprotocol/sdk';
 import { httpError } from './rbac.js';
-import type { AgentProject, Execution, ExecutionStatus, PromptImageReference } from '../public/taskTypes.js';
+import type { AgentProject, Execution, ExecutionStatus, PromptImageReference } from '../shared/taskTypes.js';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { Environment } from './issueSources/types.js';
 

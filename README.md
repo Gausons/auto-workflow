@@ -299,7 +299,7 @@ pnpm tenant -- migrate [组织ID]
 前端已迁移为 React + TypeScript + Vite 的纯 Web 应用：登录、设置、缺陷工作台、任务中心、新建任务和历史会话续聊均由 React 承载。页面使用普通路径（如 `/tasks`、`/tasks/new`、`/history/:id`）；旧 `#tasks` 等 hash 链接会自动转到对应路径。服务端通过 Vite manifest 加载带指纹的 JS/CSS，业务接口保持不变。现有视觉基础样式保留在 `public/styles.css`，新组件样式使用 CSS Modules。详细决策见[Web 前端技术选型](docs/frontend-web-technology-selection.md)。
 
 ```bash
-# 开发模式（监听源码变化）
+# 开发模式（服务端自动重启，前端自动重建后刷新页面）
 pnpm dev
 
 # 构建浏览器端并执行 TypeScript 检查
@@ -315,16 +315,21 @@ pnpm test:e2e
 pnpm start
 ```
 
+`pnpm dev` 同时运行 Node.js watch 和 Vite watch，使用与生产一致的资源清单与单一 HTTP 入口。修改前端源码后等待构建完成，再刷新页面；当前不提供 HMR。退出开发命令会关闭前端监听和服务端进程。
+
 主要目录：
 
 ```text
 web/          React Web 应用、组件测试与浏览器回归
-public/       Web 入口、共享类型/渲染工具与基础样式；build/ 为生成产物
-src/          服务端领域逻辑与集成
+shared/       前后端共享类型、任务内容和分配模型配置
+public/       HTML 与基础样式；build/ 为 Vite 生成产物
+src/          服务端领域逻辑与集成；http/ 为 HTTP 基础处理
 scripts/      租户管理、多设备连接器等命令
 migrations/   SQLite 数据库迁移
 test/         Node.js 测试
 ```
+
+依赖方向：`src/` 和 `web/src/` 可以引用 `shared/`；共享层不依赖服务端或浏览器 UI。浏览器专用的运行配置、时间线与渲染工具位于 `web/src/`。浏览器资源统一由 Vite 构建，不再单独编译 `public/` 中的 TypeScript。
 
 ## License
 

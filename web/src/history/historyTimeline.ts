@@ -1,6 +1,6 @@
 // Match by turn identity (or timestamp for older rollouts), never by text alone:
 // users can legitimately send the same message in several different turns.
-import type { Execution, HistoryMessage } from './taskTypes.js';
+import type { Execution, HistoryMessage } from '../../../shared/taskTypes.js';
 
 type PendingExecution = Pick<Execution, 'id' | 'prompt'> & {
   status: string;

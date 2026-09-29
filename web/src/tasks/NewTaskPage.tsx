@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
-import { runDirectoryName } from '../../../public/agentRunConfig.js';
-import type { AgentProject, TaskCenterData } from '../../../public/taskTypes.js';
+import { runDirectoryName } from './agentRunConfig.js';
+import type { AgentProject, TaskCenterData } from '../../../shared/taskTypes.js';
 import { ModelEffortMenu } from './ModelEffortMenu.js';
 
 interface Targets { projects: AgentProject[]; localError?: string }

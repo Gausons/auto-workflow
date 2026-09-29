@@ -9,7 +9,7 @@ export default defineConfig({
   },
   build: {
     outDir: 'public/build',
-    emptyOutDir: false,
+    emptyOutDir: true,
     minify: true,
     sourcemap: false,
     manifest: true,

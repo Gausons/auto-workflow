@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { taskContent, taskTitle } from '../public/taskContent.js';
+import { taskContent, taskTitle } from '../shared/taskContent.js';
 import { hostname } from 'node:os';
 import { httpError } from './rbac.js';
-import type { Actor, AgentProject, Device, Handoff, HandoffMode, HandoffStatus, Session, Task, TaskCenterData, TaskContext, TaskStatus } from '../public/taskTypes.js';
+import type { Actor, AgentProject, Device, Handoff, HandoffMode, HandoffStatus, Session, Task, TaskCenterData, TaskContext, TaskStatus } from '../shared/taskTypes.js';
 
 const statuses: TaskStatus[] = ['waiting', 'error', 'running', 'ready', 'review', 'completed'];
 const contextKeys: Array<keyof TaskContext> = ['goal', 'constraints', 'decisions', 'next', 'files'];

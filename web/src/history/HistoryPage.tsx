@@ -2,8 +2,8 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
 import { HistoryComposer } from './HistoryComposer.js';
-import { renderMessages } from '../../../public/historyView.js';
-import type { HistoryMessage, Session } from '../../../public/taskTypes.js';
+import { renderMessages } from '../components/historyView.js';
+import type { HistoryMessage, Session } from '../../../shared/taskTypes.js';
 
 interface HistorySession extends Session { createdAt: string; messageCount: number }
 interface HistoryDetailResponse { session: HistorySession; messages: HistoryMessage[]; total: number; inherited?: { count: number; partial?: boolean } }

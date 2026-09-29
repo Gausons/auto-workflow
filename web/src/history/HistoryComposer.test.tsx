@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Session } from '../../../public/taskTypes.js';
+import type { Session } from '../../../shared/taskTypes.js';
 import { HistoryComposer } from './HistoryComposer.js';
 
 const id = 'a'.repeat(64);

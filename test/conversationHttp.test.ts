@@ -10,7 +10,7 @@ import { createApp } from '../server.js';
 import { openDatabase } from '../src/database.js';
 import { freezeSnapshot } from '@auto-workflow/context-engine';
 import { detachSnapshot } from '@auto-workflow/context-engine/detached-bundle';
-import type { Device, Execution } from '../public/taskTypes.js';
+import type { Device, Execution } from '../shared/taskTypes.js';
 
 interface ApiData {
   token?: string; sessions?: Array<{ id: string }>; sessionId?: string; execution?: Execution | null;
