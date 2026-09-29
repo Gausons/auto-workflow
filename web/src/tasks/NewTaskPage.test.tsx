@@ -1,12 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NewTaskPage } from './NewTaskPage.js';
 
 const sessionId = 'a'.repeat(64);
 const snapshot = { tasks: [], sessions: [{ id: sessionId, title: '来源会话', deviceId: 'local' }], devices: [], handoffs: [], executions: [] };
-const targets = { projects: [{ id: 'project-1', deviceId: 'local', deviceName: '本机', name: 'Codex', cwd: '/repo', online: true, models: [{ id: 'model-1', name: '模型一', reasoningEfforts: [{ id: 'high', name: '高' }] }] }] };
+const targets = { projects: [{ id: 'project-1', deviceId: 'local', deviceName: '本机', name: 'Codex', cwd: '/repo', online: true, defaultModel: 'model-1', models: [{ id: 'model-1', name: '模型一', defaultReasoningEffort: 'low', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }] }, { id: 'gpt-6-sol', name: 'GPT-6-Sol', defaultReasoningEffort: 'low', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }] }] }] };
 
 function setup(permissions = ['work.execute'], failExecute = false) {
   location.hash = '#new-task';
@@ -45,14 +45,29 @@ describe('NewTaskPage', () => {
     await user.click(screen.getByLabelText('工作目录：/repo'));
     await user.type(screen.getByLabelText('工作目录'), '/repo/work');
     await user.click(screen.getByLabelText('模型与思考强度'));
-    await user.selectOptions(screen.getByLabelText('模型'), 'model-1');
-    await user.selectOptions(screen.getByLabelText('思考强度'), 'high');
+    await user.selectOptions(screen.getByLabelText('模型'), 'gpt-6-sol');
+    fireEvent.change(screen.getByRole('slider', { name: '思考强度' }), { target: { value: '1' } });
     await user.click(screen.getByRole('button', { name: '创建并发送任务' }));
 
     await waitFor(() => expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(2));
     const writes = fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST').map(([, init]) => JSON.parse(String(init.body)));
     expect(writes[0]).toEqual({ action: 'create', content: '修复登录', sessionId: null });
-    expect(writes[1]).toMatchObject({ taskId: 'task-1', revision: 1, projectId: 'project-1', deviceId: 'local', cwd: '/repo/work', model: 'model-1', reasoningEffort: 'high' });
+    expect(writes[1]).toMatchObject({ taskId: 'task-1', revision: 1, projectId: 'project-1', deviceId: 'local', cwd: '/repo/work', model: 'gpt-6-sol', reasoningEffort: 'high' });
+  });
+
+  it('allows a reasoning effort with the default model', async () => {
+    const fetchMock = setup();
+    const user = userEvent.setup();
+    await screen.findByRole('option', { name: /Codex/ });
+    await user.type(screen.getByLabelText('任务描述'), '检查默认模型');
+    await user.click(screen.getByLabelText('模型与思考强度'));
+    const slider = screen.getByRole('slider', { name: '思考强度' });
+    expect(slider).toHaveProperty('disabled', false);
+    fireEvent.change(slider, { target: { value: '1' } });
+    await user.click(screen.getByRole('button', { name: '创建并发送任务' }));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([path]) => path === '/api/task-center/execute')).toHaveLength(1));
+    const execute = fetchMock.mock.calls.find(([path]) => path === '/api/task-center/execute');
+    expect(JSON.parse(String(execute?.[1]?.body))).toMatchObject({ model: '', reasoningEffort: 'high' });
   });
 
   it('reports an execution failure without recreating the task', async () => {

@@ -329,9 +329,9 @@ export function createConversations({ database, tenantId, history, delivery, exe
       const sourceDeviceId = originDeviceId;
       const contextSourceDeviceId = origin.session.source === 'conversation' && (origin.session.contextTransferred || origin.session.contextSourceDeviceId === 'local') ? 'local' : sourceDeviceId;
       if (deviceId !== sourceDeviceId && !requestedCwd) throw httpError(400, '跨设备交接请明确选择目标设备的工作目录');
-      const selectedModel = (project.models || []).find(item => item.id === model);
+      const selectedModel = (project.models || []).find(item => item.id === (model || project.defaultModel));
       if (model && !selectedModel) throw httpError(400, '所选模型不属于目标 Agent');
-      const efforts = Array.isArray(selectedModel?.reasoningEfforts) ? selectedModel.reasoningEfforts : project.reasoningEfforts || [];
+      const efforts = selectedModel?.reasoningEfforts?.length ? selectedModel.reasoningEfforts : project.reasoningEfforts || [];
       if (reasoningEffort && !efforts.some(item => item.id === reasoningEffort)) throw httpError(400, '所选思考强度不受当前模型支持');
       let cwd = requestedCwd || (deviceId === sourceDeviceId ? origin.session.cwd : '') || project.cwd;
       if (deviceId !== 'local' && cwd !== project.cwd) {

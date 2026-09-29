@@ -495,9 +495,9 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
       if (input.instruction !== undefined && (typeof input.instruction !== 'string' || input.instruction.length > 12000)) throw httpError(400, '补充指令格式无效或过长');
       const model = typeof input.model === 'string' ? input.model.trim() : '';
       const reasoningEffort = typeof input.reasoningEffort === 'string' ? input.reasoningEffort.trim() : '';
-      const selectedModel = (project.models || []).find((item) => item.id === model);
+      const selectedModel = (project.models || []).find((item) => item.id === (model || project.defaultModel));
       if (model && !selectedModel) throw httpError(400, '所选模型不属于目标 Agent');
-      const efforts = Array.isArray(selectedModel?.reasoningEfforts) ? selectedModel.reasoningEfforts : project.reasoningEfforts || [];
+      const efforts = selectedModel?.reasoningEfforts?.length ? selectedModel.reasoningEfforts : project.reasoningEfforts || [];
       if (reasoningEffort && !efforts.some((item) => item.id === reasoningEffort)) throw httpError(400, '所选思考强度不受当前模型支持');
       let cwd = String(input.cwd || '').trim() || project.cwd;
       if (deviceId === 'local') {

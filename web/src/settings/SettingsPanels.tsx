@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
+import { AI_ASSIGNMENT_MODELS, DEFAULT_AI_ASSIGNMENT_MODEL } from '../../../public/assignmentModels.js';
 
 interface Person { name: string; employeeId: string; responsibility: string }
 interface Config {
@@ -18,7 +19,6 @@ interface SettingsBootstrap {
 
 const settingsKey = ['settings', 'bootstrap'] as const;
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
-const modelIds = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'];
 
 function useSettings(section: 'config' | 'assignment') {
   const isActive = () => location.pathname === `/settings/${section}` || location.hash === `#settings/${section}` || location.hash === `#${section}` || (section === 'assignment' && (location.pathname === '/settings' || location.hash === '#settings'));
@@ -76,6 +76,8 @@ export function ConfigPanel() {
   if (!canManage) return <div className="config-band">当前账号没有配置权限。</div>;
   const config = query.data.config;
   const busy = save.isPending || scheduler.isPending;
+  const selectedModel = config.aiAssignmentModel || DEFAULT_AI_ASSIGNMENT_MODEL;
+  const legacyModel = AI_ASSIGNMENT_MODELS.some(model => model.id === selectedModel) ? '' : selectedModel;
   return <div className="config-band" id="config">
     <form key={formVersion} className="config-form" id="configForm" onSubmit={submit}>
       <div className="form-heading"><div><h2>对接配置</h2><p>默认数据源为 Jira Cloud。地址、JQL 和凭据在组织环境文件中配置，修改后重启。</p></div></div>
@@ -92,7 +94,10 @@ export function ConfigPanel() {
         <label className="checkbox-field"><input name="selfOnly" type="checkbox" value="true" defaultChecked={Boolean(config.selfOnly)} /><span>只看当前个人 Token 数据</span></label>
         <label className="checkbox-field"><input name="enableAIAssignment" type="checkbox" value="true" defaultChecked={Boolean(config.enableAIAssignment)} /><span>开启 AI 分配建议</span></label>
         <label className="checkbox-field"><input name="enableAutoAssignment" type="checkbox" value="true" defaultChecked={Boolean(config.enableAutoAssignment)} /><span>开启自动分配</span></label>
-        <label><span>AI 分配模型</span><select name="aiAssignmentModel" defaultValue={config.aiAssignmentModel || 'gpt-5.4-mini'}>{modelIds.map(id => <option key={id} value={id}>{id.replace(/^gpt-/, 'GPT-').replace(/-([a-z])/g, (_, letter: string) => ` ${letter.toUpperCase()}`)}</option>)}</select></label>
+        <label><span>AI 分配模型</span><select name="aiAssignmentModel" defaultValue={selectedModel}>
+          {legacyModel && <option value={legacyModel}>当前配置（{legacyModel}）</option>}
+          {AI_ASSIGNMENT_MODELS.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+        </select></label>
         <label><span>OpenAI Base URL</span><input name="openaiBaseUrl" defaultValue={config.openaiBaseUrl || ''} autoComplete="off" placeholder="https://api.openai.com/v1" /></label>
         <label><span>OpenAI 请求超时（ms）</span><input name="openaiTimeoutMs" type="number" min="5000" max="120000" defaultValue={config.openaiTimeoutMs ?? 30000} /></label>
       </div>

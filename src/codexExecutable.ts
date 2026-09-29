@@ -12,7 +12,10 @@ export function resolveCodexExecutable({ executable, environment = process.env, 
   const candidates: string[] = [];
   if (platform === 'darwin') {
     for (const base of ['/Applications', ...(home ? [path.join(home, 'Applications')] : [])]) {
-      for (const app of ['Codex.app', 'ChatGPT.app']) candidates.push(path.join(base, app, 'Contents', 'Resources', 'codex'));
+      for (const app of ['Codex.app', 'ChatGPT.app']) {
+        const resources = path.join(base, app, 'Contents', 'Resources');
+        candidates.push(path.join(resources, 'codex-cli', 'bin', 'codex'), path.join(resources, 'codex'));
+      }
     }
   }
   candidates.push(...pathCandidates);

@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import path from 'node:path';
 import { taskContent } from '../public/taskContent.js';
+import { DEFAULT_AI_ASSIGNMENT_MODEL } from '../public/assignmentModels.js';
 import { createHash } from 'node:crypto';
 import { publicIdentity } from './rbac.js';
 import { createSessionDelivery } from './sessionDelivery/index.ts';
@@ -66,7 +67,7 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
       codexWorkspaceDir: environment.CODEX_WORKSPACE_DIR ? resolveWorkspaceDir(environment.CODEX_WORKSPACE_DIR) : (tenant.id === 'default' ? resolveWorkspaceDir(persistedConfig.codexWorkspaceDir || rootDir) : ''),
       enableAIAssignment: parseBooleanConfig(persistedConfig.enableAIAssignment, environment.ENABLE_AI_ASSIGNMENT, true),
       enableAutoAssignment: parseBooleanConfig(persistedConfig.enableAutoAssignment, environment.ENABLE_AUTO_ASSIGNMENT, false),
-      aiAssignmentModel: String(persistedConfig.aiAssignmentModel ?? environment.AI_ASSIGNMENT_MODEL ?? 'gpt-5.4-mini'),
+      aiAssignmentModel: String(persistedConfig.aiAssignmentModel ?? environment.AI_ASSIGNMENT_MODEL ?? DEFAULT_AI_ASSIGNMENT_MODEL),
       openaiBaseUrl: normalizeUrl(persistedConfig.openaiBaseUrl ?? persistedConfig.aiRoutingBaseUrl ?? environment.OPENAI_BASE_URL ?? 'https://api.openai.com/v1', 'https://api.openai.com/v1'),
       openaiTimeoutMs: clampNumber(persistedConfig.openaiTimeoutMs ?? persistedConfig.aiRoutingTimeoutMs ?? environment.OPENAI_TIMEOUT_MS ?? environment.AI_ROUTING_TIMEOUT_MS, 5000, 120000, 30000),
       requestDelayMs: clampNumber(persistedConfig.requestDelayMs, 0, 60000, 0)
@@ -332,7 +333,7 @@ async function recommendBugAssignee(bug: RuntimeIssue): Promise<AssignmentRecomm
     };
   }
 
-  const model = String(state.config.aiAssignmentModel || 'gpt-5.4-mini');
+  const model = String(state.config.aiAssignmentModel || DEFAULT_AI_ASSIGNMENT_MODEL);
   const baseUrl = normalizeUrl(state.config.openaiBaseUrl, "https://api.openai.com/v1").replace(/\/+$/, "");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), state.config.openaiTimeoutMs).unref();

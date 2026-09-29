@@ -199,13 +199,16 @@ test('durable execution reservations isolate tenants, reject duplicates, and rec
   await center.command({ action: 'create', title: '测试执行' }, { id: 'owner' });
   const task = (await center.snapshot()).tasks[0];
   let update: ExecutionUpdate = () => {}, started = 0;
-  const factory: ExecutionFactory = fn => { update = fn; return { projects: async () => [{ id: 'project-1', name: 'Repo', cwd: root, models: [{ id: 'model-1', name: 'Model 1', reasoningEfforts: [{ id: 'high', name: 'High' }] }] }], start: async j => { started++; fn({ ...j, threadId: '12345678-1234-1234-1234-123456789abc', status: 'running', message: 'running' }); }, close() {} }; };
+  const factory: ExecutionFactory = fn => { update = fn; return { projects: async () => [{ id: 'project-1', name: 'Repo', cwd: root, defaultModel: 'model-1', models: [{ id: 'model-1', name: 'Model 1', reasoningEfforts: [{ id: 'high', name: 'High' }] }] }], start: async j => { started++; fn({ ...j, threadId: '12345678-1234-1234-1234-123456789abc', status: 'running', message: 'running' }); }, close() {} }; };
   const service = createCodexExecution({ database: db, tenantId: 'default', workspace: () => root, runnerFactory: factory, directoryPicker: async () => alternative });
   const input = { taskId: task.id, revision: task.revision, projectId: 'project-1', cwd: root };
   await assert.rejects(service.execute({ ...input, cwd: '/outside' }), { statusCode: 400 });
   assert.deepEqual(await service.pickDirectory({ deviceId: 'local', projectId: 'project-1' }, { id: 'owner' }), { status: 'completed', cwd: alternative });
-  const result = await service.execute({ ...input, cwd: '' }); assert.equal(started, 1);
+  await assert.rejects(service.execute({ ...input, reasoningEffort: 'ultra' }), { statusCode: 400 });
+  const result = await service.execute({ ...input, cwd: '', reasoningEffort: 'high' }); assert.equal(started, 1);
   assert.equal(db.readTaskCenter('default').executions[0].cwd, await realpath(root), 'blank cwd uses the target default');
+  assert.equal(db.readTaskCenter('default').executions[0].model, null);
+  assert.equal(db.readTaskCenter('default').executions[0].reasoningEffort, 'high');
   await assert.rejects(service.execute(input), { statusCode: 409 });
   const snapshot = await center.snapshot(); assert.equal(snapshot.tasks[0].status, 'running'); assert.equal(snapshot.tasks[0].sessionIds.length, 1);
   assert.equal(snapshot.sessions.length, 1); assert.equal(db.readTaskCenter('other').executions, undefined);

@@ -11,7 +11,11 @@ test('explicit executable wins without silently falling back to another installa
   assert.equal(resolveCodexExecutable({ executable: '/explicit/codex', environment: { CODEX_EXECUTABLE: '/other/codex' } }), '/explicit/codex');
 });
 test('desktop installation wins over PATH, user-installed app is supported, and non-mac hosts avoid mac paths', () => {
-  assert.equal(resolveCodexExecutable({ environment: { PATH: '/tools:/usr/bin' }, platform: 'darwin', usable: () => true }), '/Applications/Codex.app/Contents/Resources/codex');
+  assert.equal(resolveCodexExecutable({ environment: { PATH: '/tools:/usr/bin' }, platform: 'darwin', usable: () => true }), '/Applications/Codex.app/Contents/Resources/codex-cli/bin/codex');
   assert.equal(resolveCodexExecutable({ environment: { PATH: '/usr/bin', HOME: '/Users/test' }, platform: 'darwin', usable: f => f === '/Users/test/Applications/Codex.app/Contents/Resources/codex' }), '/Users/test/Applications/Codex.app/Contents/Resources/codex');
   assert.equal(resolveCodexExecutable({ environment: {}, platform: 'linux', usable: () => true }), 'codex');
+});
+test('finds the current ChatGPT bundled Codex before an older PATH installation', () => {
+  const bundled = '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex';
+  assert.equal(resolveCodexExecutable({ environment: { PATH: '/opt/homebrew/bin' }, platform: 'darwin', usable: file => file === bundled || file === '/opt/homebrew/bin/codex' }), bundled);
 });

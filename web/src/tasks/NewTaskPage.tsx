@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
 import { runDirectoryName, runEffortLabel } from '../../../public/agentRunConfig.js';
 import type { AgentProject, TaskCenterData } from '../../../public/taskTypes.js';
@@ -9,6 +9,7 @@ interface BranchState { repository: boolean; current?: string; changes: number; 
 interface DirectoryResult { status: 'pending' | 'selecting' | 'completed' | 'cancelled' | 'failed'; requestId: string; cwd?: string; message?: string }
 interface Created { taskId: string; revision?: number }
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
+const modelLabel = (name: string) => /^GPT-/i.test(name) ? name.replace(/^GPT-/i, '').replace(/-/g, ' ') : name;
 const route = () => location.pathname === '/tasks/new' || location.hash === '#new-task';
 let requestedSourceId: string | null = null;
 export function rememberSourceSession(id: string) { requestedSourceId = id; }
@@ -71,8 +72,13 @@ export function NewTaskPage() {
   const snapshot = useQuery({ queryKey: ['task-center', 'snapshot'], queryFn: ({ signal }) => apiRequest<TaskCenterData>('/api/task-center', { signal }), enabled: active && hasSessionToken() });
   const identity = useQuery({ queryKey: ['task-center', 'identity'], queryFn: ({ signal }) => apiRequest<{ permissions: string[] }>('/api/bootstrap', { signal }), enabled: active && hasSessionToken() });
   const project = targets.data?.projects[projectIndex];
+  const defaultModel = project?.models?.find(item => item.id === project.defaultModel);
   const selectedModel = project?.models?.find(item => item.id === (model || project.defaultModel));
-  const efforts = selectedModel?.reasoningEfforts || project?.reasoningEfforts || [];
+  const efforts = selectedModel?.reasoningEfforts?.length ? selectedModel.reasoningEfforts : project?.reasoningEfforts || [];
+  const defaultEffort = selectedModel?.defaultReasoningEffort || project?.defaultReasoningEffort || efforts[0]?.id || '';
+  const effectiveEffort = effort || defaultEffort;
+  const effortIndex = Math.max(0, efforts.findIndex(item => item.id === effectiveEffort));
+  const effortProgress = `${effortIndex / Math.max(1, efforts.length - 1) * 100}%`;
   const busy = branchBusy || picking;
   const create = useMutation({
     retry: false,
@@ -155,7 +161,15 @@ export function NewTaskPage() {
         <div className="tc-attachment-list">{files.map((file, index) => <span className="tc-attachment" key={`${file.name}:${index}`} title={file.name}><span>{file.name}</span><small>{Math.max(1, Math.round(file.size / 1024))} KB</small><button type="button" aria-label={`移除 ${file.name}`} disabled={blocked} onClick={() => setFiles(current => current.filter((_, at) => at !== index))}>×</button></span>)}</div>
         <input ref={fileInput} type="file" multiple hidden onChange={event => { const next = [...files, ...Array.from(event.target.files || [])]; if (next.length > 10 || next.some(file => file.size > 5 * 1024 * 1024) || next.reduce((total, file) => total + file.size, 0) > 10 * 1024 * 1024) setError('最多 10 个附件，单个不超过 5 MB，总计不超过 10 MB'); else { setFiles(next); setError(''); } event.target.value = ''; }} />
         <footer><div className="tc-create-tools"><button className="tc-attach-button" type="button" aria-label="附加文件" disabled={blocked || project?.deviceId !== 'local'} onClick={() => fileInput.current?.click()}>＋</button><span className="tc-create-shortcut">⌘ / Ctrl + Enter 发送</span></div><div className="tc-create-send">
-          {project && <details className="tc-config-menu tc-model-menu" name="create-config"><summary aria-label="模型与思考强度"><span>{selectedModel?.name || model || project.defaultModel || '默认模型'}</span><span className="tc-effort-label">{runEffortLabel(effort || selectedModel?.defaultReasoningEffort || project.defaultReasoningEffort || '') || '默认'}</span><span aria-hidden="true">⌄</span></summary><div className="tc-config-panel"><label className="tc-create-setting">模型<select aria-label="模型" value={model} disabled={blocked} onChange={event => { setModel(event.target.value); setEffort(''); }}><option value="">默认模型{project.defaultModel ? `（${project.defaultModel}）` : ''}</option>{project.models?.map(item => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}</select></label><label className="tc-create-setting">思考强度<select aria-label="思考强度" value={effort} disabled={blocked} onChange={event => setEffort(event.target.value)}><option value="">默认强度{selectedModel?.defaultReasoningEffort || project.defaultReasoningEffort ? `（${selectedModel?.defaultReasoningEffort || project.defaultReasoningEffort}）` : ''}</option>{efforts.map(item => <option key={item.id} value={item.id}>{item.name || item.id}</option>)}</select></label><p className="tc-create-hint">{selectedModel?.description || '默认选项沿用所选 Agent 的配置。'}</p></div></details>}
+          {project && <details className="tc-config-menu tc-model-menu" name="create-config">
+            <summary aria-label="模型与思考强度"><span>{modelLabel(selectedModel?.name || model || project.defaultModel || '默认模型')}</span><span className="tc-effort-label">{effort ? runEffortLabel(effort) : '默认'}</span><span className="tc-model-chevron" aria-hidden="true">⌄</span></summary>
+            <div className="tc-config-panel tc-model-panel">
+              <div className="tc-model-card-header"><span aria-hidden="true">ϟ</span><strong>{runEffortLabel(effectiveEffort) || '默认'}</strong><button type="button" aria-label="恢复默认思考强度" title="恢复默认思考强度" disabled={blocked || !effort} onClick={() => setEffort('')}>↶</button></div>
+              <label className="tc-model-select-wrap"><select aria-label="模型" value={model} disabled={blocked} onChange={event => { setModel(event.target.value); setEffort(''); }}><option value="">{defaultModel ? `${modelLabel(defaultModel.name)}（默认）` : '默认模型'}</option>{project.models?.map(item => <option key={item.id} value={item.id}>{modelLabel(item.name || item.id)}</option>)}</select><span aria-hidden="true">›</span></label>
+              <div className="tc-effort-track" style={{ '--tc-effort-progress': effortProgress } as CSSProperties}><input aria-label="思考强度" aria-valuetext={`${runEffortLabel(effectiveEffort) || '默认'}${effort ? '' : '（默认）'}`} type="range" min="0" max={Math.max(0, efforts.length - 1)} step="1" value={effortIndex} disabled={blocked || !efforts.length} onChange={event => setEffort(efforts[Number(event.target.value)]?.id || '')} /><span className="tc-effort-ticks" aria-hidden="true">{efforts.map(item => <span key={item.id} />)}</span></div>
+              {!efforts.length && <p className="tc-create-hint">当前 Agent 未提供思考强度选项。</p>}
+            </div>
+          </details>}
           <button className="button primary" type="submit" aria-label="创建并发送任务" disabled={blocked || !canEdit || !content.trim()}>{create.isPending ? '…' : '↑'}</button>
         </div></footer>{error && <p className="tc-form-error" role="alert">{error}</p>}
       </div>
