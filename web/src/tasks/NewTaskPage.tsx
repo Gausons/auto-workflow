@@ -4,6 +4,7 @@ import { apiRequest, hasSessionToken } from '../api/client.js';
 import { runDirectoryName } from './agentRunConfig.js';
 import type { AgentProject, TaskCenterData } from '../../../shared/taskTypes.js';
 import { ModelEffortMenu } from './ModelEffortMenu.js';
+import { DismissibleDetails } from '../components/DismissibleDetails.js';
 
 interface Targets { projects: AgentProject[]; localError?: string }
 interface BranchState { repository: boolean; current?: string; changes: number; branches: string[] }
@@ -152,15 +153,15 @@ export function NewTaskPage() {
     </div><form className="tc-create-shell" aria-busy={blocked} onSubmit={submit}>
       <div className="tc-create-context" aria-label="任务运行环境">
         {targets.isPending ? <p className="tc-create-hint" role="status">正在读取运行配置…</p> : targets.isError ? <p role="alert">{errorMessage(targets.error)}</p> : project ? <>
-          <details className="tc-config-menu tc-directory-menu" name="create-config"><summary aria-label={`工作目录：${cwd || project.cwd || '默认目录'}`}>▱ <span>{runDirectoryName(cwd || project.cwd || '')}</span><span className="tc-config-chevron" aria-hidden="true">⌄</span></summary><div className="tc-config-panel">
+          <DismissibleDetails className="tc-config-menu tc-directory-menu" name="create-config"><summary aria-label={`工作目录：${cwd || project.cwd || '默认目录'}`}>▱ <span>{runDirectoryName(cwd || project.cwd || '')}</span><span className="tc-config-chevron" aria-hidden="true">⌄</span></summary><div className="tc-config-panel">
             <label className="tc-create-setting">工作目录<input aria-label="工作目录" value={cwd} onChange={event => setCwd(event.target.value)} placeholder={project.cwd || '输入工作目录'} maxLength={2000} disabled={blocked} /></label>
             <div className="tc-actions"><button className="button secondary" type="button" disabled={blocked} onClick={() => void chooseDirectory()}>选择目录</button><button className="button ghost" type="button" disabled={blocked} onClick={() => setCwd('')}>使用默认目录</button></div>
             {!!project.commonDirectories?.length && <><p className="tc-create-hint">常用目录</p><div className="tc-directory-options">{project.commonDirectories.slice(0, 4).map(path => <button key={path} type="button" title={path} aria-label={path} aria-pressed={path === cwd} disabled={blocked} onClick={() => setCwd(path)}>▱ <span>{runDirectoryName(path)}<small>{path}</small></span></button>)}</div></>}
-          </div></details>
+          </div></DismissibleDetails>
           <label className="tc-target-control" title="执行位置">▣ <select aria-label="执行位置" value={projectIndex} disabled={blocked} onChange={event => { setProjectIndex(Number(event.target.value)); setCwd(''); setModel(''); setEffort(''); }}>{targets.data?.projects.map((item, index) => <option key={`${item.deviceId}:${item.id}`} value={index}>{item.name} · {item.deviceName}{item.online ? '' : '（离线）'}</option>)}</select></label>
-          {project.deviceId === 'local' && <details className="tc-config-menu tc-branch-menu" name="create-config" onToggle={event => { if (event.currentTarget.open && !branchBusy) void branchQuery.refetch(); }}><summary aria-label="Git 分支">⑂ <span>{branch?.repository ? branch.current || '分离 HEAD' : branchBusy ? '读取分支…' : branchError ? '分支读取失败' : branch ? '非 Git 目录' : 'Git 分支'}</span><span aria-hidden="true">⌄</span></summary><div className="tc-config-panel">
+          {project.deviceId === 'local' && <DismissibleDetails className="tc-config-menu tc-branch-menu" name="create-config" onToggle={event => { if (event.currentTarget.open && !branchBusy) void branchQuery.refetch(); }}><summary aria-label="Git 分支">⑂ <span>{branch?.repository ? branch.current || '分离 HEAD' : branchBusy ? '读取分支…' : branchError ? '分支读取失败' : branch ? '非 Git 目录' : 'Git 分支'}</span><span aria-hidden="true">⌄</span></summary><div className="tc-config-panel">
             {branchBusy ? <p role="status">正在处理分支…</p> : branchError ? <p role="alert">{branchError}</p> : branch?.repository ? <><input aria-label="搜索分支" value={branchSearch} onChange={event => setBranchSearch(event.target.value)} placeholder="搜索分支" /><p className="tc-create-hint">当前：{branch.current || '分离 HEAD'} · 未提交：{branch.changes} 项</p><div className="tc-branch-options">{branch.branches.filter(name => name.toLowerCase().includes(branchSearch.toLowerCase())).map(name => <button key={name} type="button" disabled={blocked} aria-pressed={name === branch.current} onClick={() => void loadBranches('switch', name)}>{name}{name === branch.current ? ' ✓' : ''}</button>)}</div><label className="tc-create-setting">新分支<input aria-label="新分支名称" value={newBranch} onChange={event => setNewBranch(event.target.value)} maxLength={200} /></label><button type="button" className="button secondary" disabled={blocked || !newBranch.trim()} onClick={() => void loadBranches('create', newBranch.trim())}>创建并切换</button></> : <p className="tc-create-hint">当前目录不是 Git 仓库。</p>}
-          </div></details>}
+          </div></DismissibleDetails>}
         </> : <p className="tc-create-hint" role="alert">{targets.data?.localError || '未发现可用 Agent，仍可创建任务。'}</p>}
       </div>
       <div className="tc-composer conversation-composer">

@@ -67,4 +67,17 @@ describe('HistoryComposer', () => {
     await user.click(screen.getByRole('button', { name: /带上下文新开会话/ }));
     await waitFor(() => expect(writes.find(item => item.path.endsWith('/continue-as-new'))?.body).toMatchObject({ model: 'gpt-6-sol', reasoningEffort: 'high' }));
   });
+
+  it('closes an open run configuration menu when clicking elsewhere', async () => {
+    const projects = [{ id: 'project-1', deviceId: 'local', deviceName: '本机', name: 'Codex', agent: 'codex', cwd: '/repo', online: true, defaultModel: 'gpt-6-luna', models: [{ id: 'gpt-6-luna', name: 'GPT-6-Luna', defaultReasoningEffort: 'medium', reasoningEfforts: [{ id: 'medium', name: '中' }] }] }];
+    setup(undefined, false, projects);
+    const user = userEvent.setup();
+    const summary = await screen.findByLabelText('模型与思考强度');
+    const details = summary.closest('details');
+
+    await user.click(summary);
+    expect(details?.open).toBe(true);
+    await user.click(screen.getByRole('textbox', { name: '发送消息' }));
+    expect(details?.open).toBe(false);
+  });
 });

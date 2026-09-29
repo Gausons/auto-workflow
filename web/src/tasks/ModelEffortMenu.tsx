@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react';
 import { runEffortLabel } from './agentRunConfig.js';
 import type { AgentProject } from '../../../shared/taskTypes.js';
+import { DismissibleDetails } from '../components/DismissibleDetails.js';
 
 interface ModelEffortMenuProps {
   project: AgentProject;
@@ -21,7 +22,7 @@ export function ModelEffortMenu({ project, model, effort, disabled, onModelChang
   const effectiveEffort = effort || defaultEffort;
   const effortIndex = Math.max(0, efforts.findIndex(item => item.id === effectiveEffort));
   const effortProgress = `${effortIndex / Math.max(1, efforts.length - 1) * 100}%`;
-  return <details className="tc-config-menu tc-model-menu" name="create-config">
+  return <DismissibleDetails className="tc-config-menu tc-model-menu" name="create-config">
     <summary aria-label="模型与思考强度"><span>{modelLabel(selectedModel?.name || model || project.defaultModel || '默认模型')}</span><span className="tc-effort-label">{effort ? runEffortLabel(effort) : '默认'}</span><span className="tc-model-chevron" aria-hidden="true">⌄</span></summary>
     <div className="tc-config-panel tc-model-panel">
       <div className="tc-model-card-header"><span aria-hidden="true">ϟ</span><strong>{runEffortLabel(effectiveEffort) || '默认'}</strong><button type="button" aria-label="恢复默认思考强度" title="恢复默认思考强度" disabled={disabled || !effort} onClick={() => onEffortChange('')}>↶</button></div>
@@ -29,5 +30,5 @@ export function ModelEffortMenu({ project, model, effort, disabled, onModelChang
       <div className="tc-effort-track" style={{ '--tc-effort-progress': effortProgress } as CSSProperties}><input aria-label="思考强度" aria-valuetext={`${runEffortLabel(effectiveEffort) || '默认'}${effort ? '' : '（默认）'}`} type="range" min="0" max={Math.max(0, efforts.length - 1)} step="1" value={effortIndex} disabled={disabled || !efforts.length} onChange={event => onEffortChange(efforts[Number(event.target.value)]?.id || '')} /><span className="tc-effort-ticks" aria-hidden="true">{efforts.map(item => <span key={item.id} />)}</span></div>
       {!efforts.length && <p className="tc-create-hint">当前 Agent 未提供思考强度选项。</p>}
     </div>
-  </details>;
+  </DismissibleDetails>;
 }

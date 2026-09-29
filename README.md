@@ -13,6 +13,71 @@
 - **会话交付**：汇总 Codex、Claude Code 的本地或远端会话，支持接续、分支和引用。
 - **团队协作**：提供组织、成员、角色、审计和多租户数据隔离。
 
+## 系统架构
+
+工作台采用单个 Node.js HTTP 服务，统一提供 React 静态资源与业务 API；每个租户独立创建业务运行时，远端设备通过连接器访问同一组受认证保护的接口。
+
+```mermaid
+flowchart TB
+  Web["React + TypeScript 页面<br/>缺陷 / 任务 / 历史会话 / 设置"]
+
+  subgraph Workbench["工作台服务 · Node.js + TypeScript"]
+    HTTP["server.ts · 原生 HTTP 入口<br/>静态资源 / 登录认证 / RBAC / 审计"]
+    Runtime["tenantRuntime.ts<br/>租户配置、工作目录隔离与业务路由"]
+    Issues["缺陷同步与智能分配<br/>issueSources / assignmentEngine"]
+    Tasks["任务中心<br/>taskCenter"]
+    Sessions["历史会话与上下文交接<br/>agentHistory / sessionDelivery / conversations"]
+    Execution["执行调度与状态核对<br/>codexExecution"]
+    Local["本机执行通道<br/>ACP / Codex CLI / App Server / 桌面桥接"]
+
+    HTTP --> Runtime
+    Runtime --> Issues
+    Runtime --> Tasks
+    Runtime --> Sessions
+    Runtime --> Execution
+    Issues -->|缺陷生成任务| Tasks
+    Sessions -->|带上下文新开会话| Execution
+    Execution --> Local
+  end
+
+  subgraph Context["共享上下文包 · 工作台与连接器复用"]
+    Adapters["context-adapters<br/>Codex / Claude 历史、Markdown、问题记录"]
+    Engine["context-engine<br/>不可变快照 / 摘要校验 / v3 清单与图片对象 / 目录包"]
+    Adapters --> Engine
+  end
+
+  subgraph Remote["远端设备"]
+    Connector["device-sync + remoteCodexWorker<br/>设备与历史同步 / 执行领取 / 上下文传输"]
+    RemoteAgent["远端 ACP / Codex 执行器<br/>目标工作目录与本地历史"]
+    Connector --> RemoteAgent
+  end
+
+  DB[("SQLite<br/>租户 / 成员 / 缺陷 / 任务 / 执行 / 上下文与传输对象")]
+  Files["工作台本地文件<br/>Agent 历史 / 上下文 Markdown / 图片与附件"]
+  Jira["Jira"]
+  AI["模型 API<br/>分配建议 / 可选上下文归纳"]
+
+  Web <-->|HTTP API 与静态资源| HTTP
+  Runtime -->|租户范围内读写| DB
+  Issues <-->|同步 / 分配| Jira
+  Issues --> AI
+  Sessions --> AI
+  Sessions --> Adapters
+  Sessions --> Engine
+  Sessions --> Files
+  Local --> Files
+  Connector <-->|认证 API：同步、领取、回报、交接| HTTP
+  Connector --> Adapters
+  Connector --> Engine
+```
+
+- **前后端边界**：`web/src/` 经 Vite 构建到 `public/build/`，由 HTTP 入口提供；`shared/` 只存放前后端共享类型与纯业务函数。
+- **权限与数据边界**：HTTP 入口统一认证和检查角色权限；租户运行时及数据访问层限定租户范围，设备交接进一步校验连接器账号、设备和执行归属。
+- **执行与交接边界**：任务归属、执行调度和未知结果核对由工作台及执行器负责。共享上下文包负责来源适配、快照和数据包校验；Markdown 呈现、HTTP 传输与 Agent 启停仍由宿主模块完成。
+- **跨设备数据流**：来源设备冻结记录，经工作台传递 v3 清单与原始图片对象，目标设备校验并生成上下文文件后执行。代码仓库和普通附件文件需另行准备，连接器默认只同步，启用执行需设置 `WORKBENCH_EXECUTE_CODEX=true`。
+
+上下文协议及后续规划见[会话与数据流转核心引擎设计](docs/context-transfer-engine-design.md)。
+
 ## 工作流程
 
 ```mermaid
@@ -324,6 +389,7 @@ web/          React Web 应用、组件测试与浏览器回归
 shared/       前后端共享类型、任务内容和分配模型配置
 public/       HTML 与基础样式；build/ 为 Vite 生成产物
 src/          服务端领域逻辑与集成；http/ 为 HTTP 基础处理
+packages/     context-engine 核心引擎与 context-adapters 数据源适配器
 scripts/      租户管理、多设备连接器等命令
 migrations/   SQLite 数据库迁移
 test/         Node.js 测试
