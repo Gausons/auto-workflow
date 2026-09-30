@@ -5,6 +5,20 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
+test('CI publishes only verified main images and promotes latest after production verification', async () => {
+  const workflow = await readFile('.github/workflows/ci-cd.yml', 'utf8');
+  assert.match(workflow, /REGISTRY_IMAGE: ghcr\.io\/gausons\/auto-workflow/);
+  assert.match(workflow, /Publish verified commit image[\s\S]*github\.ref == 'refs\/heads\/main'[\s\S]*docker push "\$tagged"/);
+  assert.match(workflow, /image=\$\(docker image inspect[\s\S]*RepoDigests/);
+  assert.match(workflow, /verified_image: \$\{\{ steps\.publish_image\.outputs\.image \}\}/);
+  const publicCheck = workflow.indexOf('Verify public HTTPS');
+  const promotion = workflow.indexOf('Promote deployed image to latest');
+  assert.ok(publicCheck >= 0 && promotion > publicCheck);
+  assert.match(workflow.slice(promotion), /needs\.checks\.outputs\.verified_image/);
+  assert.match(workflow.slice(promotion), /docker buildx imagetools create --tag "\$REGISTRY_IMAGE:latest" "\$VERIFIED_IMAGE"/);
+  assert.match(workflow, /"\$DEPLOY_USER@\$DEPLOY_HOST" "deploy \$GITHUB_SHA" < release\.tar\.gz/);
+});
+
 test('CI SSH entrypoint rejects shell access and passes only a validated revision to sudo', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'workflow-deploy-test-'));
   try {

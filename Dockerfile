@@ -19,7 +19,9 @@ RUN pnpm install --prod --frozen-lockfile --ignore-scripts
 FROM node:22.23.3-bookworm-slim AS runtime
 WORKDIR /app
 ARG REVISION=local
-LABEL org.opencontainers.image.revision=$REVISION
+LABEL org.opencontainers.image.revision=$REVISION \
+      org.opencontainers.image.source=https://github.com/Gausons/auto-workflow \
+      org.opencontainers.image.title=auto-workflow
 COPY --from=production-deps /app/node_modules ./node_modules
 COPY --from=production-deps /app/packages ./packages
 COPY package.json server.ts ./
