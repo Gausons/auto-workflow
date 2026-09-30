@@ -1,4 +1,5 @@
 import { openSqlite } from './storage/sqlite.js';
+import { openPostgres, postgresConfig } from './storage/postgres.js';
 import { openMysql, mysqlConfig } from './storage/mysql.js';
 import type { Connection } from './storage/connection.js';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
@@ -24,8 +25,8 @@ export const hashToken = (token: string) => createHash('sha256').update(token).d
 
 export function openDatabase(filename: string, environment: Record<string, string | undefined> = {}) {
   const driver = environment.DATABASE_DRIVER || 'sqlite';
-  if (driver !== 'sqlite' && driver !== 'mysql') throw new Error('DATABASE_DRIVER 仅支持 sqlite 或 mysql');
-  const db: Connection = driver === 'mysql' ? openMysql(mysqlConfig(environment)) : openSqlite(filename);
+  if (driver !== 'sqlite' && driver !== 'mysql' && driver !== 'postgres') throw new Error('DATABASE_DRIVER 仅支持 sqlite、mysql 或 postgres');
+  const db: Connection = driver === 'postgres' ? openPostgres(postgresConfig(environment)) : driver === 'mysql' ? openMysql(mysqlConfig(environment)) : openSqlite(filename);
 
   function transaction<T>(fn: () => T): T {
     db.exec('BEGIN IMMEDIATE');

@@ -5,7 +5,7 @@
 ## 项目概览
 
 - 本项目是面向研发团队的缺陷与 Agent 任务工作台，支持 Jira 同步、智能分配、任务中心、Agent 执行、会话交付、RBAC 和多租户隔离。
-- 技术栈为 Node.js 22.16+、TypeScript、ESM、原生 HTTP 服务、SQLite；浏览器端使用 React、TypeScript 和 Vite。
+- 技术栈为 Node.js 22.16+、TypeScript、ESM、原生 HTTP 服务、PostgreSQL + pgvector（SQLite / MySQL 保留迁移兼容）；浏览器端使用 React、TypeScript 和 Vite。
 - 使用 `pnpm` 管理依赖；不要混用 npm 或 yarn，也不要手工修改 `pnpm-lock.yaml`。
 
 ## 目录职责
@@ -18,7 +18,7 @@
 - `public/`：HTML 与基础 CSS 静态资源；`public/build/` 是 Vite 生成产物，不要手工编辑或提交。
 - `src/http/`：请求体解析、响应和静态资源处理；业务授权仍由服务入口统一执行。
 - `test/`：基于 `node:test` 与 `node:assert/strict` 的测试，命名为 `*.test.ts`；React 组件测试位于 `web/src/`，使用 Vitest。
-- `migrations/`：按编号顺序执行的 SQLite 迁移。
+- `migrations/`：按编号顺序执行的数据库迁移；postgres/ 为 PostgreSQL，mysql/ 与根目录保留旧库迁移。
 - `scripts/`：租户、设备同步和本地运维命令。
 - `packages/context-engine/`：上下文捕获、快照、交付包及完整性校验。
 - `packages/context-adapters/`：会话交付、Markdown 和缺陷等来源适配器，依赖上下文引擎。

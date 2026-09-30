@@ -151,9 +151,9 @@ CODEX_WORKSPACE_DIR=/absolute/path/to/your/repository
 | --- | --- | --- |
 | `HOST` | `127.0.0.1` | HTTP 监听地址 |
 | `PORT` | `4173` | HTTP 监听端口 |
-| `DATABASE_DRIVER` | `sqlite` | 本地兼容 SQLite；生产配置为 `mysql`，失败不会回退 |
-| `MYSQL_HOST` / `MYSQL_PORT` | 无 / `3306` | MySQL 地址与端口；生产为 Docker 内的 `auto-workflow-mysql` |
-| `MYSQL_DATABASE` / `MYSQL_USER` / `MYSQL_PASSWORD` | 无 | MySQL 数据库和应用账号；密码只保存于环境文件 |
+| `DATABASE_DRIVER` | `sqlite` | 开发和生产配置为 `postgres`；SQLite / MySQL 保留旧库兼容，连接失败不会回退 |
+| `PGHOST` / `PGPORT` | 无 / `5432` | 本机开发 `127.0.0.1:15432`，生产 Docker 内 `auto-workflow-postgres:5432` |
+| `PGDATABASE` / `PGUSER` / `PGPASSWORD` | 无 | PostgreSQL 数据库和应用账号；密码只保存于环境文件 |
 | `DATABASE_PATH` | `.workflow-data/workflow.sqlite` | SQLite 数据库路径 |
 | `CODEX_WORKSPACE_DIR` | 项目根目录 | 默认 Agent 工作目录 |
 
@@ -341,7 +341,7 @@ pnpm context:bundle -- import-snapshot /absolute/output/handoff-1 /absolute/impo
 
 ## 数据、升级与备份
 
-生产业务数据保存在 MySQL 8.4，SQLite 保留用于本地开发与旧库导入。SQLite 数据库迁移会在启动时自动执行；第 4 版迁移保留缺陷与任务中心数据，并移除旧流水线运行和执行记录；第 5 版新增不可变会话上下文存储；第 6 版新增跨设备交付摘要与状态记录；第 7 版新增隔离的图片对象与 v3 清单存储。
+开发和生产业务数据保存在 PostgreSQL 17 + pgvector 0.8.6，SQLite 保留用于隔离测试与旧库导入。SQLite 数据库迁移会在启动时自动执行；第 4 版迁移保留缺陷与任务中心数据，并移除旧流水线运行和执行记录；第 5 版新增不可变会话上下文存储；第 6 版新增跨设备交付摘要与状态记录；第 7 版新增隔离的图片对象与 v3 清单存储。
 
 备份建议：
 
@@ -383,7 +383,7 @@ public/       HTML 与基础样式；build/ 为 Vite 生成产物
 src/          服务端领域逻辑与集成；http/ 为 HTTP 基础处理
 packages/     context-engine 核心引擎与 context-adapters 数据源适配器
 scripts/      多设备连接器与本地运维命令
-migrations/   SQLite 迁移与 mysql/ 独立 MySQL 迁移
+migrations/   SQLite 迁移与 mysql/、postgres/ 独立迁移
 test/         Node.js 测试
 ```
 
@@ -391,7 +391,7 @@ test/         Node.js 测试
 
 ### GitHub CI / CD
 
-仓库使用 [CI / CD](https://github.com/Gausons/auto-workflow/actions/workflows/ci-cd.yml) 工作流。每个 PR、main 推送和手动运行都会安装锁定依赖，执行类型检查、全部单元/组件测试、真实 MySQL 集成测试、Chromium 浏览器测试和部署脚本检查。Node 固定为 22.23.3，pnpm 固定为 package.json 中的 10.33.2。
+仓库使用 [CI / CD](https://github.com/Gausons/auto-workflow/actions/workflows/ci-cd.yml) 工作流。每个 PR、main 推送和手动运行都会安装锁定依赖，执行类型检查、全部单元/组件测试、真实 PostgreSQL / pgvector 与旧 MySQL 迁移测试、Chromium 浏览器测试和部署脚本检查。Node 固定为 22.23.3，pnpm 固定为 package.json 中的 10.33.2。
 
 main 的检查通过后自动发布到 `https://autoworkflow.top`；PR 不读取生产凭据，也不发布。手动发布在 Actions 页面选择该工作流的 Run workflow，并选择 main。已被新提交替代的旧版本会跳过发布。CI 使用多阶段 Dockerfile 构建镜像，验证容器页面、静态资源、认证边界和重启，再通过 SSH 传输压缩镜像。镜像标记为 `auto-workflow:<commit SHA>`，生产服务器无需访问镜像仓库。`.dockerignore` 使用允许列表，环境文件、数据库和会话数据不进入镜像。
 
@@ -408,7 +408,7 @@ GitHub 的 `production` Environment 只允许 main 分支，包含以下配置�
 
 发布持有服务器文件锁，先载入镜像并验证版本标签及导入能力，再停旧容器、备份数据库和配置，启动新容器。首次迁移时停止旧 `auto-workflow.service`，容器验证成功后禁用该服务的开机启动。后续由 Docker 的 `unless-stopped` 策略负责开机启动和进程退出重启。健康检查失败时恢复旧容器或首次迁移前的 systemd 服务；数据库不会自动回退，以免覆盖数据或重复执行 Agent 指令。若数据库迁移与旧代码不兼容，需要停服并核对备份后人工恢复。公网 HTTPS 检查失败只报告失败，不自动回滚已启动的容器。
 
-备份保存在 `/opt/auto-workflow/backups/`，包含 MySQL 的 `mysql.sql` 一致性转储、环境配置、运行目录及保留的 SQLite 文件；含敏感数据，仅 root 可读，不上传 GitHub。`PREVIOUS_IMAGE`（首次迁移时为 `PREVIOUS_RELEASE`）记录前一版本，`/opt/auto-workflow/DOCKER_IMAGE` 记录当前版本。旧容器停止并关闭自动重启，保留供回退；当前不自动清理旧镜像、容器和备份，需定期检查磁盘。
+备份保存在 `/opt/auto-workflow/backups/`，包含 PostgreSQL 的 `postgres.dump` 一致性转储、环境配置、运行目录及保留的 SQLite 文件；含敏感数据，仅 root 可读，不上传 GitHub。`PREVIOUS_IMAGE`（首次迁移时为 `PREVIOUS_RELEASE`）记录前一版本，`/opt/auto-workflow/DOCKER_IMAGE` 记录当前版本。旧容器停止并关闭自动重启，保留供回退；当前不自动清理旧镜像、容器和备份，需定期检查磁盘。
 
 ### Docker 部署与维护
 
@@ -421,8 +421,8 @@ GitHub 的 `production` Environment 只允许 main 分支，包含以下配置�
 | `/var/lib/auto-workflow` | 原路径 | 保留的 SQLite 旧库、租户配置和工作目录 |
 | `/var/lib/auto-workflow/runtime` | `/app/.workflow-data` | 会话交付和其他运行数据 |
 | `/etc/auto-workflow` | `/run/config`（只读） | 环境配置 |
-| `/var/lib/auto-workflow-mysql` | MySQL 的 `/var/lib/mysql` | MySQL 持久化数据 |
-| `/etc/auto-workflow-mysql` | MySQL 的 `/run/secrets`（只读） | root 和应用密码、备份客户端配置；仅 root 可读 |
+| `/var/lib/auto-workflow-postgres` | PostgreSQL 的 `/var/lib/postgresql/data` | PostgreSQL 持久化数据 |
+| `/etc/auto-workflow-postgres` | 单独密码文件挂载到 `/run/secrets`（只读） | 管理员与应用密码；宿主机父目录仅 root 可访问 |
 
 Node 使用 `--env-file-if-exists=/run/config/auto-workflow.env` 解析环境文件，支持原有带引号的值；绑定端口、数据库路径和禁用服务器 Agent 等部署参数由容器环境变量覆盖。修改宿主机环境文件后执行 `docker restart auto-workflow` 生效，CI/CD 不覆盖此文件。容器内 `localhost` 指容器自身；本地 Mac 的 AI 代理仍需提供服务器可访问的地址。
 
@@ -447,32 +447,60 @@ docker run --rm --name auto-workflow-local -p 127.0.0.1:4174:4173 \
 
 当前公网入口为 `https://autoworkflow.top`；`www.autoworkflow.top` 跳转到主域名。80 端口用于证书验证和 HTTPS 跳转；`auto-workflow-cert-renew.timer` 保持原有证书续期任务。数据库、环境配置与 runtime 目录都在容器外，删除或替换容器不会删除它们。SQLite 备份需停服或使用一致性备份，不能只复制正在写入的主数据库文件。
 
-### MySQL 接入与旧库迁移
+### 本地开发 PostgreSQL + pgvector
 
-生产新增独立 `auto-workflow-mysql` 容器，应用通过 `auto-workflow` Docker 网络连接，不映射 MySQL 端口到公网。应用使用专用数据库账号，root 仅用于初始化、备份和维护。服务器内存较小，初始化脚本将 InnoDB 缓冲池设为 128 MB、连接数设为 30，并关闭 performance schema。
+开发应用仍通过 `pnpm dev` 运行。`compose.postgres.yaml` 提供 PostgreSQL 17 + pgvector 0.8.6，监听 `127.0.0.1:15432`，数据库和普通应用账号均为 `auto_workflow`。持久化卷为 `auto-workflow-postgres-dev-data`；不要运行 `down -v` 删除数据库卷。
 
-首次安装：先加载官方 `mysql:8.4` 镜像，再以 root 执行 `bash scripts/deploy/setup-mysql.sh`。脚本生成随机密码并保存在服务器；发现已有容器、数据或配置时拒绝覆盖。将应用密码写入 `/etc/auto-workflow/auto-workflow.env` 的 `MYSQL_PASSWORD`，同时配置 `DATABASE_DRIVER=mysql`、`MYSQL_HOST=auto-workflow-mysql`、`MYSQL_DATABASE=auto_workflow`、`MYSQL_USER=auto_workflow`。不要把这些值提交到 Git。
-
-从 SQLite 切换时必须先停止应用、备份数据库（包含 WAL）、环境文件和运行目录。使用新镜像在同一 Docker 网络和原有配置/数据挂载下执行：
+新开发机先准备 Docker 和本地 `.env`（参考 `.env.example`，不要覆盖已有配置），再初始化密码：
 
 ```bash
-node --env-file=/run/config/auto-workflow.env --import tsx \
-  scripts/database/import-sqlite.ts /var/lib/auto-workflow/workflow.sqlite
+umask 077
+mkdir -p .workflow-data/postgres-dev
+chmod 700 .workflow-data/postgres-dev
+[ -f .workflow-data/postgres-dev/admin-password ] || openssl rand -hex 32 > .workflow-data/postgres-dev/admin-password
+[ -f .workflow-data/postgres-dev/app-password ] || openssl rand -hex 32 > .workflow-data/postgres-dev/app-password
+# 父目录仅当前用户可访问；容器只挂载单独文件，初始化的 postgres 用户需读取应用密码。
+chmod 644 .workflow-data/postgres-dev/app-password
+docker compose -f compose.postgres.yaml up -d --wait
 ```
 
-迁移工具只读取 SQLite v8，检查完整性与外键，要求 MySQL 业务表为空，在单个事务中导入全部 14 张业务表，并逐表对照数据内容，包括密码哈希、会话令牌哈希和附件字节。相同源数据重复导入会跳过；不同源数据遇到非空目标库会失败。MySQL 字符串键区分大小写和尾部空格，超长键会报错并回滚整次导入。SQLite 旧库保留不删除。切换验证成功后由管理员写入 `/var/lib/auto-workflow/MYSQL_MIGRATED` 标记，再启用新版发布脚本；普通发布会检查此标记，避免误将空 MySQL 当成现有业务库。新应用开始接收写操作后，不可直接切回旧 SQLite，以免丢失任务或重复执行指令。
-
-MySQL 建表位于 `migrations/mysql/`，独立记录版本；启动时加数据库级迁移锁，拒绝未知的新版本。为保留既有同步业务事务，连接由独立工作线程维护，主线程每次查询同步等待（最多 30 秒）。写事务通过数据库锁串行执行，适合当前单实例工作台；大规模并发需要后续改为异步数据访问。连接中断或结果不确定时连接失效，不自动重试写入；检查数据库状态后重启服务恢复。`GET /api/health` 只返回健康状态，数据库不可用时返回 503，不暴露连接信息。
-
-部署前会停应用并生成 MySQL 转储。恢复需停服、核对备份版本后由管理员执行，CI 不自动恢复数据库。定期把备份复制到受控的异机存储；服务器本机备份不防磁盘损坏。
-
-本地 MySQL 回归需使用名称为 `workflow_test`（或 `workflow_test_<字母数字>`）的专用空库；测试会清空其中的业务表：
+将应用密码填入 `.env` 的 `PGPASSWORD`，使用示例中的 `DATABASE_DRIVER=postgres` 和 `PG*` 参数，然后 `pnpm dev`。数据库初始化脚本创建非超级用户 `auto_workflow` 并启用 `vector` 扩展；普通应用启动不需要管理员密码。已有数据卷不会重新运行初始化脚本，覆盖密码文件不会修改现有账号密码。
 
 ```bash
-MYSQL_TEST=1 MYSQL_HOST=127.0.0.1 MYSQL_PORT=3306 \
-  MYSQL_USER=<测试账号> MYSQL_PASSWORD=<测试密码> MYSQL_DATABASE=workflow_test \
-  node --import tsx --test test/mysql.test.ts
+# 日常启动
+ docker compose -f compose.postgres.yaml up -d --wait
+ pnpm dev
+# 停止数据库，保留数据
+ docker compose -f compose.postgres.yaml stop
 ```
+
+### PostgreSQL 生产部署与迁移
+
+生产使用独立 `auto-workflow-postgres` 容器，通过 `auto-workflow` Docker 网络访问，不映射数据库端口到公网。先加载 `pgvector/pgvector:0.8.6-pg17-bookworm` 镜像，再以 root 执行：
+
+```bash
+bash scripts/deploy/setup-postgres.sh scripts/database/postgres-init/001-app.sh
+```
+
+脚本拒绝覆盖已有数据或配置，生成随机密码，初始化普通应用账号并启用 pgvector。数据库设置 128 MB shared_buffers 和 30 个连接。生产 `.env` 配置 `DATABASE_DRIVER=postgres`、`PGHOST=auto-workflow-postgres`、`PGPORT=5432`、`PGDATABASE=auto_workflow`、`PGUSER=auto_workflow`，`PGPASSWORD` 来自服务器的应用密码文件。旧 MySQL 容器在切换验证成功后停止，但保留数据和配置。
+
+MySQL 迁移步骤：停止所有源库写入服务，备份 MySQL、环境文件和运行目录。在同一环境文件中临时保留旧库 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_DATABASE`、`MYSQL_USER`、`MYSQL_PASSWORD`，并配置新库 `PG*` 参数，然后执行：
+
+```bash
+node --env-file=<环境文件> --import tsx scripts/database/import-postgres.ts
+```
+
+工具持有旧库写锁，导入全部 14 张业务表，逐表核对内容，包括密码哈希、会话和附件字节，修正 PostgreSQL 审计 ID 序列，在单事务内提交。相同源内容再次导入会跳过，非空目标库拒绝被其他源覆盖；不支持的数据（例如文本 NUL）会报错并回滚。源 MySQL 不删除。SQLite 旧库可先使用保留的 `import-sqlite.ts` 导入临时 MySQL，再迁入 PostgreSQL。
+
+迁移验证完成后创建 `/var/lib/auto-workflow/POSTGRES_MIGRATED` 标记，并安装新版 `scripts/deploy/release.sh`。CI 发布检查此标记，停应用后通过 `pg_dump -Fc` 备份到 `postgres.dump`，再替换应用容器。恢复需管理员停服、核对版本后使用 `pg_restore`；不会自动恢复旧库，避免覆盖任务或重复执行 Agent 指令。新库接收写入后不可直接切回旧库。
+
+PostgreSQL 的建表位于 `migrations/postgres/`，使用事务和 advisory lock 执行迁移，拒绝未知新版本；通过数据库事务锁保留既有串行写入语义。当前仍使用工作线程维持同步数据库接口，每次查询最多等待 30 秒，连接失效后不自动重复写入，核对结果后重启应用恢复。`GET /api/health` 检查数据库，失败返回 503。
+
+### 向量搜索准备情况
+
+pgvector 扩展已启用，集成测试覆盖向量写入、余弦距离排序、HNSW 索引及带租户条件的查询。业务向量表、文本切分、embedding 模型和维度尚未选定，因此本次不创建固定维度的业务向量列，也不新增搜索 HTTP 接口。后续应按租户及模型版本隔离向量，并在查询中检查业务授权；有 HNSW 索引并不自动提供租户权限隔离。可参考 [pgvector 官方文档](https://github.com/pgvector/pgvector)。
+
+CI 使用独立 `workflow_test` 数据库进行 MySQL → PostgreSQL 导入、事务、认证与向量回归。手动运行 `test/postgres.test.ts` 时需提供 `POSTGRES_TEST=1`、两套测试库连接变量（`PG*` 和 `MYSQL_*`），并先由管理员在 PostgreSQL 测试库执行 `CREATE EXTENSION vector`。测试会清理测试库，禁止连接开发或生产业务库。
 
 开发机从本地服务切换到云端时，设置 `WORKBENCH_URL` 为新的 HTTPS 地址，使用云端个人账号，并给 `WORKBENCH_DEVICE_DIR` 指定新目录（例如 `.workflow-data/device-cloud`）。原状态目录绑定旧服务，不能直接复用。连接器保持运行后，在手机浏览器的“设备与 Agent”页面选择该设备新建远端任务。
 

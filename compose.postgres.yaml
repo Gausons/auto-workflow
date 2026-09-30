@@ -1,0 +1,27 @@
+# PostgreSQL + pgvector for host-based pnpm dev.
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg17-bookworm
+    container_name: auto-workflow-postgres-dev
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:15432:5432'
+    environment:
+      POSTGRES_DB: auto_workflow
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/admin-password
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./.workflow-data/postgres-dev/admin-password:/run/secrets/admin-password:ro
+      - ./.workflow-data/postgres-dev/app-password:/run/secrets/app-password:ro
+      - ./scripts/database/postgres-init:/docker-entrypoint-initdb.d:ro
+    command: ['postgres', '-c', 'shared_buffers=128MB', '-c', 'max_connections=30']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d auto_workflow']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+volumes:
+  postgres-data:
+    name: auto-workflow-postgres-dev-data

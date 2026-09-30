@@ -122,7 +122,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   app.server.listen(port, host, () => {
     const address = app.server.address();
     console.log(`Auto bug workflow workbench: http://${host}:${typeof address === 'object' && address ? address.port : port}`);
-    console.log(`Database: ${environment.DATABASE_DRIVER === 'mysql' ? 'MySQL' : app.filename}`);
+    console.log(`Database: ${environment.DATABASE_DRIVER === 'postgres' ? 'PostgreSQL + pgvector' : environment.DATABASE_DRIVER === 'mysql' ? 'MySQL' : app.filename}`);
     console.log('首次使用请在登录页注册个人账号，也可以配置 Google 登录。');
   });
   let stopping = false;

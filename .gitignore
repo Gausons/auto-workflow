@@ -3,6 +3,7 @@
 !/.gitignore
 !/AGENTS.md
 !/.github/
+!/compose.postgres.yaml
 !/Dockerfile
 !/.dockerignore
 !/.env.example
