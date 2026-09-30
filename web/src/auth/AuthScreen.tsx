@@ -68,7 +68,7 @@ export function AuthScreen({ hasSession, reload = () => location.reload() }: Aut
   const error = mode === 'login' ? login.error : register.error;
 
   return <div className="login-card">
-    <p className="eyebrow">BugFlow · 个人工作台</p>
+    <p className="eyebrow">AgentFlow · 个人工作台</p>
     <h1>{mode === 'login' ? '登录' : '注册个人账号'}</h1>
     <p>{mode === 'login' ? '继续处理你的缺陷、任务和 Agent 会话。' : '每个账号拥有独立的数据和设置。'}</p>
     <a className="button google-button" href="/api/auth/google/start">使用 Google 单点登录</a>
