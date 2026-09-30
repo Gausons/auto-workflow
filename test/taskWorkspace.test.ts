@@ -36,4 +36,10 @@ test('attachments validate limits and paths, preserve binary bytes and duplicate
   assert.throws(() => decodeAttachments([{name:'large',data:Buffer.alloc(5 * 1024 * 1024 + 1).toString('base64')}]), /5 MB/);
 });
 
-test('git route requires execution permission', () => { assert.equal(permissionForRoute('POST', '/api/task-center/git'), 'work.execute'); assert.equal(permissionForRoute('GET', '/api/task-center/git'), null); });
+test('git routes require execution permission and reject unknown methods', () => {
+  assert.equal(permissionForRoute('POST', '/api/task-center/git'), 'work.execute');
+  assert.equal(permissionForRoute('GET', '/api/task-center/git'), 'work.execute');
+  assert.equal(permissionForRoute('POST', '/api/task-center/git-action'), 'work.execute');
+  assert.equal(permissionForRoute('GET', '/api/task-center/git-action'), null);
+  assert.equal(permissionForRoute('DELETE', '/api/task-center/git'), null);
+});

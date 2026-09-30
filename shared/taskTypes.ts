@@ -62,6 +62,7 @@ export interface AgentProject {
   deviceName?: string;
   online?: boolean;
   commonDirectories?: string[];
+  gitBranches?: boolean;
 }
 
 export interface Device {
@@ -73,7 +74,7 @@ export interface Device {
   transport: 'manual' | 'connector';
   online?: boolean;
   codexProjects?: AgentProject[];
-  capabilities?: { resumeCodex?: boolean };
+  capabilities?: { resumeCodex?: boolean; gitBranches?: boolean };
 }
 
 export interface Session {
@@ -255,6 +256,15 @@ export interface TaskCenterData {
   handoffs: Handoff[];
   executions: Execution[];
   directoryRequests?: DirectoryRequest[];
+  gitRequests?: GitRequest[];
+}
+
+export interface GitBranchState { repository: boolean; current: string; changes: number; branches: string[] }
+export interface GitRequest {
+  id: string; deviceId: string; projectId: string; cwd: string; requestedBy: string;
+  action: 'list' | 'switch' | 'create'; branch?: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'unknown';
+  createdAt: string; updatedAt: string; result?: GitBranchState; message?: string;
 }
 
 export interface HistoryMessage {

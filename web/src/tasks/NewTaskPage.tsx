@@ -5,9 +5,9 @@ import { runDirectoryName } from './agentRunConfig.js';
 import type { AgentProject, TaskCenterData } from '../../../shared/taskTypes.js';
 import { ModelEffortMenu } from './ModelEffortMenu.js';
 import { DismissibleDetails } from '../components/DismissibleDetails.js';
+import { requestGitBranches } from './gitBranches.js';
 
 interface Targets { projects: AgentProject[]; localError?: string }
-interface BranchState { repository: boolean; current?: string; changes: number; branches: string[] }
 interface DirectoryResult { status: 'pending' | 'selecting' | 'completed' | 'cancelled' | 'failed'; requestId: string; cwd?: string; message?: string }
 interface Created { taskId: string; revision?: number }
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -88,8 +88,8 @@ export function NewTaskPage() {
   const branchKey = ['task-center', 'git', project?.deviceId || '', project?.id || '', project?.cwd || '', branchCwd] as const;
   const branchQuery = useQuery({
     queryKey: branchKey,
-    queryFn: ({ signal }) => apiRequest<BranchState>('/api/task-center/git', { method: 'POST', body: JSON.stringify({ action: 'list', projectId: project?.id, deviceId: project?.deviceId, cwd: branchCwd }), signal }),
-    enabled: active && canEdit && project?.deviceId === 'local' && !branchDirectoryPending, retry: false
+    queryFn: ({ signal }) => requestGitBranches(project!, branchCwd, 'list', undefined, signal),
+    enabled: active && canEdit && Boolean(project) && !branchDirectoryPending, retry: false
   });
   const branch = branchDirectoryPending ? undefined : branchQuery.data;
   const branchBusy = branchDirectoryPending || branchQuery.isFetching || branchMutating;
@@ -136,7 +136,7 @@ export function NewTaskPage() {
     setBranchMutating(true); setBranchActionError('');
     try {
       await queryClient.cancelQueries({ queryKey: branchKey });
-      const result = await apiRequest<BranchState>('/api/task-center/git', { method: 'POST', body: JSON.stringify({ action, branch: name, projectId: project.id, deviceId: project.deviceId, cwd }) });
+      const result = await requestGitBranches(project, cwd, action, name);
       queryClient.setQueryData(branchKey, result);
       if (action === 'create') setNewBranch('');
     } catch (failure) { setBranchActionError(errorMessage(failure)); }
@@ -169,7 +169,7 @@ export function NewTaskPage() {
             {!!project.commonDirectories?.length && <><p className="tc-create-hint">常用目录</p><div className="tc-directory-options">{project.commonDirectories.slice(0, 4).map(path => <button key={path} type="button" title={path} aria-label={path} aria-pressed={path === cwd} disabled={blocked} onClick={() => setCwd(path)}>▱ <span>{runDirectoryName(path)}<small>{path}</small></span></button>)}</div></>}
           </div></DismissibleDetails>
           <label className="tc-target-control" title="执行位置">▣ <select aria-label="执行位置" value={projectIndex} disabled={blocked} onChange={event => { setProjectIndex(Number(event.target.value)); setCwd(''); setModel(''); setEffort(''); }}>{targets.data?.projects.map((item, index) => <option key={`${item.deviceId}:${item.id}`} value={index}>{item.name} · {item.deviceName}{item.online ? '' : '（离线）'}</option>)}</select></label>
-          {project.deviceId === 'local' && <DismissibleDetails className="tc-config-menu tc-branch-menu" name="create-config" onToggle={event => { if (event.currentTarget.open && !branchBusy) void branchQuery.refetch(); }}><summary aria-label="Git 分支">⑂ <span>{branch?.repository ? branch.current || '分离 HEAD' : branchBusy ? '读取分支…' : branchError ? '分支读取失败' : branch ? '非 Git 目录' : 'Git 分支'}</span><span aria-hidden="true">⌄</span></summary><div className="tc-config-panel">
+          {<DismissibleDetails className="tc-config-menu tc-branch-menu" name="create-config" onToggle={event => { if (event.currentTarget.open && !branchBusy) void branchQuery.refetch(); }}><summary aria-label="Git 分支">⑂ <span>{branch?.repository ? branch.current || '分离 HEAD' : branchBusy ? '读取分支…' : branchError ? '分支读取失败' : branch ? '非 Git 目录' : 'Git 分支'}</span><span aria-hidden="true">⌄</span></summary><div className="tc-config-panel">
             {branchBusy ? <p role="status">正在处理分支…</p> : branchError ? <p role="alert">{branchError}</p> : branch?.repository ? <><input aria-label="搜索分支" value={branchSearch} onChange={event => setBranchSearch(event.target.value)} placeholder="搜索分支" /><p className="tc-create-hint">当前：{branch.current || '分离 HEAD'} · 未提交：{branch.changes} 项</p><div className="tc-branch-options">{branch.branches.filter(name => name.toLowerCase().includes(branchSearch.toLowerCase())).map(name => <button key={name} type="button" disabled={blocked} aria-pressed={name === branch.current} onClick={() => void loadBranches('switch', name)}>{name}{name === branch.current ? ' ✓' : ''}</button>)}</div><label className="tc-create-setting">新分支<input aria-label="新分支名称" value={newBranch} onChange={event => setNewBranch(event.target.value)} maxLength={200} /></label><button type="button" className="button secondary" disabled={blocked || !newBranch.trim()} onClick={() => void loadBranches('create', newBranch.trim())}>创建并切换</button></> : <p className="tc-create-hint">当前目录不是 Git 仓库。</p>}
           </div></DismissibleDetails>}
         </> : <p className="tc-create-hint" role="alert">{targets.data?.localError || '未发现可用 Agent，仍可创建任务。'}</p>}

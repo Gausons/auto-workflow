@@ -8,6 +8,7 @@ import { CodexAppServer } from './codexAppServer.js';
 import { AcpPreferredRunner, AcpTaskRunner, AgentRunnerSet, configuredAcpAgents } from './acpAgent.js';
 import { httpError } from './rbac.js';
 import { remoteContinuationProject } from './remoteSession.js';
+import { assertNoRemoteGitMutation } from './remoteGit.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { AgentModel, AgentProject, Execution, ExecutionStatus, InteractionRequest, Task, TaskCenterData, TaskStatus } from '../shared/taskTypes.js';
@@ -428,7 +429,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
       try { projects = await localProjects(true); }
       catch (error: unknown) { localProjectCache = { at: Date.now(), projects: [] }; localError = asError(error).message; }
       const data = database.readTaskCenter(tenantId), devices = data.devices;
-      for (const d of devices) for (const p of d.codexProjects || []) projects.push({ ...p, deviceId: d.id, deviceName: d.name, online: Date.now() - Date.parse(d.lastSeen) < 90000, commonDirectories: [] });
+      for (const d of devices) for (const p of d.codexProjects || []) projects.push({ ...p, deviceId: d.id, deviceName: d.name, online: Date.now() - Date.parse(d.lastSeen) < 90000, commonDirectories: [], gitBranches: d.capabilities?.gitBranches === true });
       projects = projects.map((project) => ({ ...project, commonDirectories: frequentDirectories(data, project.deviceId, project.cwd) }));
       return { projects, localError };
     },
@@ -597,6 +598,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
             if (!actor || device?.owner !== actor.id) throw httpError(403, '只有该设备的连接器账号可以领取和回报执行');
             if (input.action === 'claim') {
               if (saved.status !== 'queued') throw httpError(409, '执行已被领取，不会重复执行');
+              assertNoRemoteGitMutation(data, saved.deviceId);
               recordExecution(data, { ...saved, status: 'launching', message: '目标设备已领取，准备启动 Agent', updatedAt: timestamp() });
               return { job: structuredClone(saved) };
             }

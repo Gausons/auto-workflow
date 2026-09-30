@@ -9,6 +9,7 @@ import { createSessionDelivery } from './sessionDelivery/index.ts';
 import { createAgentHistory } from './agentHistory/index.js';
 import { createTaskCenter } from './taskCenter.js';
 import { createCodexExecution } from './codexExecution.js';
+import { createRemoteGit } from './remoteGit.js';
 import { createConversations } from './conversations.js';
 import { createContextModelSummarizer } from './contextModelSummary.js';
 import { applyAssignmentBusinessRules, buildAssignmentJsonSchema, buildAssignmentSystemPrompt, buildAssignmentUserPayload, isAssignmentCandidate, normalizeAssignmentPeople, normalizeAssignmentRecommendation } from './assignmentEngine.js';
@@ -170,7 +171,13 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
       if (typeof body.executionId !== 'string' || !/^[a-f0-9-]{36}$/.test(body.executionId)) throw Object.assign(new Error('执行标识无效'), { statusCode: 400 });
       sendJson(res, 200, conversations.transfer(transfer[1], body.executionId, req.method === 'POST' ? 'upload' : 'read', requestIdentity.getStore()!.user, body)); return;
     }
-    if (url.pathname === '/api/task-center/git' && req.method === 'POST') { sendJson(res, 200, await codexExecution.git(await readJson(req))); return; }
+    if (url.pathname === '/api/task-center/git') {
+      const actor = requestIdentity.getStore()!.user;
+      if (req.method === 'GET') { sendJson(res, 200, remoteGit.status(url.searchParams.get('requestId') || '', actor)); return; }
+      const input = await readJson(req);
+      sendJson(res, 200, input.deviceId && input.deviceId !== 'local' ? remoteGit.submit(input, actor) : await codexExecution.git(input)); return;
+    }
+    if (url.pathname === '/api/task-center/git-action' && req.method === 'POST') { sendJson(res, 200, remoteGit.action(await readJson(req), requestIdentity.getStore()!.user)); return; }
     if (url.pathname === '/api/task-center/directory-picker') {
       const actor = requestIdentity.getStore()!.user;
       sendJson(res, 200, req.method === 'GET' ? codexExecution.directoryStatus({ requestId: url.searchParams.get('requestId') || undefined }, actor) : await codexExecution.pickDirectory(await readJson(req), actor)); return;
@@ -657,6 +664,7 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
   const sessionDelivery = createSessionDelivery({ history: agentHistory, environment });
   const taskCenter = createTaskCenter({ database, tenantId: tenant.id, history: agentHistory });
   const codexExecution = createCodexExecution({ database, attachmentRoot: path.join(rootDir, '.workflow-data', 'attachments', createHash('sha256').update(tenant.id).digest('hex')), tenantId: tenant.id, workspace: () => state.config.codexWorkspaceDir, history: agentHistory, environment });
+  const remoteGit = createRemoteGit(database, tenant.id);
   const summarize = parseBooleanConfig(undefined, environment.ENABLE_CONTEXT_SUMMARY, Boolean(environment.OPENAI_API_KEY))
     ? createContextModelSummarizer({ apiKey: environment.OPENAI_API_KEY, baseUrl: state.config.openaiBaseUrl, model: environment.CONTEXT_SUMMARY_MODEL || state.config.aiAssignmentModel, timeoutMs: state.config.openaiTimeoutMs })
     : undefined;

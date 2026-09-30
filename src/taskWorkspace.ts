@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { httpError } from './rbac.js';
 const exec = promisify(execFile);
-type ErrorLike = Error & { stderr?: string | Buffer };
+type ErrorLike = Error & { stderr?: string | Buffer; killed?: boolean; signal?: string };
 const asError = (value: unknown): ErrorLike => value instanceof Error ? value as ErrorLike : new Error(String(value));
 const git = async (cwd: string, args: string[]) => (await exec('git', ['-C', cwd, ...args], { timeout: 15000, maxBuffer: 2 * 1024 * 1024 })).stdout.replace(/\n$/, '');
 async function readGitBranchState(cwd: string) {
@@ -32,8 +32,13 @@ export async function switchGitBranch(cwd: string, branch: unknown, create = fal
   try { await git(cwd, ['check-ref-format', `refs/heads/${branch}`]); }
   catch { throw httpError(400, '分支名称无效'); }
   try { await git(cwd, create ? ['switch', '-c', branch] : ['switch', '--no-guess', branch]); }
-  catch (caught: unknown) { const error = asError(caught); throw httpError(409, `无法切换分支，未强制覆盖文件：${String(error.stderr || error.message).slice(0, 1500)}`); }
-  return readGitBranchState(cwd);
+  catch (caught: unknown) {
+    const error = asError(caught);
+    if (error.killed || error.signal) throw Object.assign(httpError(502, 'Git 操作中断，分支结果待核对；不会自动重试'), { uncertain: true });
+    throw httpError(409, `无法切换分支，未强制覆盖文件：${String(error.stderr || error.message).slice(0, 1500)}`);
+  }
+  try { return await readGitBranchState(cwd); }
+  catch { throw Object.assign(httpError(502, '分支已切换，但读取结果失败，请刷新核对'), { uncertain: true }); }
 }
 export function decodeAttachments(input: unknown) {
   if (input === undefined) return [];

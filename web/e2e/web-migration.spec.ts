@@ -33,6 +33,27 @@ test('login, normal URLs, old hash links and deep refresh', async ({ page }) => 
   await expect(page.getByText('owner · E2E 用户')).toBeVisible();
 });
 
+test('remote branch selector reads and creates branches through the connector queue', async ({ page }) => {
+  let current = 'main';
+  await page.route('**/api/task-center/codex', route => route.fulfill({ json: { projects: [{ id: 'p', deviceId: 'remote', deviceName: '开发机', name: 'Codex', cwd: '/repo', online: true, gitBranches: true }] } }));
+  await page.route('**/api/task-center/git*', route => {
+    if (route.request().method() === 'POST') {
+      const body = route.request().postDataJSON();
+      expect(body.deviceId).toBe('remote');
+      if (body.action === 'create') current = body.branch;
+      return route.fulfill({ json: { id: body.requestId, status: 'pending' } });
+    }
+    return route.fulfill({ json: { status: 'completed', result: { repository: true, current, changes: 0, branches: ['main', ...(current !== 'main' ? [current] : [])] } } });
+  });
+  await login(page);
+  await page.getByRole('link', { name: '新建任务', exact: true }).click();
+  await expect(page.getByLabel('Git 分支')).toContainText('main');
+  await page.getByLabel('Git 分支').click();
+  await page.getByLabel('新分支名称').fill('feature/remote');
+  await page.getByRole('button', { name: '创建并切换' }).click();
+  await expect(page.getByLabel('Git 分支')).toContainText('feature/remote');
+});
+
 test('creates one task without silently starting an unavailable Agent', async ({ page }) => {
   await login(page);
   await page.getByRole('link', { name: '新建任务', exact: true }).click();
@@ -120,7 +141,7 @@ test('device setup selects remote target and browser controls a remote original 
   await expect(page.getByRole('navigation', { name: '主导航' }).getByRole('link', { name: '设备与 Agent', exact: true })).toHaveAttribute('aria-current', 'page');
   await page.reload();
   await expect(page.getByRole('heading', { name: '连接本机 Agent' })).toBeVisible();
-  await expect(page.getByLabel('设备连接配置')).toContainText("WORKBENCH_EXECUTE_CODEX='true'");
+  await expect(page.getByLabel('设备连接配置')).toContainText("WORKBENCH_USERNAME='owner'");
   expect(await page.getByLabel('设备连接配置').inputValue()).not.toContain(connectorToken);
   const device = page.locator('article').filter({ has: page.getByRole('heading', { name: '浏览器远端开发机' }) });
   await expect(device).toContainText('支持 Codex 原会话续聊');

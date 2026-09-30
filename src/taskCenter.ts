@@ -162,7 +162,7 @@ export function createTaskCenter({ database, tenantId, history }: { database: Ta
           if (!Array.isArray(input.agents) || input.agents.length > 20) throw httpError(400, 'Agent 列表无效');
           const devicePatch: Device = { id, owner: actor.id, name: required(input.name, 120), agents: input.agents.map(agent => required(agent, 80)), lastSeen: now(), transport: 'connector' };
           if (!device) { device = devicePatch; data.devices.push(device); } else Object.assign(device, devicePatch);
-          device.capabilities = { resumeCodex: inputRecord(input.capabilities).resumeCodex === true };
+          device.capabilities = { resumeCodex: inputRecord(input.capabilities).resumeCodex === true, gitBranches: inputRecord(input.capabilities).gitBranches === true };
           if (input.codexProjects !== undefined) {
             if (!Array.isArray(input.codexProjects) || input.codexProjects.length > 100) throw httpError(400, 'Codex 项目列表无效');
             device.codexProjects = input.codexProjects.map(value => { const p = inputRecord(value); return ({

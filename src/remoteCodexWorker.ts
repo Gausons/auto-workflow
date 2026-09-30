@@ -2,6 +2,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile, rename, realpath, stat } from 'node:fs/promises';
 import { CodexRunner, pickNativeDirectory } from './codexExecution.js';
+import { syncRemoteGit } from './remoteGitWorker.js';
 import { AcpPreferredRunner, AcpTaskRunner, AgentRunnerSet, configuredAcpAgents } from './acpAgent.js';
 import { contextPrompt, freezeContext, readContext, type ContextDelivery, type ContextEntry, type SessionContext } from './contextCompiler.js';
 import { verifyBundle, verifySnapshot } from '@auto-workflow/context-engine';
@@ -195,6 +196,7 @@ export class RemoteCodexWorker {
     }
     await this.flush();
     const snapshot = await this.request('GET') as TaskCenterData;
+    await syncRemoteGit({ request: this.request, deviceId: this.deviceId, directory: this.directory, projects: () => this.projects() }, snapshot);
     for (const job of snapshot.executions.filter(candidate => candidate.contextSourceDeviceId === this.deviceId && candidate.deviceId !== this.deviceId && candidate.status === 'queued' && candidate.remoteContext && !this.published.has(candidate.id))) {
       if (!job.conversationId) continue;
       try {

@@ -80,7 +80,7 @@ export async function syncDeviceOnce({ request, history, deviceId, name, outputD
   }
   for (let i = 0; i < Math.max(sessions.length, 1); i += 20) {
     const batch = sessions.slice(i, i + 20);
-    await request('POST', { action: 'heartbeat', deviceId, name, agents, capabilities: { resumeCodex }, sessions: batch.map(item => item.value), ...(i === 0 && codexProjects !== undefined ? { codexProjects } : {}) });
+    await request('POST', { action: 'heartbeat', deviceId, name, agents, capabilities: { resumeCodex, gitBranches: resumeCodex }, sessions: batch.map(item => item.value), ...(i === 0 && codexProjects !== undefined ? { codexProjects } : {}) });
     if (sessionIndex) for (const item of batch) sessionIndex[item.key] = item.fingerprint;
   }
   if (sessionIndex) for (const key of Object.keys(sessionIndex)) if (!currentKeys.has(key)) delete sessionIndex[key];
