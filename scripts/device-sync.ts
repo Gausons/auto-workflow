@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import { hostname } from 'node:os';
+import { createHash, randomUUID } from 'node:crypto';
+import { homedir, hostname } from 'node:os';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +25,33 @@ interface DeviceSession { nativeId: string; agent: string; title: string; cwd: s
 type ErrorLike = Error & { code?: string; status?: number };
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const asError = (value: unknown): ErrorLike => value instanceof Error ? value as ErrorLike : new Error(String(value));
+
+export function deviceStateDirectory(environment: Environment, identity: { origin: string; tenantId: string; userId: string }, root = process.cwd()) {
+  if (environment.WORKBENCH_DEVICE_DIR) return path.resolve(root, environment.WORKBENCH_DEVICE_DIR);
+  const connection = `${identity.origin}\0${identity.tenantId}\0${identity.userId}`;
+  return path.resolve(root, '.workflow-data', 'devices', createHash('sha256').update(connection).digest('hex').slice(0, 24));
+}
+
+export async function resolveDeviceStateDirectory(environment: Environment, identity: { origin: string; tenantId: string; userId: string }, root = process.cwd()) {
+  if (environment.WORKBENCH_DEVICE_DIR) return deviceStateDirectory(environment, identity, root);
+  const legacy = path.resolve(root, '.workflow-data', 'device');
+  try {
+    const saved = record(JSON.parse(await readFile(path.join(legacy, 'connection.json'), 'utf8')));
+    if (saved.origin === identity.origin && saved.tenantId === identity.tenantId && saved.userId === identity.userId) return legacy;
+  } catch (caught: unknown) {
+    const error = asError(caught);
+    if (error.code !== 'ENOENT') throw caught;
+  }
+  return deviceStateDirectory(environment, identity, root);
+}
+
+export function deviceConnectorDefaults(environment: Environment) {
+  return {
+    execute: environment.WORKBENCH_EXECUTE_CODEX !== 'false',
+    includeExcerpts: environment.WORKBENCH_SYNC_EXCERPTS !== 'false',
+    workspace: environment.CODEX_WORKSPACE_DIR || homedir()
+  };
+}
 
 // A transport only: receiving a packet never launches a process or marks it started.
 export async function syncDeviceOnce({ request, history, deviceId, name, outputDir, includeExcerpts = false, codexProjects, resumeCodex = false }: SyncOptions) {
@@ -63,7 +90,8 @@ export async function syncDeviceOnce({ request, history, deviceId, name, outputD
 
 async function main() {
   const environment: Environment = { ...process.env };
-  if (environment.WORKBENCH_EXECUTE_CODEX === 'true' && process.argv.includes('--once')) throw new Error('Agent 执行模式需要保持连接器运行，请移除 --once');
+  const defaults = deviceConnectorDefaults(environment);
+  if (defaults.execute && process.argv.includes('--once')) throw new Error('Agent 执行模式需要保持连接器运行；如需单次同步，请设置 WORKBENCH_EXECUTE_CODEX=false');
   if (!environment.WORKBENCH_URL) throw new Error('请设置 WORKBENCH_URL，连接参数见 README「多设备执行」');
   const base = new URL(environment.WORKBENCH_URL);
   if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password) throw new Error('工作台地址无效');
@@ -75,18 +103,19 @@ async function main() {
     if (typeof result.token !== 'string') throw new Error('登录响应缺少令牌');
     token = result.token;
   }
-  const stateDir = path.resolve(environment.WORKBENCH_DEVICE_DIR || '.workflow-data/device');
-  await mkdir(stateDir, { recursive: true, mode: 0o700 });
   const identityResponse = await fetch(new URL('/api/auth/session', base), { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30000) });
   const identity = record(await identityResponse.json());
   if (!identityResponse.ok) throw new Error(String(identity.message || '连接器登录已失效'));
   const tenantId = record(identity.tenant).id, userId = record(identity.user).id;
   if (typeof tenantId !== 'string' || typeof userId !== 'string' || !Array.isArray(identity.permissions) || !identity.permissions.includes('work.execute')) throw new Error('接入设备需要操作员或管理员权限');
-  await bindDeviceConnection(stateDir, { origin: base.origin, tenantId, userId });
+  const connectionIdentity = { origin: base.origin, tenantId, userId };
+  const stateDir = await resolveDeviceStateDirectory(environment, connectionIdentity);
+  await mkdir(stateDir, { recursive: true, mode: 0o700 });
+  await bindDeviceConnection(stateDir, connectionIdentity);
   let deviceId;
   try { deviceId = (await readFile(path.join(stateDir, 'id'), 'utf8')).trim(); }
   catch (caught: unknown) { const error = asError(caught); if (error.code !== 'ENOENT') throw error; deviceId = randomUUID(); await writeFile(path.join(stateDir, 'id'), deviceId, { flag: 'wx', mode: 0o600 }); }
-  const history = createAgentHistory({ environment, workspace: () => environment.CODEX_WORKSPACE_DIR || process.cwd() });
+  const history = createAgentHistory({ environment, workspace: () => defaults.workspace });
   const delivery = createSessionDelivery({ history, environment });
   const request: Request = async (method, body, endpoint = '/api/task-center') => {
     const binary = body instanceof Uint8Array;
@@ -99,7 +128,7 @@ async function main() {
     return record(await response.json());
   };
   const outputDir = path.join(stateDir, 'inbox');
-  const worker = environment.WORKBENCH_EXECUTE_CODEX === 'true' ? new RemoteCodexWorker({ request, deviceId, directory: path.join(stateDir, 'executions'), workspace: environment.CODEX_WORKSPACE_DIR || process.cwd(), contextSource: { catalog: () => history.catalog(), delivery } }) : null;
+  const worker = defaults.execute ? new RemoteCodexWorker({ request, deviceId, directory: path.join(stateDir, 'executions'), workspace: defaults.workspace, contextSource: { catalog: () => history.catalog(), delivery } }) : null;
   const stopping = new AbortController();
   const stop = () => stopping.abort();
   process.once('SIGINT', stop);
@@ -114,7 +143,7 @@ async function main() {
     do {
       try {
         const result = await syncDeviceOnce({ request, history, deviceId, name: environment.WORKBENCH_DEVICE_NAME || hostname(), outputDir,
-          includeExcerpts: environment.WORKBENCH_SYNC_EXCERPTS === 'true', codexProjects: worker ? await worker.projects() : [], resumeCodex: Boolean(worker) });
+          includeExcerpts: defaults.includeExcerpts, codexProjects: worker ? await worker.projects() : [], resumeCodex: Boolean(worker) });
         console.log(`同步 ${result.sessions} 个会话，接收 ${result.received} 个交接包`);
       } catch (caught: unknown) { reportError(caught); }
       // A history/discovery failure must not prevent approvals or stop requests

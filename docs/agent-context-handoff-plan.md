@@ -39,7 +39,7 @@
 | 直接执行 | `src/codexExecution.ts` 组合任务正文、来源片段和本轮指令，支持本地/远端 | 与手工交接两套入口互斥；未消费 handoff packet；来源仅取单会话 |
 | ACP | `src/acpAgent.ts` 完成 initialize/new/prompt、输出、权限交互和取消 | 当前实现每次新建会话，未提供通用已有会话 load/append |
 | 原会话续聊 | `continueHistory` 支持本机 Codex；具备 requestId 去重、忙碌检查及未知结果核对 | Claude 和远端历史尚未支持；桌面 IPC 是实验性路径 |
-| 多设备 | `scripts/device-sync.ts` 同步目录、片段、交接包；RemoteCodexWorker 领取执行 | 默认不上传正文；可选仅最近 30 条中的用户/助手文本、末尾 24000 字符；收到包不会启动 |
+| 多设备 | `scripts/device-sync.ts` 同步目录、片段、交接包；RemoteCodexWorker 领取执行 | 默认同步最近 30 条中的用户/助手文本（末尾 24000 字符）并启用执行，可显式关闭；收到手工交接包仍不会直接启动 |
 | 文件与代码 | 任务保存文件描述；执行支持本地附件；可查询/切换 Git 分支 | 未交付未提交改动、附件和仓库快照；远端执行拒绝上传附件 |
 | 持久化 | PostgreSQL 事务及租户隔离；任务中心存放于每租户一个 JSON payload | 交接、执行、上下文缺少独立约束和索引，不宜长期承载完整历史 |
 

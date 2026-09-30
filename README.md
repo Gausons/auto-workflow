@@ -74,7 +74,7 @@ flowchart TB
 - **前后端边界**：`web/src/` 经 Vite 构建到 `public/build/`，由 HTTP 入口提供；`shared/` 只存放前后端共享类型与纯业务函数。
 - **账号与数据边界**：HTTP 入口统一认证；数据访问层限定个人账号范围，设备交接进一步校验连接器账号、设备和执行归属。
 - **执行与交接边界**：任务归属、执行调度和未知结果核对由工作台及执行器负责。共享上下文包负责来源适配、快照和数据包校验；Markdown 呈现、HTTP 传输与 Agent 启停仍由宿主模块完成。
-- **跨设备数据流**：来源设备冻结记录，经工作台传递 v3 清单与原始图片对象，目标设备校验并生成上下文文件后执行。代码仓库和普通附件文件需另行准备，连接器默认只同步，启用执行需设置 `WORKBENCH_EXECUTE_CODEX=true`。
+- **跨设备数据流**：来源设备冻结记录，经工作台传递 v3 清单与原始图片对象，目标设备校验并生成上下文文件后执行。代码仓库和普通附件文件需另行准备；连接器默认启用执行与历史摘要同步，可用环境变量显式关闭。
 
 上下文协议及后续规划见[会话与数据流转核心引擎设计](docs/context-transfer-engine-design.md)。
 
@@ -230,7 +230,7 @@ IDE_HISTORY_SCOPE=all
 
 ### 从网页连接开发机并远程控制
 
-在浏览器点击左侧主导航“设备与 Agent”（`/devices`，任务中心内也有同名标签），使用“连接本机 Agent”向导填写服务地址、设备名和开发机项目路径，复制连接配置。在开发机准备好本项目与依赖，将配置保存为项目根目录的 `.env.device`，在本机填写账号密码后运行：
+在浏览器点击左侧主导航“设备与 Agent”（`/devices`，任务中心内也有同名标签），使用“连接本机 Agent”向导填写服务地址并复制三项登录配置。在开发机准备好本项目与依赖，将配置保存为项目根目录的 `.env.device`，在本机填写账号密码后运行：
 
 ```bash
 chmod 600 .env.device
@@ -239,13 +239,22 @@ pnpm device:connect
 
 `device:connect` 使用 Node 的 `--env-file=.env.device` 加载配置；已有进程环境变量优先。配置文件已被 Git 忽略，网页生成器不会导出浏览器令牌，也不会保存账号密码。需要 Node.js 22.16+；Windows 可使用文件权限设置限制配置文件访问。连接器仍以前台进程运行，需要保持终端或通过你自己的进程管理器运行；本次没有安装系统常驻服务。
 
-向导默认启用远程执行，并仅同步所选工作目录内的历史元数据。设备卡片区分在线/离线、仅同步/可执行和原会话续聊能力。“新建远端任务”会预选该设备；网页可查看输出、回应审批与提问、停止执行或核对未知结果。恢复本机原有 Codex 历史时，在历史会话页面打开该设备的会话直接发送消息；当前仅允许连接器公布的 Codex 项目目录，已归档会话不能续聊。工作台创建的 ACP 会话仍通过既有会话恢复协议继续。
+连接器默认以当前用户主目录作为工作目录、启用远程执行、扫描全部工作区历史并同步最近的用户/助手摘要。设备卡片区分在线/离线、仅同步/可执行和原会话续聊能力。“新建远端任务”会预选该设备；网页可查看输出、回应审批与提问、停止执行或核对未知结果。恢复本机原有 Codex 历史时，在历史会话页面打开该设备的会话直接发送消息；当前仅允许连接器公布或在目标机器上明确选择的目录，已归档会话不能续聊。工作台创建的 ACP 会话仍通过既有会话恢复协议继续。
 
 网络链路为 `浏览器 → 工作台服务 ← 开发机连接器 → 本机 Agent`。开发机主动发起 HTTP 请求，无需开放入站端口；浏览器与开发机都必须能访问工作台服务。`localhost` 只代表各自所在机器，跨设备时须填写可达的工作台地址。对外部署使用 HTTPS 反向代理；本版本沿用约 3 秒一次的执行同步与网页轮询，并非 Happy 的 WebSocket 或端到端加密实现。服务端会保存执行消息和输出，需部署在可信环境中。
 
 原会话续聊通过目标设备的 `thread/resume` 和 `turn/start` 执行，服务端不会代为启动本地 Agent。相同发送标识只创建一次执行；连接器启动前重新核对本机历史与工作目录。遇到原会话占用或恢复失败时明确报错，不创建替代会话。设备离线时新消息排队，队列中的执行可取消；进程中断或结果未知时不会自动重发。审批、停止和核对操作先记录本地回执再执行，异常退出后不重复提交已接收的操作。
 
-连接器状态目录会绑定工作台地址和账号；切换账号或服务地址必须设置独立的 `WORKBENCH_DEVICE_DIR`，避免把旧执行日志发送到错误的工作台。旧状态目录第一次升级运行时绑定当前身份。登录会话过期后连接器停止；重新登录启动即可，日志保留以便核对。正常退出会关闭 Agent 连接并保存未结束执行的待核对状态。
+连接器状态目录会绑定工作台地址和账号。未配置 `WORKBENCH_DEVICE_DIR` 时，连接器按工作台 origin、租户和账号生成独立目录，因此一台机器可以同时运行多个连接器连接不同服务器或账号；显式指定目录时仍会校验绑定身份，避免把旧执行日志发送到错误的工作台。登录会话过期后连接器停止；重新登录启动即可，日志保留以便核对。正常退出会关闭 Agent 连接并保存未结束执行的待核对状态。
+
+同时连接多台服务器时，将三项登录配置分别保存为已被 Git 忽略的 `.env.server-a`、`.env.server-b`，并在不同终端启动：
+
+```bash
+node --env-file=.env.server-a --import tsx scripts/device-sync.ts
+node --env-file=.env.server-b --import tsx scripts/device-sync.ts
+```
+
+两个进程会使用不同的自动状态目录和设备标识，互不复用执行日志。
 
 ### 使用环境变量接入
 
@@ -254,8 +263,6 @@ pnpm device:connect
 ```bash
 WORKBENCH_URL=https://workbench.example.com \
 WORKBENCH_TOKEN='<登录会话令牌>' \
-WORKBENCH_DEVICE_NAME='开发机 MacBook' \
-CODEX_WORKSPACE_DIR=/absolute/path/to/repository \
 pnpm device:sync
 ```
 
@@ -268,16 +275,17 @@ WORKBENCH_PASSWORD='<password>' \
 pnpm device:sync
 ```
 
-连接器默认只同步设备、会话和交接包，不会启动 Agent。需要让该设备承接远端任务时，增加 `WORKBENCH_EXECUTE_CODEX=true`，并保持连接器持续运行；执行模式不能和 `--once` 同时使用。
+连接器默认启用远程执行和历史摘要同步，并保持持续运行。仅同步时设置 `WORKBENCH_EXECUTE_CODEX=false`；只有关闭执行后才能使用 `--once`。如果不希望上传摘要正文，设置 `WORKBENCH_SYNC_EXCERPTS=false`。
 
 常用可选变量：
 
 | 变量 | 说明 |
 | --- | --- |
 | `WORKBENCH_DEVICE_NAME` | 工作台中显示的设备名；默认使用主机名 |
-| `WORKBENCH_DEVICE_DIR` | 连接器状态与交接包目录；默认 `.workflow-data/device` |
-| `WORKBENCH_SYNC_EXCERPTS=true` | 同步会话摘要正文；默认不上传 |
-| `WORKBENCH_EXECUTE_CODEX=true` | 启用远端 Agent 执行 |
+| `WORKBENCH_DEVICE_DIR` | 连接器状态与交接包目录；默认按服务器、租户和账号隔离在 `.workflow-data/devices/` 下 |
+| `CODEX_WORKSPACE_DIR` | 默认 Agent 工作目录；默认当前用户主目录 |
+| `WORKBENCH_SYNC_EXCERPTS=false` | 关闭会话摘要正文同步；默认同步 |
+| `WORKBENCH_EXECUTE_CODEX=false` | 关闭远端 Agent 执行；默认启用 |
 
 ## 任务时间线与会话归属
 
@@ -508,7 +516,7 @@ node --import tsx scripts/testing/run.ts node test/database.test.ts
 
 CI 的 TEST_PGHOST、TEST_PGPORT、TEST_PGUSER、TEST_PGPASSWORD、TEST_PGDATABASE 仅连接临时测试服务；不得用于业务库。
 
-开发机从本地服务切换到云端时，设置 `WORKBENCH_URL` 为新的 HTTPS 地址，使用云端个人账号，并给 `WORKBENCH_DEVICE_DIR` 指定新目录（例如 `.workflow-data/device-cloud`）。原状态目录绑定旧服务，不能直接复用。连接器保持运行后，在手机浏览器的“设备与 Agent”页面选择该设备新建远端任务。
+开发机从本地服务切换到云端时，设置 `WORKBENCH_URL` 为新的 HTTPS 地址并使用云端个人账号。默认状态目录按服务器和账号自动隔离，不需要手工切换；显式设置 `WORKBENCH_DEVICE_DIR` 时不能把已绑定其他服务的目录复用。连接器保持运行后，在手机浏览器的“设备与 Agent”页面选择该设备新建远端任务。
 
 ## License
 

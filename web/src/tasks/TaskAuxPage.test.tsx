@@ -91,11 +91,11 @@ describe('TaskAuxPage', () => {
   it('generates connection configuration without exposing the browser token', async () => {
     setup('#devices', ['read', 'work.execute']);
     const config = await screen.findByLabelText('设备连接配置');
-    expect((config as HTMLTextAreaElement).value).toContain("WORKBENCH_EXECUTE_CODEX='true'");
+    expect((config as HTMLTextAreaElement).value.split('\n')).toHaveLength(3);
+    expect((config as HTMLTextAreaElement).value).toContain('WORKBENCH_USERNAME=');
+    expect((config as HTMLTextAreaElement).value).not.toContain('WORKBENCH_EXECUTE_CODEX');
     expect((config as HTMLTextAreaElement).value).not.toContain('WORKBENCH_TENANT');
     expect((config as HTMLTextAreaElement).value).not.toContain('test-token');
-    await userEvent.setup().click(screen.getByRole('checkbox'));
-    expect((config as HTMLTextAreaElement).value).toContain("WORKBENCH_EXECUTE_CODEX='false'");
     expect(screen.getByText('pnpm device:connect')).toBeTruthy();
   });
 
