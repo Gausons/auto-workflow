@@ -60,7 +60,7 @@ jobs:
         run: pnpm agent:pack
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: bugflow-agent
+          name: agent-workbench-connector
           path: dist/device-agent/*.tgz
           if-no-files-found: error
       - run: pnpm exec playwright install --with-deps chromium
@@ -131,7 +131,7 @@ jobs:
     timeout-minutes: 10
     environment: npm
     concurrency:
-      group: npm-bugflow-agent
+      group: npm-agent-workbench-connector
       cancel-in-progress: false
     permissions:
       contents: read
@@ -151,7 +151,7 @@ jobs:
           package-manager-cache: false
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
-          name: bugflow-agent
+          name: agent-workbench-connector
           path: dist/device-agent
       - name: Validate release tag and archive
         id: agent
@@ -171,8 +171,8 @@ jobs:
           AGENT_VERSION: ${{ steps.agent.outputs.version }}
         run: |
           mkdir -p "$RUNNER_TEMP/agent-smoke"
-          pnpm --dir "$RUNNER_TEMP/agent-smoke" add "bugflow-agent@$AGENT_VERSION" --ignore-scripts --registry=https://registry.npmjs.org
-          installed=$("$RUNNER_TEMP/agent-smoke/node_modules/.bin/bugflow-agent" --version)
+          pnpm --dir "$RUNNER_TEMP/agent-smoke" add "agent-workbench-connector@$AGENT_VERSION" --ignore-scripts --registry=https://registry.npmjs.org
+          installed=$("$RUNNER_TEMP/agent-smoke/node_modules/.bin/agent-workbench-connector" --version)
           [[ "$installed" == "$AGENT_VERSION" ]]
 
   deploy:

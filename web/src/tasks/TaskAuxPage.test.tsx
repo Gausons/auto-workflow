@@ -96,8 +96,8 @@ describe('TaskAuxPage', () => {
     expect((config as HTMLTextAreaElement).value).not.toContain('WORKBENCH_EXECUTE_CODEX');
     expect((config as HTMLTextAreaElement).value).not.toContain('WORKBENCH_TENANT');
     expect((config as HTMLTextAreaElement).value).not.toContain('test-token');
-    expect(screen.getByText('npm install -g bugflow-agent')).toBeTruthy();
-    expect(screen.getByText('bugflow-agent --env-file ./agent.env')).toBeTruthy();
+    expect(screen.getByText('npm install -g agent-workbench-connector')).toBeTruthy();
+    expect(screen.getByText('agent-workbench-connector --env-file ./agent.env')).toBeTruthy();
   });
 
   it('shows device status from the snapshot', async () => {

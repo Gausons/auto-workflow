@@ -8,7 +8,7 @@ if [[ ! "$tag" =~ ^agent-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]];
   exit 1
 fi
 version=${tag#agent-v}
-archive="dist/device-agent/bugflow-agent-$version.tgz"
+archive="dist/device-agent/agent-workbench-connector-$version.tgz"
 shopt -s nullglob
 archives=(dist/device-agent/*.tgz)
 if [[ ${#archives[@]} -ne 1 || "${archives[0]}" != "$archive" ]]; then
@@ -21,7 +21,7 @@ tar -xOf "$archive" package/package.json | node --input-type=module -e '
   const packed = JSON.parse(readFileSync(0, "utf8"));
   const source = JSON.parse(readFileSync("packages/device-agent/package.json", "utf8"));
   for (const manifest of [packed, source]) {
-    assert.equal(manifest.name, "bugflow-agent");
+    assert.equal(manifest.name, "agent-workbench-connector");
     assert.equal(manifest.version, process.argv[1]);
     assert.equal(manifest.repository?.url, "git+https://github.com/Gausons/auto-workflow.git");
     assert.equal(manifest.private, undefined);

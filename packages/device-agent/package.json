@@ -1,7 +1,7 @@
 {
-  "name": "bugflow-agent",
+  "name": "agent-workbench-connector",
   "version": "0.3.0",
-  "description": "BugFlow 开发机连接器：远端 Agent 执行、会话同步与 Git 分支管理",
+  "description": "Agent Workbench 开发机连接器：远端 Agent 执行、会话同步与 Git 分支管理",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -10,7 +10,7 @@
     "directory": "packages/device-agent"
   },
   "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org" },
-  "bin": { "bugflow-agent": "dist/agent.mjs" },
+  "bin": { "agent-workbench-connector": "dist/agent.mjs" },
   "files": ["dist", "README.md"],
   "engines": { "node": ">=22.16.0" },
   "scripts": { "prepack": "node --import tsx ../../scripts/build-device-agent.ts" },

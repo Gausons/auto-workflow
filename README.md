@@ -235,15 +235,15 @@ IDE_HISTORY_SCOPE=all
 连接器独立包发布到 npm 后，可以安装并运行：
 
 ```bash
-npm install -g bugflow-agent
-bugflow-agent --env-file ./agent.env
+npm install -g agent-workbench-connector
+agent-workbench-connector --env-file ./agent.env
 ```
 
-先将向导生成的配置保存到 `agent.env` 并填写账号密码；macOS/Linux 使用 `chmod 600 agent.env`，Windows 使用文件权限限制当前用户可读。尚未发布到 registry 时，可安装维护者提供的 `bugflow-agent-0.3.0.tgz`：`npm install -g ./bugflow-agent-0.3.0.tgz`，同样无需源码。安装包不包含 Agent 可执行程序，Codex / Claude 仍需自行安装并登录。
+先将向导生成的配置保存到 `agent.env` 并填写账号密码；macOS/Linux 使用 `chmod 600 agent.env`，Windows 使用文件权限限制当前用户可读。尚未发布到 registry 时，可安装维护者提供的 `agent-workbench-connector-0.3.0.tgz`：`npm install -g ./agent-workbench-connector-0.3.0.tgz`，同样无需源码。安装包不包含 Agent 可执行程序，Codex / Claude 仍需自行安装并登录。
 
-`bugflow-agent` 默认读取 `~/.bugflow/agent.env`（存在时），支持 `--env-file`、`--help`、`--version` 和仅同步模式的 `--once`。已有环境变量优先，不自动读取当前目录的 `.env`。默认设备状态位于 `~/.workflow-data/devices/<连接标识>/`，从不同目录启动不会改变设备身份。迁移已有连接器时，先正常停止旧进程，再将 `WORKBENCH_DEVICE_DIR` 指向旧状态目录的绝对路径以保留身份和执行日志；不要同时运行两个处理同一设备的进程。升级包不会删除设备状态。
+`agent-workbench-connector` 默认读取 `~/.bugflow/agent.env`（存在时），支持 `--env-file`、`--help`、`--version` 和仅同步模式的 `--once`。已有环境变量优先，不自动读取当前目录的 `.env`。默认设备状态位于 `~/.workflow-data/devices/<连接标识>/`，从不同目录启动不会改变设备身份。迁移已有连接器时，先正常停止旧进程，再将 `WORKBENCH_DEVICE_DIR` 指向旧状态目录的绝对路径以保留身份和执行日志；不要同时运行两个处理同一设备的进程。升级包不会删除设备状态。
 
-维护者运行 `pnpm agent:pack` 生成 `dist/device-agent/bugflow-agent-0.3.0.tgz`；CI 也保存独立安装包供下载。构建只复用已有 Vite 和 ACP SDK，不发布整个工作台，不包含 `.env`、数据库和本地会话。npm 发布由 `agent-vX.Y.Z` 标签触发，完整 CI 通过后发布同一次构建的安装包，普通构建不会发布。配置见下文“连接器 npm 发布”，包说明见 [device-agent](packages/device-agent/README.md)。仓库开发仍统一使用 pnpm，上面的 npm 命令用于开发机安装发行包。
+维护者运行 `pnpm agent:pack` 生成 `dist/device-agent/agent-workbench-connector-0.3.0.tgz`；CI 也保存独立安装包供下载。构建只复用已有 Vite 和 ACP SDK，不发布整个工作台，不包含 `.env`、数据库和本地会话。npm 发布由 `agent-vX.Y.Z` 标签触发，完整 CI 通过后发布同一次构建的安装包，普通构建不会发布。配置见下文“连接器 npm 发布”，包说明见 [device-agent](packages/device-agent/README.md)。仓库开发仍统一使用 pnpm，上面的 npm 命令用于开发机安装发行包。
 
 ### 从源码启动连接器（开发调试）
 
@@ -276,8 +276,8 @@ pnpm device:connect:dev
 同时连接多台服务器时，将三项登录配置分别保存为已被 Git 忽略的 `.env.server-a`、`.env.server-b`，并在不同终端启动：
 
 ```bash
-bugflow-agent --env-file .env.server-a
-bugflow-agent --env-file .env.server-b
+agent-workbench-connector --env-file .env.server-a
+agent-workbench-connector --env-file .env.server-b
 ```
 
 两个进程会使用不同的自动状态目录和设备标识，互不复用执行日志。
@@ -428,12 +428,12 @@ test/         Node.js 测试
 
 #### 连接器 npm 发布
 
-`publish_agent` 只在本仓库推送 `agent-vX.Y.Z` 正式版本标签且全部检查通过后运行，与网站部署独立；标签提交必须已合入 main，标签版本必须等于 `packages/device-agent/package.json` 及安装包中的版本。发布任务下载本次 CI 的 `bugflow-agent` Artifact，不重新构建，串行发布到 npm 的 `latest`。PR、普通 main 提交、手动 Run workflow 不会发布 npm；连接器标签不会部署网站。
+`publish_agent` 只在本仓库推送 `agent-vX.Y.Z` 正式版本标签且全部检查通过后运行，与网站部署独立；标签提交必须已合入 main，标签版本必须等于 `packages/device-agent/package.json` 及安装包中的版本。发布任务下载本次 CI 的 `agent-workbench-connector` Artifact，不重新构建，串行发布到 npm 的 `latest`。PR、普通 main 提交、手动 Run workflow 不会发布 npm；连接器标签不会部署网站。
 
 首次配置：
 
 1. 在 GitHub 创建独立的 `npm` Environment，仅允许 `agent-v*` 标签，建议设置审核人，并用仓库 Ruleset 限制这些标签的创建、更新和删除。
-2. 包已存在时，在 npm 包设置添加 GitHub Actions Trusted Publisher：Owner **Gausons**、Repository **auto-workflow**、Workflow **ci-cd.yml**、Environment **npm**，允许直接 `npm publish`。字段大小写须完全一致。OIDC 使用短期凭据，无需保存本机登录 Token。参考 [npm 可信发布文档](https://docs.npmjs.com/trusted-publishers/)。
+2. 包已存在时，在 npm 的 `agent-workbench-connector` 包设置添加 GitHub Actions Trusted Publisher：Owner **Gausons**、Repository **auto-workflow**、Workflow **ci-cd.yml**、Environment **npm**，允许直接 `npm publish`。字段大小写须完全一致。OIDC 使用短期凭据，无需保存本机登录 Token；其他包的可信发布配置不会随改名自动转移。参考 [npm 可信发布文档](https://docs.npmjs.com/trusted-publishers/)。
 3. 若包尚不存在，可先由维护者手动发布首个已验证 tgz，再配置可信发布；也可在 `npm` Environment 添加临时 `NPM_TOKEN` Secret，让首次标签发布在 CI 完成。后者需要有创建该包权限、可非交互发布的 npm granular token（按账号策略设置 bypass 2FA、最小权限及短有效期）。本机 `npm login` 不会给 GitHub Runner 授权。不要将本机 `.npmrc` 提交或把 Token 发到聊天中。首次发布完成并配置好可信发布后删除该 Secret。
 
 后续发布先修改连接器包的 `version`、提交并合入 main，再对包含这些改动的提交打标签，例如版本为 0.3.0 时：

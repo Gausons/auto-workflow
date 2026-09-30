@@ -10,9 +10,9 @@ async function main() {
     'env-file': { type: 'string' }, once: { type: 'boolean' }
   } });
   if (values.help) {
-    console.log(`BugFlow 开发机连接器
+    console.log(`Agent Workbench 开发机连接器
 
-用法：bugflow-agent [--env-file <配置文件>] [--once]
+用法：agent-workbench-connector [--env-file <配置文件>] [--once]
 
   --env-file <文件>  加载连接配置，已有环境变量优先
                     默认读取 ~/.bugflow/agent.env（文件存在时）

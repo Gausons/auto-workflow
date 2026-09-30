@@ -13,7 +13,7 @@ const exec = promisify(execFile);
 const root = fileURLToPath(new URL('../', import.meta.url));
 
 test('packed device agent installs and runs outside the repository without TypeScript or workspace packages', { timeout: 120000 }, async t => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'bugflow-agent-package-'));
+  const directory = await mkdtemp(path.join(tmpdir(), 'agent-workbench-connector-package-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   await exec('pnpm', ['--dir', path.join(root, 'packages/device-agent'), 'pack', '--pack-destination', directory], { cwd: root, timeout: 30000 });
   const archive = path.join(directory, (await readdir(directory)).find(name => name.endsWith('.tgz'))!);
@@ -32,13 +32,15 @@ test('packed device agent installs and runs outside the repository without TypeS
   const install = path.join(directory, 'installed'); await mkdir(install);
   // Offline installation also proves the tarball has no dependency on unpublished workspace packages.
   await exec('pnpm', ['--dir', install, 'add', '--offline', '--ignore-scripts', archive], { timeout: 60000 });
-  const command = path.join(install, 'node_modules', '.bin', 'bugflow-agent');
-  const manifest = JSON.parse(await readFile(path.join(install, 'node_modules/bugflow-agent/package.json'), 'utf8')) as { version: string; dependencies: Record<string, string> };
+  const command = path.join(install, 'node_modules', '.bin', 'agent-workbench-connector');
+  const manifest = JSON.parse(await readFile(path.join(install, 'node_modules/agent-workbench-connector/package.json'), 'utf8')) as { version: string; dependencies: Record<string, string> };
   assert.ok(Object.values(manifest.dependencies).every(value => !value.startsWith('workspace:')));
   const cwd = path.join(directory, 'unrelated'); await mkdir(cwd);
   const baseEnv = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT };
   await t.test('installed executable exposes help/version and rejects invalid arguments', async () => {
-    assert.match((await exec(command, ['--help'], { cwd, env: baseEnv })).stdout, /--env-file/);
+    const help = (await exec(command, ['--help'], { cwd, env: baseEnv })).stdout;
+    assert.match(help, /用法：agent-workbench-connector \[--env-file/);
+    assert.match(help, /Agent Workbench 开发机连接器/);
     assert.equal((await exec(command, ['--version'], { cwd, env: baseEnv })).stdout.trim(), manifest.version);
     await assert.rejects(exec(command, ['--bogus'], { cwd, env: baseEnv }));
     await assert.rejects(exec(command, ['--env-file', path.join(directory, 'missing.env')], { cwd, env: baseEnv }), /无法读取连接配置|not found/);

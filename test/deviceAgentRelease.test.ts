@@ -12,10 +12,10 @@ test('agent publication is tag-only, gated by checks, isolated from production a
   assert.match(job, /needs: checks/);
   assert.match(job, /if: github.event_name == 'push' && startsWith\(github.ref, 'refs\/tags\/agent-v'\) && github.repository == 'Gausons\/auto-workflow'/);
   assert.match(job, /environment: npm/);
-  assert.match(job, /group: npm-bugflow-agent\n\s+cancel-in-progress: false/);
+  assert.match(job, /group: npm-agent-workbench-connector\n\s+cancel-in-progress: false/);
   assert.match(job, /id-token: write/);
   assert.match(job, /git merge-base --is-ancestor HEAD origin\/main/);
-  assert.match(job, /actions\/download-artifact@[a-f0-9]+[\s\S]*name: bugflow-agent/);
+  assert.match(job, /actions\/download-artifact@[a-f0-9]+[\s\S]*name: agent-workbench-connector/);
   assert.match(job, /npm@11\.5\.1/);
   assert.match(job, /publish "\$AGENT_ARCHIVE" --access public --tag latest --ignore-scripts --registry=https:\/\/registry.npmjs.org/);
   assert.doesNotMatch(job, /agent:pack|pnpm install|DEPLOY_SSH_KEY/);
@@ -24,7 +24,7 @@ test('agent publication is tag-only, gated by checks, isolated from production a
 });
 
 test('release validator rejects invalid tags, metadata mismatch and ambiguous archives before publication', async t => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'bugflow-agent-release-'));
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'agent-workbench-connector-release-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const script = path.resolve('scripts/npm/validate-release.sh');
   const manifest = JSON.parse(await readFile('packages/device-agent/package.json', 'utf8')) as { version: string; name: string };
@@ -33,7 +33,7 @@ test('release validator rejects invalid tags, metadata mismatch and ambiguous ar
     await mkdir(path.join(directory, folder), { recursive: true });
   }
   await writeFile(path.join(directory, 'packages/device-agent/package.json'), JSON.stringify(manifest));
-  const archive = path.join(directory, `dist/device-agent/bugflow-agent-${manifest.version}.tgz`);
+  const archive = path.join(directory, `dist/device-agent/agent-workbench-connector-${manifest.version}.tgz`);
   const pack = async (metadata: unknown) => {
     await writeFile(path.join(directory, 'package/package.json'), JSON.stringify(metadata));
     const result = spawnSync('tar', ['-czf', archive, 'package/package.json'], { cwd: directory, encoding: 'utf8' });
@@ -46,7 +46,7 @@ test('release validator rejects invalid tags, metadata mismatch and ambiguous ar
   await pack(packedManifest);
   const valid = run();
   assert.equal(valid.status, 0, valid.stderr);
-  assert.equal(await readFile(output, 'utf8'), `archive=dist/device-agent/bugflow-agent-${manifest.version}.tgz\nversion=${manifest.version}\n`);
+  assert.equal(await readFile(output, 'utf8'), `archive=dist/device-agent/agent-workbench-connector-${manifest.version}.tgz\nversion=${manifest.version}\n`);
   for (const tag of ['main', 'v0.3.0', 'agent-v0.3.0-beta.1', 'agent-v01.3.0', 'agent-v../../bad', 'agent-v0.3.0;echo bad', 'agent-v99.0.0']) {
     assert.notEqual(run(tag).status, 0, tag);
   }
