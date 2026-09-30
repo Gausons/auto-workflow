@@ -29,6 +29,35 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, author
   return data as T;
 }
 
+export async function subscribeTaskCenterUpdates(since: number, onVersion: (version: number) => void, signal: AbortSignal): Promise<void> {
+  const token = sessionStorage.getItem(SESSION_TOKEN_KEY);
+  if (!token) return;
+  const response = await fetch(`/api/task-center/updates?since=${encodeURIComponent(String(since))}`, {
+    headers: { Accept: 'text/event-stream', Authorization: `Bearer ${token}` }, signal
+  });
+  if (!response.ok || !response.body) {
+    if (response.status === 401) sessionStorage.removeItem(SESSION_TOKEN_KEY);
+    throw new ApiError(`实时同步连接失败：${response.status}`, response.status);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let pending = '';
+  while (!signal.aborted) {
+    const { done, value } = await reader.read();
+    pending += decoder.decode(value, { stream: !done }).replaceAll('\r\n', '\n');
+    let boundary = pending.indexOf('\n\n');
+    while (boundary >= 0) {
+      const event = pending.slice(0, boundary);
+      pending = pending.slice(boundary + 2);
+      const id = event.split('\n').find(line => line.startsWith('id:'))?.slice(3).trim();
+      const version = Number(id);
+      if (Number.isSafeInteger(version) && version >= 0) onVersion(version);
+      boundary = pending.indexOf('\n\n');
+    }
+    if (done) return;
+  }
+}
+
 export function saveSessionToken(token: string) {
   sessionStorage.setItem(SESSION_TOKEN_KEY, token);
 }

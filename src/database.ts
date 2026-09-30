@@ -15,15 +15,20 @@ import { verifyDetachedManifest, type DetachedManifest } from '@auto-workflow/co
 export interface Tenant { id: string; name: string; createdAt?: string }
 export interface TenantSettings { config: Record<string, unknown>; assignmentPeople: unknown[] }
 type JsonRecord = Record<string, unknown>;
-const emptyTaskCenter = '{"tasks":[],"devices":[],"sessions":[],"handoffs":[]}';
+const emptyTaskCenter = '{"syncVersion":0,"tasks":[],"devices":[],"sessions":[],"handoffs":[]}';
 const record = (value: unknown): JsonRecord => value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
-const parseTaskCenter = (value: unknown): TaskCenterData => JSON.parse(String(value || emptyTaskCenter)) as TaskCenterData;
+const parseTaskCenter = (value: unknown): TaskCenterData => {
+  const parsed = JSON.parse(String(value || emptyTaskCenter)) as TaskCenterData;
+  parsed.syncVersion = Number.isSafeInteger(parsed.syncVersion) && (parsed.syncVersion || 0) >= 0 ? parsed.syncVersion : 0;
+  return parsed;
+};
 
 export const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
 
 export function openDatabase(environment: Record<string, string | undefined>) {
   if (environment.DATABASE_DRIVER && environment.DATABASE_DRIVER !== 'postgres') throw new Error('DATABASE_DRIVER 仅支持 postgres');
   const db: Connection = openPostgres(postgresConfig(environment));
+  const taskCenterListeners = new Map<string, Set<(version: number) => void>>();
 
   function transaction<T>(fn: () => T): T {
     db.exec('BEGIN');
@@ -211,12 +216,23 @@ export function openDatabase(environment: Record<string, string | undefined>) {
       return row ? verifyDetachedManifest(JSON.parse(row.payload)) : null;
     },
     readTaskCenter: (tenantId: string) => parseTaskCenter((db.prepare('SELECT payload FROM task_centers WHERE tenant_id = ?').get(tenantId) as { payload?: string } | undefined)?.payload),
-    mutateTaskCenter: <T>(tenantId: string, update: (data: TaskCenterData) => T): T => transaction(() => {
-      const data = parseTaskCenter((db.prepare('SELECT payload FROM task_centers WHERE tenant_id = ?').get(tenantId) as { payload?: string } | undefined)?.payload);
-      const result = update(data);
-      db.prepare('INSERT INTO task_centers VALUES (?, ?) ON CONFLICT(tenant_id) DO UPDATE SET payload = excluded.payload').run(tenantId, JSON.stringify(data));
-      return result;
-    }),
+    mutateTaskCenter: <T>(tenantId: string, update: (data: TaskCenterData) => T): T => {
+      const committed = transaction(() => {
+        const data = parseTaskCenter((db.prepare('SELECT payload FROM task_centers WHERE tenant_id = ?').get(tenantId) as { payload?: string } | undefined)?.payload);
+        const result = update(data);
+        data.syncVersion = (data.syncVersion || 0) + 1;
+        db.prepare('INSERT INTO task_centers VALUES (?, ?) ON CONFLICT(tenant_id) DO UPDATE SET payload = excluded.payload').run(tenantId, JSON.stringify(data));
+        return { result, version: data.syncVersion };
+      });
+      for (const listener of taskCenterListeners.get(tenantId) || []) listener(committed.version);
+      return committed.result;
+    },
+    subscribeTaskCenter: (tenantId: string, listener: (version: number) => void) => {
+      let listeners = taskCenterListeners.get(tenantId);
+      if (!listeners) { listeners = new Set(); taskCenterListeners.set(tenantId, listeners); }
+      listeners.add(listener);
+      return () => { listeners!.delete(listener); if (!listeners!.size) taskCenterListeners.delete(tenantId); };
+    },
     createTenant, getTenant, authenticate, readSettings, writeSettings, createStore, importLegacy,
     listTenants: () => db.prepare('SELECT id, name, created_at AS createdAt FROM tenants ORDER BY id').all() as unknown as Tenant[],
     rotateToken: (id: string, token: string) => {
@@ -224,6 +240,6 @@ export function openDatabase(environment: Record<string, string | undefined>) {
       if (typeof token !== 'string' || token.length < 32) throw new Error('租户令牌至少需要 32 个字符');
       db.prepare('UPDATE tenants SET token_hash = ? WHERE id = ?').run(hashToken(token), id);
     },
-    close: () => db.close()
+    close: () => { taskCenterListeners.clear(); db.close(); }
   };
 }

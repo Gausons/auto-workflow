@@ -54,6 +54,7 @@ test('organization members, role enforcement, cross-organization access and imme
     const viewer = users.viewer, admin = users.admin, operator = users.operator;
     assert.equal((await request(viewer.token, '/api/bootstrap')).status, 200);
     assert.equal((await request(viewer.token, '/api/task-center')).status, 200);
+    assert.equal((await request(viewer.token, '/api/task-center/updates?since=-1')).status, 400);
     for (const [method, endpoint] of [
       ['PUT', '/api/config'], ['PUT', '/api/assignment/people'], ['POST', '/api/sync'], ['GET', '/api/issues/diagnostics'],
       ['POST', '/api/scheduler'], ['POST', '/api/bugs/x/task'],

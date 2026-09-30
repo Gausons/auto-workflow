@@ -117,6 +117,34 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
   }
 
   async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
+    if (url.pathname === '/api/task-center/updates' && req.method === 'GET') {
+      const rawSince = Number(url.searchParams.get('since') || 0);
+      if (!Number.isSafeInteger(rawSince) || rawSince < 0) throw Object.assign(new Error('同步版本无效'), { statusCode: 400 });
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no'
+      });
+      res.flushHeaders();
+      let delivered = rawSince;
+      const publish = (version: number) => {
+        if (version <= delivered || res.destroyed) return;
+        delivered = version;
+        res.write(`id: ${version}\nevent: task-center\ndata: ${JSON.stringify({ version })}\n\n`);
+      };
+      const unsubscribe = database.subscribeTaskCenter(tenant.id, publish);
+      const current = database.readTaskCenter(tenant.id).syncVersion || 0;
+      if (current > delivered) publish(current);
+      const keepAlive = setInterval(() => { if (!res.destroyed) res.write(': keep-alive\n\n'); }, 15_000);
+      keepAlive.unref();
+      await new Promise<void>(resolve => {
+        const close = () => { clearInterval(keepAlive); unsubscribe(); resolve(); };
+        req.once('aborted', close);
+        res.once('close', close);
+      });
+      return;
+    }
     const newConversation = /^\/api\/sessions\/([a-f0-9]{64})\/continue-as-new$/.exec(url.pathname);
     if (newConversation && req.method === 'POST') { sendJson(res, 202, await conversations.create(newConversation[1], await readJson(req), requestIdentity.getStore()!.user)); return; }
     if (url.pathname === '/api/conversations' && req.method === 'GET') { sendJson(res, 200, { sessions: conversations.list() }); return; }

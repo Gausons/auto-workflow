@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
 import { DeviceConnectionGuide } from './DeviceConnectionGuide.js';
 import { renderMessages } from '../components/historyView.js';
+import { useTaskCenterUpdates } from './taskCenterUpdates.js';
 import type { HistoryMessage, Session, Task, TaskCenterData } from '../../../shared/taskTypes.js';
 
 type Route = 'inbox' | 'devices' | null;
@@ -96,10 +97,9 @@ export function TaskAuxPage() {
   const snapshot = useQuery({
     queryKey: snapshotKey,
     queryFn: ({ signal }) => apiRequest<TaskCenterData>('/api/task-center', { signal }),
-    enabled: Boolean(view) && hasSessionToken(),
-    refetchInterval: view ? 3000 : false,
-    refetchIntervalInBackground: false
+    enabled: Boolean(view) && hasSessionToken()
   });
+  useTaskCenterUpdates(Boolean(view), snapshot.data?.syncVersion);
   const identity = useQuery({
     queryKey: ['task-center', 'identity'],
     queryFn: ({ signal }) => apiRequest<{ permissions: string[]; user?: { username: string }; tenant?: { id: string } }>('/api/bootstrap', { signal }),

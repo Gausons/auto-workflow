@@ -247,6 +247,8 @@ export interface DirectoryRequest {
 }
 
 export interface TaskCenterData {
+  /** Monotonic tenant-local version used to reconcile realtime invalidations. */
+  syncVersion?: number;
   tasks: Task[];
   devices: Device[];
   sessions: Session[];

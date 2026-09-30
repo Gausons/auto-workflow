@@ -183,7 +183,10 @@ export function createTaskCenter({ database, tenantId, history }: { database: Ta
             const updatedAt = typeof s.updatedAt === 'string' && Number.isFinite(Date.parse(s.updatedAt)) ? new Date(s.updatedAt).toISOString() : now();
             const item: Session = { id, nativeId, deviceId: device.id, agent, agentLabel: agent, title: required(s.title, 120), cwd: text(s.cwd ?? '', 2000), createdAt,
               status: text(s.status ?? 'unknown', 80), archived: s.archived === true, updatedAt,
-              excerpt: text(s.excerpt ?? '', 24000), partial: true };
+              // Connectors may differ slightly in character/byte counting. Bound the
+              // accepted input, then normalize it server-side so one legacy record
+              // cannot reject an otherwise valid heartbeat batch.
+              excerpt: text(s.excerpt ?? '', 240000).slice(-23000), partial: true };
             const old = data.sessions.findIndex(session => session.id === id);
             if (old < 0) data.sessions.push(item); else data.sessions[old] = item;
           }

@@ -19,7 +19,7 @@ interface History {
 type Request = (method: string, body?: unknown, endpoint?: string) => Promise<unknown>;
 interface SyncOptions {
   request: Request; history: History; deviceId: string; name: string; outputDir: string;
-  includeExcerpts?: boolean; codexProjects?: AgentProject[]; resumeCodex?: boolean;
+  includeExcerpts?: boolean; codexProjects?: AgentProject[]; resumeCodex?: boolean; sessionIndex?: Record<string, string>;
 }
 interface DeviceSession { nativeId: string; agent: string; title: string; cwd: string; status: string; createdAt: string; updatedAt: string; excerpt: string; archived: boolean }
 type ErrorLike = Error & { code?: string; status?: number };
@@ -54,22 +54,36 @@ export function deviceConnectorDefaults(environment: Environment) {
 }
 
 // A transport only: receiving a packet never launches a process or marks it started.
-export async function syncDeviceOnce({ request, history, deviceId, name, outputDir, includeExcerpts = false, codexProjects, resumeCodex = false }: SyncOptions) {
+const sessionFingerprint = (session: HistorySession, includeExcerpts: boolean) => createHash('sha256').update(JSON.stringify({
+  nativeId: session.sessionId || session.id, agent: session.agent, title: session.title, cwd: session.cwd,
+  status: session.status, createdAt: session.createdAt, updatedAt: session.updatedAt, archived: session.archived === true, includeExcerpts
+})).digest('hex');
+
+export async function syncDeviceOnce({ request, history, deviceId, name, outputDir, includeExcerpts = false, codexProjects, resumeCodex = false, sessionIndex }: SyncOptions) {
   const catalog = await history.catalog();
   const agents = catalog.providers.map(provider => provider.id);
-  const sessions: DeviceSession[] = [];
+  const sessions: Array<{ value: DeviceSession; key: string; fingerprint: string }> = [];
+  const currentKeys = new Set<string>();
   for (const s of catalog.sessions) {
+    const nativeId = s.sessionId || s.id;
+    const key = `${s.agent}\0${nativeId}`;
+    currentKeys.add(key);
+    const fingerprint = sessionFingerprint(s, includeExcerpts);
+    if (sessionIndex?.[key] === fingerprint) continue;
     let excerpt = '';
     if (includeExcerpts) {
       if (!history.detail) throw new Error('历史服务不支持读取会话详情');
       const result = await history.detail(s.id, new URLSearchParams({ offset: String(Math.max(0, s.messageCount - 30)), limit: '30' }));
-      excerpt = result.messages.filter(message => ['user', 'assistant'].includes(message.role)).map(message => `${message.role}: ${message.text || ''}`).join('\n\n').slice(-24000);
+      excerpt = result.messages.filter(message => ['user', 'assistant'].includes(message.role)).map(message => `${message.role}: ${message.text || ''}`).join('\n\n').slice(-23000);
     }
-    sessions.push({ nativeId: s.sessionId || s.id, agent: s.agent, title: s.title.slice(0, 120), cwd: s.cwd, status: s.status, createdAt: s.createdAt, updatedAt: s.updatedAt, excerpt, archived: s.archived === true });
+    sessions.push({ key, fingerprint, value: { nativeId, agent: s.agent, title: s.title.slice(0, 120), cwd: s.cwd, status: s.status, createdAt: s.createdAt, updatedAt: s.updatedAt, excerpt, archived: s.archived === true } });
   }
   for (let i = 0; i < Math.max(sessions.length, 1); i += 20) {
-    await request('POST', { action: 'heartbeat', deviceId, name, agents, capabilities: { resumeCodex }, sessions: sessions.slice(i, i + 20), ...(codexProjects !== undefined ? { codexProjects } : {}) });
+    const batch = sessions.slice(i, i + 20);
+    await request('POST', { action: 'heartbeat', deviceId, name, agents, capabilities: { resumeCodex }, sessions: batch.map(item => item.value), ...(i === 0 && codexProjects !== undefined ? { codexProjects } : {}) });
+    if (sessionIndex) for (const item of batch) sessionIndex[item.key] = item.fingerprint;
   }
+  if (sessionIndex) for (const key of Object.keys(sessionIndex)) if (!currentKeys.has(key)) delete sessionIndex[key];
   const snapshot = await request('GET') as TaskCenterData;
   const pending = snapshot.handoffs.filter(handoff => handoff.deviceId === deviceId && handoff.status === 'pending');
   await mkdir(outputDir, { recursive: true, mode: 0o700 });
@@ -85,7 +99,7 @@ export async function syncDeviceOnce({ request, history, deviceId, name, outputD
     await request('POST', { action: 'ack', handoffId: h.id, status: 'received', note: '设备连接器已保存交接包；尚未启动 Agent' });
     received++;
   }
-  return { sessions: sessions.length, received };
+  return { sessions: catalog.sessions.length, received };
 }
 
 async function main() {
@@ -128,6 +142,12 @@ async function main() {
     return record(await response.json());
   };
   const outputDir = path.join(stateDir, 'inbox');
+  const sessionIndexFile = path.join(stateDir, 'session-sync-index.json');
+  let sessionIndex: Record<string, string> = {};
+  try {
+    const saved = JSON.parse(await readFile(sessionIndexFile, 'utf8')) as unknown;
+    if (saved && typeof saved === 'object' && !Array.isArray(saved)) sessionIndex = Object.fromEntries(Object.entries(saved).filter(([key, value]) => key.length <= 500 && typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)).slice(0, 100_000));
+  } catch (caught: unknown) { if (asError(caught).code !== 'ENOENT') console.warn('会话增量索引不可用，将执行一次完整同步'); }
   const worker = defaults.execute ? new RemoteCodexWorker({ request, deviceId, directory: path.join(stateDir, 'executions'), workspace: defaults.workspace, contextSource: { catalog: () => history.catalog(), delivery } }) : null;
   const stopping = new AbortController();
   const stop = () => stopping.abort();
@@ -143,7 +163,10 @@ async function main() {
     do {
       try {
         const result = await syncDeviceOnce({ request, history, deviceId, name: environment.WORKBENCH_DEVICE_NAME || hostname(), outputDir,
-          includeExcerpts: defaults.includeExcerpts, codexProjects: worker ? await worker.projects() : [], resumeCodex: Boolean(worker) });
+          includeExcerpts: defaults.includeExcerpts, codexProjects: worker ? await worker.projects() : [], resumeCodex: Boolean(worker), sessionIndex });
+        const stagingIndex = sessionIndexFile + '.pending';
+        await writeFile(stagingIndex, JSON.stringify(sessionIndex), { mode: 0o600 });
+        await rename(stagingIndex, sessionIndexFile);
         console.log(`同步 ${result.sessions} 个会话，接收 ${result.received} 个交接包`);
       } catch (caught: unknown) { reportError(caught); }
       // A history/discovery failure must not prevent approvals or stop requests

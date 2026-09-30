@@ -127,8 +127,15 @@ test('HTTP auth, viewer write rejection, and task UI assets', async t => {
   assert.equal((await req('/api/task-center')).status, 401);
   await req('/api/auth/setup', 'POST', { username: 'owner', password }, setup);
   const owner = (await req('/api/auth/login', 'POST', { tenantId: 'default', username: 'owner', password })).data;
+  const updateAbort = new AbortController();
+  const updates = await fetch(base + '/api/task-center/updates?since=0', { headers: { Authorization: `Bearer ${owner.token}` }, signal: updateAbort.signal });
+  assert.equal(updates.status, 200);
+  assert.match(updates.headers.get('content-type') || '', /text\/event-stream/);
   const created = await req('/api/task-center', 'POST', { action: 'create', title: 'HTTP 任务' }, owner.token);
   assert.equal(created.status, 200);
+  const update = await updates.body!.getReader().read();
+  assert.match(new TextDecoder().decode(update.value), /event: task-center[\s\S]*"version":1/);
+  updateAbort.abort();
   await req('/api/organization/members', 'POST', { username: 'viewer', role: 'viewer', password }, owner.token);
   const viewer = (await req('/api/auth/login', 'POST', { tenantId: 'default', username: 'viewer', password })).data;
   assert.equal((await req('/api/task-center', 'GET', null, viewer.token)).data.tasks?.length, 1);
@@ -159,6 +166,40 @@ test('invalid sync batches roll back and cancelled transfers cannot be acknowled
   await cmd({ action: 'ack', handoffId: h.handoffId, status: 'cancelled' });
   await assert.rejects(cmd({ action: 'ack', handoffId: h.handoffId, status: 'received' }), { statusCode: 409 });
   assert.equal((await center.snapshot()).tasks[0].status, 'ready');
+});
+
+test('task-center mutations advance sync version and notify subscribers', async t => {
+  const { database, center, cmd } = fixture(t);
+  const versions: number[] = [];
+  const unsubscribe = database.subscribeTaskCenter('default', version => versions.push(version));
+  await cmd({ action: 'create', title: '实时同步任务' });
+  unsubscribe();
+  assert.deepEqual(versions, [1]);
+  assert.equal((await center.snapshot()).syncVersion, 1);
+});
+
+test('connector sync is incremental and the server normalizes oversized excerpts', async t => {
+  const { center, cmd } = fixture(t);
+  const index: Record<string, string> = {};
+  let detailCalls = 0;
+  const remoteHistory = {
+    catalog: async () => ({ providers: [{ id: 'codex' }], sessions: [{ ...source, id: 'remote-history', sessionId: 'remote-native' }] }),
+    detail: async () => { detailCalls++; return { messages: [{ role: 'assistant', text: 'x'.repeat(25000), images: [] }] }; }
+  };
+  const requests: Array<{ method: string; body?: unknown }> = [];
+  const request = async (method: string, body?: unknown) => {
+    requests.push({ method, body });
+    return method === 'GET' ? center.snapshot() : cmd(body);
+  };
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'task-incremental-sync-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await syncDeviceOnce({ request, history: remoteHistory, deviceId: 'remote', name: 'Linux', outputDir: dir, includeExcerpts: true, sessionIndex: index });
+  await syncDeviceOnce({ request, history: remoteHistory, deviceId: 'remote', name: 'Linux', outputDir: dir, includeExcerpts: true, sessionIndex: index });
+  const posts = requests.filter(item => item.method === 'POST').map(item => item.body as { sessions: Array<{ excerpt: string }> });
+  assert.equal(posts[0].sessions[0].excerpt.length, 23000);
+  assert.equal(posts[1].sessions.length, 0);
+  assert.equal(detailCalls, 1);
+  assert.equal((await center.snapshot()).sessions.find(item => item.deviceId === 'remote')?.excerpt?.length, 23000);
 });
 
 test('connector does not acknowledge receipt when writing the packet fails', async t => {

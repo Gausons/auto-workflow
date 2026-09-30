@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type Reac
 import { apiRequest, hasSessionToken } from '../api/client.js';
 import { renderMarkdown } from '../components/historyView.js';
 import { taskActivity, taskTimeline } from './taskTimeline.js';
+import { useTaskCenterUpdates } from './taskCenterUpdates.js';
 import { taskContent } from '../../../shared/taskContent.js';
 import type { AgentProject, Execution, Handoff, Session, Task, TaskCenterData } from '../../../shared/taskTypes.js';
 import { SessionRecords } from './TaskAuxPage.js';
@@ -77,7 +78,8 @@ export function TaskPage() {
   const queryClient = useQueryClient();
   useEffect(() => { const update = () => setActive(route()); window.addEventListener('hashchange', update); return () => window.removeEventListener('hashchange', update); }, []);
   useEffect(() => { const open = (event: Event) => { const id = (event as CustomEvent<{ taskId?: string }>).detail?.taskId; if (id) { rememberTask(id); setSelected(id); location.hash = 'tasks'; } }; window.addEventListener('bugflow:open-task', open); return () => window.removeEventListener('bugflow:open-task', open); }, []);
-  const snapshot = useQuery({ queryKey: ['task-center', 'snapshot'], queryFn: ({ signal }) => apiRequest<TaskCenterData>('/api/task-center', { signal }), enabled: active && hasSessionToken(), refetchInterval: active ? 3000 : false, refetchIntervalInBackground: false });
+  const snapshot = useQuery({ queryKey: ['task-center', 'snapshot'], queryFn: ({ signal }) => apiRequest<TaskCenterData>('/api/task-center', { signal }), enabled: active && hasSessionToken() });
+  useTaskCenterUpdates(active, snapshot.data?.syncVersion);
   const identity = useQuery({ queryKey: ['task-center', 'identity'], queryFn: ({ signal }) => apiRequest<{ permissions: string[] }>('/api/bootstrap', { signal }), enabled: active && hasSessionToken() });
   const targets = useQuery({ queryKey: ['task-center', 'targets'], queryFn: ({ signal }) => apiRequest<Targets>('/api/task-center/codex', { signal }), enabled: active && dialog?.kind === 'execute', retry: false });
   const data = snapshot.data;
