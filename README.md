@@ -424,6 +424,8 @@ test/         Node.js 测试
 
 ### GitHub CI / CD
 
+连接器安装回归使用临时空缓存，从公共 npm registry 安装打包产物及运行时依赖，不依赖开发者机器或 Runner 的历史缓存，因此执行 `pnpm test` 需要访问 `registry.npmjs.org`。安装失败会输出依赖解析诊断；测试失败时生产部署会被跳过，服务器不会更新。
+
 仓库使用 [CI / CD](https://github.com/Gausons/auto-workflow/actions/workflows/ci-cd.yml) 工作流。每个 PR、main 推送、`agent-v*` 标签推送和手动运行都会安装锁定依赖，执行类型检查、全部单元/组件测试、真实 PostgreSQL / pgvector 测试、Chromium 浏览器测试和部署脚本检查。Node 固定为 22.23.3，pnpm 固定为 package.json 中的 10.33.2。
 
 #### 连接器 npm 发布

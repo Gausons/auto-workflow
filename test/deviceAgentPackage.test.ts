@@ -30,8 +30,24 @@ test('packed device agent installs and runs outside the repository without TypeS
     env: { ...process.env, GITHUB_REF_NAME: `agent-v${sourceManifest.version}`, GITHUB_OUTPUT: path.join(directory, 'release-output') }
   });
   const install = path.join(directory, 'installed'); await mkdir(install);
-  // Offline installation also proves the tarball has no dependency on unpublished workspace packages.
-  await exec('pnpm', ['--dir', install, 'add', '--offline', '--ignore-scripts', archive], { timeout: 60000 });
+  const { packageManager } = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')) as { packageManager: string };
+  // Corepack must use the same pinned pnpm outside the repository as it does inside it.
+  await writeFile(path.join(install, 'package.json'), JSON.stringify({ private: true, packageManager }));
+  // A fresh consumer has neither registry metadata nor tarballs cached. The SDK is
+  // a public runtime dependency; an offline install accidentally tests the host cache.
+  const installEnv = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, HOME: directory, CI: 'true' };
+  try {
+    await exec('pnpm', [
+      '--dir', install, 'add', '--ignore-scripts',
+      '--registry=https://registry.npmjs.org',
+      '--store-dir', path.join(directory, 'store'), '--cache-dir', path.join(directory, 'cache'),
+      '--fetch-retries=1', '--fetch-timeout=20000', archive
+    ], { cwd: install, env: installEnv, timeout: 60000 });
+  } catch (error) {
+    // pnpm prints dependency resolution errors to stdout, which execFile otherwise hides.
+    const failure = error as Error & { stdout?: string; stderr?: string };
+    throw new Error(`连接器全新环境安装失败：${failure.message}\n${failure.stdout ?? ''}\n${failure.stderr ?? ''}`, { cause: error });
+  }
   const command = path.join(install, 'node_modules', '.bin', 'agent-workbench-connector');
   const manifest = JSON.parse(await readFile(path.join(install, 'node_modules/agent-workbench-connector/package.json'), 'utf8')) as { version: string; dependencies: Record<string, string> };
   assert.ok(Object.values(manifest.dependencies).every(value => !value.startsWith('workspace:')));
