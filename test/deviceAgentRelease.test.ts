@@ -10,7 +10,7 @@ test('agent publication is tag-only, gated by checks, isolated from production a
   assert.match(workflow, /tags: \['agent-v\*'\]/);
   const job = workflow.split('\n  publish_agent:')[1]!.split('\n  deploy:')[0]!;
   assert.match(job, /needs: checks/);
-  assert.match(job, /if: github.event_name == 'push' && startsWith\(github.ref, 'refs\/tags\/agent-v'\) && github.repository == 'Gausons\/auto-workflow'/);
+  assert.match(job, /if: \(github.event_name == 'push' \|\| github.event_name == 'workflow_dispatch'\) && startsWith\(github.ref, 'refs\/tags\/agent-v'\) && github.repository == 'Gausons\/auto-workflow'/);
   assert.match(job, /environment: npm/);
   assert.match(job, /group: npm-agent-workbench-connector\n\s+cancel-in-progress: false/);
   assert.match(job, /id-token: write/);

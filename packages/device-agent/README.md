@@ -40,6 +40,8 @@ agent-workbench-connector --env-file ./agent.env
 
 ## 维护者打包
 
+日常发布可在 GitHub **Actions → Release Agent → Run workflow** 选择 main 和 `patch` / `minor` / `major`。流程自动更新本包版本、提交并打标签，再启动现有 CI / CD 检查和 npm 发布；最终发布状态查看 CI / CD，而非仅看 Release Agent。main / 标签保护必须允许该机器人的推送，否则继续使用版本 PR 和手动标签，不绕过仓库规则。现有 npm Trusted Publisher 仍是 `ci-cd.yml`，无需更换。
+
 在工作台仓库运行 `pnpm agent:pack`，生成 `dist/device-agent/agent-workbench-connector-0.3.0.tgz`。包内只包含编译后的连接器、说明、许可证和包元数据；上下文工作区代码已打包，无 `workspace:*` 运行时依赖，ACP SDK 由包管理器安装。源码改动后必须重新打包。
 
 CI / CD 在 `agent-vX.Y.Z` 标签推送后执行完整检查，再发布同一次构建的 tgz。标签版本必须与本包版本一致，提交必须已合入 main；PR 和普通 main 提交只打包不发布。发布使用独立的 GitHub `npm` Environment 和 npm Trusted Publisher（`Gausons/auto-workflow`、`ci-cd.yml`、Environment `npm`），首次发布也可配置临时 `NPM_TOKEN` Secret。具体初始化步骤见仓库 README 的“连接器 npm 发布”。本机 npm 登录状态不会传递给 CI；包版本一旦发布不能覆盖。安装或构建本身不会自动发布，也不会要求用户在安装机器上构建。

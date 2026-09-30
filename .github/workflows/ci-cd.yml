@@ -126,7 +126,7 @@ jobs:
   publish_agent:
     name: Publish standalone device agent to npm
     needs: checks
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/agent-v') && github.repository == 'Gausons/auto-workflow'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && startsWith(github.ref, 'refs/tags/agent-v') && github.repository == 'Gausons/auto-workflow'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: npm

@@ -428,7 +428,7 @@ test/         Node.js 测试
 
 #### 连接器 npm 发布
 
-`publish_agent` 只在本仓库推送 `agent-vX.Y.Z` 正式版本标签且全部检查通过后运行，与网站部署独立；标签提交必须已合入 main，标签版本必须等于 `packages/device-agent/package.json` 及安装包中的版本。发布任务下载本次 CI 的 `agent-workbench-connector` Artifact，不重新构建，串行发布到 npm 的 `latest`。PR、普通 main 提交、手动 Run workflow 不会发布 npm；连接器标签不会部署网站。
+`publish_agent` 只在本仓库的 `agent-vX.Y.Z` 正式版本标签上通过 push 或 workflow_dispatch 启动且全部检查通过后运行，与网站部署独立；标签提交必须已合入 main，标签版本必须等于 `packages/device-agent/package.json` 及安装包中的版本。发布任务下载本次 CI 的 `agent-workbench-connector` Artifact，不重新构建，串行发布到 npm 的 `latest`。PR、普通 main 提交、在 main 上手动运行 CI / CD 不会发布 npm；连接器标签不会部署网站。
 
 首次配置：
 
@@ -436,14 +436,25 @@ test/         Node.js 测试
 2. 包已存在时，在 npm 的 `agent-workbench-connector` 包设置添加 GitHub Actions Trusted Publisher：Owner **Gausons**、Repository **auto-workflow**、Workflow **ci-cd.yml**、Environment **npm**，允许直接 `npm publish`。字段大小写须完全一致。OIDC 使用短期凭据，无需保存本机登录 Token；其他包的可信发布配置不会随改名自动转移。参考 [npm 可信发布文档](https://docs.npmjs.com/trusted-publishers/)。
 3. 若包尚不存在，可先由维护者手动发布首个已验证 tgz，再配置可信发布；也可在 `npm` Environment 添加临时 `NPM_TOKEN` Secret，让首次标签发布在 CI 完成。后者需要有创建该包权限、可非交互发布的 npm granular token（按账号策略设置 bypass 2FA、最小权限及短有效期）。本机 `npm login` 不会给 GitHub Runner 授权。不要将本机 `.npmrc` 提交或把 Token 发到聊天中。首次发布完成并配置好可信发布后删除该 Secret。
 
-后续发布先修改连接器包的 `version`、提交并合入 main，再对包含这些改动的提交打标签，例如版本为 0.3.0 时：
+日常一键发布（无需手动改版本或新增长期 Token）：
+
+1. 将功能改动和本工作流合入 main。
+2. 打开 GitHub **Actions → Release Agent → Run workflow**，分支选择 **main**。
+3. 选择 `patch`（如 0.3.0 → 0.3.1）、`minor`（0.3.0 → 0.4.0）或 `major`（0.3.0 → 1.0.0），运行。
+4. 流程只修改连接器包的 `version`，自动创建版本提交，并将 main 和 `agent-vX.Y.Z` 标签原子推送。然后显式启动该标签上的 **CI / CD**；全部检查通过后，经已有 `npm` Environment 审核（如配置）发布。**Release Agent 成功仅表示准备完成，最终结果看后续 CI / CD 的 publish_agent。** 等该发布完成后再发下一个版本。
+
+准备任务使用内置 `GITHUB_TOKEN` 的 `contents: write` 和 `actions: write`；组织策略必须允许这些权限，main 与标签保护规则必须允许机器人进行相应推送。若规则要求所有变更必须走 PR，则此直接提交模式会失败，应继续用下方手动版本 PR 流程，不要为此关闭保护。准备任务不安装项目依赖、不获取 npm 凭据、不部署网站。npm Trusted Publisher 仍填写 **ci-cd.yml**，不是 release-agent.yml；现有 npm 环境和信任配置无需修改。
+
+GitHub 内置令牌推送不会触发 push 工作流，因此这里使用显式 workflow_dispatch，见 [GitHub 令牌触发规则](https://docs.github.com/en/actions/concepts/security/github_token)。同一准备任务重新运行会核验并复用该任务已创建的版本标签，不会再次递增；其他任务的同名标签、执行期间前进的 main、推送权限不足都会明确失败，不强推、不覆盖。如果提交和标签已创建但后续检查失败，修复前先检查发布状态；未发布且无需修改源码时可重跑该标签上的 CI / CD。已发布版本不得重发；需要改源码时使用下一版本，保留失败标签供核对。
+
+也保留手动方式：修改连接器包的 `version`、提交并合入 main，再对包含这些改动的提交打标签，例如尚未发布的版本为 0.3.1 时：
 
 ```bash
-git tag agent-v0.3.0 <已合入-main-的提交SHA>
-git push origin agent-v0.3.0
+git tag agent-v0.3.1 <已合入-main-的提交SHA>
+git push origin agent-v0.3.1
 ```
 
-发布使用固定 npm 11.5.1（支持 OIDC）；仓库依赖和这个隔离的发布工具仍由 pnpm 安装。发布后从公共 registry 安装精确版本并核对 CLI 版本，不启动 Agent。若发布失败或发布后验证失败，先检查 npm 上该版本的状态再处理；已发布的同名同版本不可覆盖，不自动递增版本、重发、撤回或移动旧标签。网络传播延迟导致安装验证失败时也不代表发布未发生。
+发布使用固定 npm 11.5.1（支持 OIDC）；仓库依赖和这个隔离的发布工具仍由 pnpm 安装。发布后从公共 registry 安装精确版本并核对 CLI 版本，不启动 Agent。若发布失败或发布后验证失败，先检查 npm 上该版本的状态再处理；已发布的同名同版本不可覆盖，失败时不自动另开新版本、重发、撤回或移动旧标签。网络传播延迟导致安装验证失败时也不代表发布未发生。
 
 #### 工作台网站部署
 
