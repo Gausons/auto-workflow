@@ -35,6 +35,7 @@ test('failed Docker health checks restore the previous container without restori
     const config = path.join(directory, 'config');
     await Promise.all([bin, path.join(base, 'backups'), data, config].map(dir => mkdir(dir, { recursive: true })));
     await writeFile(path.join(data, 'workflow.sqlite'), 'existing-database');
+    await writeFile(path.join(data, 'MYSQL_MIGRATED'), 'verified');
     await writeFile(path.join(config, 'auto-workflow.env'), 'TEST=value');
     const revision = 'a'.repeat(40);
     const log = path.join(directory, 'commands');
@@ -44,8 +45,8 @@ case "$1" in
   image)
     if [[ "$*" == *Architecture* ]]; then echo linux/amd64; else echo "$REVISION"; fi ;;
   inspect)
-    if [[ "$*" == *RestartPolicy* ]]; then echo unless-stopped; else echo auto-workflow:previous; fi ;;
-  exec) exit 1 ;;
+    if [[ "$*" == *Health.Status* ]]; then echo healthy; elif [[ "$*" == *RestartPolicy* ]]; then echo unless-stopped; else echo auto-workflow:previous; fi ;;
+  exec) if [[ "$*" == *mysqldump* ]]; then echo fixture-mysql-backup; else exit 1; fi ;;
 esac
 `;
     await writeFile(path.join(bin, 'docker'), mock, { mode: 0o755 });

@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
-import type { DatabaseSync } from 'node:sqlite';
+import type { Connection } from './storage/connection.js';
 import { ROLES, httpError } from './rbac.js';
 
 type Role = keyof typeof ROLES;
@@ -49,7 +49,7 @@ async function verifyPassword(password: unknown, encoded: unknown) {
   return timingSafeEqual(key, Buffer.from(expected, 'hex')) && candidate === encoded;
 }
 
-export function createIdentityStore(db: DatabaseSync, transaction: Transaction) {
+export function createIdentityStore(db: Connection, transaction: Transaction) {
   const getUser = (tenantId: string, id: string) => db.prepare(`SELECT ${PUBLIC_COLUMNS} FROM organization_users WHERE tenant_id = ? AND id = ?`).get(tenantId, id) as unknown as PublicUser | undefined;
   const listUsers = (tenantId: string) => db.prepare(`SELECT ${PUBLIC_COLUMNS} FROM organization_users WHERE tenant_id = ? ORDER BY created_at, id`).all(tenantId) as unknown as PublicUser[];
   const hasUsers = (tenantId: string) => Boolean(db.prepare('SELECT 1 FROM organization_users WHERE tenant_id = ? LIMIT 1').get(tenantId));

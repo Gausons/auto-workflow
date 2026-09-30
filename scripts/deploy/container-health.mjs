@@ -1,5 +1,7 @@
 const base = 'http://127.0.0.1:4173';
 try {
+  const health = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(3000) });
+  if (health.status !== 200) throw new Error('Database health check failed');
   const page = await fetch(`${base}/devices`, { signal: AbortSignal.timeout(3000) });
   if (page.status !== 200) throw new Error('Page health check failed');
   const html = await page.text();

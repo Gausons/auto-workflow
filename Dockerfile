@@ -29,6 +29,7 @@ COPY shared ./shared
 COPY migrations ./migrations
 COPY public ./public
 COPY --from=build /app/public/build ./public/build
+COPY scripts/database ./scripts/database
 COPY scripts/deploy/container-health.mjs ./scripts/deploy/container-health.mjs
 RUN mkdir -p /app/.workflow-data /var/lib/auto-workflow/runtime /var/lib/auto-workflow/tenants /var/lib/auto-workflow/workspace \
     && chown -R node:node /app/.workflow-data /var/lib/auto-workflow

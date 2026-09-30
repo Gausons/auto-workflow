@@ -49,6 +49,12 @@ docker load --input "$archive"
 docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges \
   "$image" node --import tsx --input-type=module -e 'await import("./src/database.ts"); await import("./src/issueSources/preload.ts");'
 
+# Initial SQLite import is an explicit maintenance operation, never an ordinary release.
+[[ -f $data/MYSQL_MIGRATED ]] || { echo "Complete and verify the initial MySQL cutover first." >&2; exit 1; }
+# Production releases require the separately provisioned persistent MySQL service.
+[[ $(docker inspect --format '{{.State.Health.Status}}' auto-workflow-mysql) == healthy ]]
+docker network inspect auto-workflow > /dev/null
+
 backup=$(mktemp -d "$base/backups/$(date -u +%Y%m%dT%H%M%SZ)-${revision}.XXXXXX")
 if docker container inspect auto-workflow > /dev/null 2>&1; then
   previous_policy=$(docker inspect --format '{{.HostConfig.RestartPolicy.Name}}' auto-workflow)
@@ -73,11 +79,12 @@ else
   exit 1
 fi
 
-# Stop the only application writer before backing up SQLite and its WAL.
+# Stop the application writer before backing up MySQL and retaining the legacy SQLite files.
+docker exec auto-workflow-mysql mysqldump --defaults-extra-file=/run/secrets/client.cnf \
+  --single-transaction --routines --triggers --hex-blob --no-tablespaces --set-gtid-purged=OFF auto_workflow > "$backup/mysql.sql"
 shopt -s nullglob
 database_files=("$data"/workflow.sqlite*)
-[[ ${#database_files[@]} -gt 0 ]]
-cp -a "${database_files[@]}" "$backup/"
+if [[ ${#database_files[@]} -gt 0 ]]; then cp -a "${database_files[@]}" "$backup/"; fi
 cp -a /etc/auto-workflow/auto-workflow.env "$backup/"
 tar -czf "$backup/runtime-and-tenants.tar.gz" -C "$data" runtime tenants
 
@@ -87,11 +94,13 @@ docker create --name auto-workflow --restart unless-stopped --init \
   --user "$(id -u auto-workflow):$(id -g auto-workflow)" \
   --read-only --tmpfs /tmp:rw,nosuid,nodev,size=128m --cap-drop ALL --security-opt no-new-privileges \
   --log-opt max-size=10m --log-opt max-file=3 \
-  --publish 127.0.0.1:4173:4173 \
+  --network auto-workflow --publish 127.0.0.1:4173:4173 \
   --mount "type=bind,src=$data,dst=$data" \
   --mount "type=bind,src=$data/runtime,dst=/app/.workflow-data" \
   --mount type=bind,src=/etc/auto-workflow,dst=/run/config,readonly \
   --env HOST=0.0.0.0 --env PORT=4173 --env NODE_ENV=production \
+  --env DATABASE_DRIVER=mysql --env MYSQL_HOST=auto-workflow-mysql \
+  --env MYSQL_DATABASE=auto_workflow --env MYSQL_USER=auto_workflow --env MYSQL_PORT=3306 \
   --env "DATABASE_PATH=$data/workflow.sqlite" --env "TENANT_ENV_DIR=$data/tenants" \
   --env "CODEX_WORKSPACE_DIR=$data/workspace" --env ACP_ENABLED=false \
   --env CODEX_EXECUTABLE=/nonexistent/codex \

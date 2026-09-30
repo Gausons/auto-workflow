@@ -5,7 +5,7 @@ import { databasePath, generateToken, loadEnvironment, provisionDefaultTenant } 
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const environment = loadEnvironment(rootDir);
-const database = openDatabase(databasePath(rootDir, environment));
+const database = openDatabase(databasePath(rootDir, environment), environment);
 try {
   const [command, id, ...nameParts] = process.argv.slice(2);
   if (command === 'list') {

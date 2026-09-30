@@ -33,6 +33,7 @@
     "@auto-workflow/context-adapters": "workspace:*",
     "@auto-workflow/context-engine": "workspace:*",
     "@tanstack/react-query": "^5.103.2",
+    "mysql2": "^3.24.5",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-router": "^8.4.0",

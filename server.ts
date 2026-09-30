@@ -19,7 +19,7 @@ const asError = (value: unknown): ErrorLike => value instanceof Error ? value as
 
 export function createApp({ rootDir = projectDir, environment = loadEnvironment(rootDir), fetchImpl }: AppOptions = {}) {
   const filename = databasePath(rootDir, environment);
-  const database = openDatabase(filename);
+  const database = openDatabase(filename, environment);
   const handleAuth = createAuthHandler(database, { environment, fetchImpl });
   const serveWeb = createStaticHandler(projectDir);
   const runtimes = new Map<string, TenantRuntime>();
@@ -68,6 +68,10 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
       if (closing) return sendJson(res, 503, { message: '服务正在关闭' });
       if (url.pathname.startsWith('/api/')) {
         res.setHeader('Cache-Control', 'no-store');
+        if (req.method === 'GET' && url.pathname === '/api/health') {
+          try { database.ping(); return sendJson(res, 200, { status: 'ok' }); }
+          catch { return sendJson(res, 503, { status: 'unavailable' }); }
+        }
         const authorization = req.headers.authorization || '';
         const token = /^Bearer ([^\s]+)$/i.exec(authorization)?.[1];
         const principal = database.authenticateSession(token);
@@ -118,7 +122,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   app.server.listen(port, host, () => {
     const address = app.server.address();
     console.log(`Auto bug workflow workbench: http://${host}:${typeof address === 'object' && address ? address.port : port}`);
-    console.log(`Database: ${app.filename}`);
+    console.log(`Database: ${environment.DATABASE_DRIVER === 'mysql' ? 'MySQL' : app.filename}`);
     console.log('首次使用请在登录页注册个人账号，也可以配置 Google 登录。');
   });
   let stopping = false;

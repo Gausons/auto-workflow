@@ -1,5 +1,7 @@
-import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, readFileSync, readdirSync, existsSync } from 'node:fs';
+import { openSqlite } from './storage/sqlite.js';
+import { openMysql, mysqlConfig } from './storage/mysql.js';
+import type { Connection } from './storage/connection.js';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { normalizeIssueState } from './issueStore.js';
@@ -20,67 +22,15 @@ const parseTaskCenter = (value: unknown): TaskCenterData => JSON.parse(String(va
 
 export const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
 
-export function openDatabase(filename: string) {
-  if (filename !== ':memory:') mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
-  const db = new DatabaseSync(filename);
-  db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;');
-  const version = Number(db.prepare('PRAGMA user_version').get()?.user_version || 0);
-  if (version > 8) { db.close(); throw new Error('数据库版本高于当前程序支持的版本'); }
-  if (version === 0) {
-    transaction(() => {
-      db.exec(readFileSync(new URL('../migrations/001_initial.sql', import.meta.url), 'utf8'));
-      db.exec('PRAGMA user_version = 1');
-    });
-  }
-  if (version < 2) {
-    transaction(() => {
-      db.exec(readFileSync(new URL('../migrations/002_rbac.sql', import.meta.url), 'utf8'));
-      db.exec('PRAGMA user_version = 2');
-    });
-  }
-
-  if (version < 3) {
-    transaction(() => {
-      db.exec(readFileSync(new URL('../migrations/003_task_center.sql', import.meta.url), 'utf8'));
-      db.exec('PRAGMA user_version = 3');
-    });
-  }
-  if (version < 4) {
-    transaction(() => {
-      db.exec(readFileSync(new URL('../migrations/004_remove_workflows.sql', import.meta.url), 'utf8'));
-      db.exec('PRAGMA user_version = 4');
-    });
-  }
-
-  if (version < 5) {
-    transaction(() => {
-      db.exec(readFileSync(new URL('../migrations/005_session_context.sql', import.meta.url), 'utf8'));
-      db.exec('PRAGMA user_version = 5');
-    });
-  }
-  if (version < 6) {
-    transaction(() => {
-      db.exec(readFileSync(new URL('../migrations/006_context_transfers.sql', import.meta.url), 'utf8'));
-      db.exec('PRAGMA user_version = 6');
-    });
-  }
-  if (version < 7) {
-    transaction(() => {
-      db.exec(readFileSync(new URL('../migrations/007_context_objects.sql', import.meta.url), 'utf8'));
-      db.exec('PRAGMA user_version = 7');
-    });
-  }
-  if (version < 8) {
-    transaction(() => {
-      db.exec(readFileSync(new URL('../migrations/008_external_identities.sql', import.meta.url), 'utf8'));
-      db.exec('PRAGMA user_version = 8');
-    });
-  }
+export function openDatabase(filename: string, environment: Record<string, string | undefined> = {}) {
+  const driver = environment.DATABASE_DRIVER || 'sqlite';
+  if (driver !== 'sqlite' && driver !== 'mysql') throw new Error('DATABASE_DRIVER 仅支持 sqlite 或 mysql');
+  const db: Connection = driver === 'mysql' ? openMysql(mysqlConfig(environment)) : openSqlite(filename);
 
   function transaction<T>(fn: () => T): T {
     db.exec('BEGIN IMMEDIATE');
     try { const result = fn(); db.exec('COMMIT'); return result; }
-    catch (error) { db.exec('ROLLBACK'); throw error; }
+    catch (error) { try { db.exec('ROLLBACK'); } catch { /* Preserve the original uncertain outcome. */ } throw error; }
   }
   function createTenant({ id, name = id, token }: { id: string; name?: string; token: string }): Tenant | undefined {
     if (!/^[a-z0-9][a-z0-9_-]{0,62}$/.test(id)) throw new Error('租户 ID 仅支持小写字母、数字、下划线和短横线，最多 63 个字符');
@@ -167,6 +117,7 @@ export function openDatabase(filename: string) {
     return { skipped: false, users: snapshots.size };
   }
   return {
+    ping: () => { db.prepare('SELECT 1 FROM tenants LIMIT 1').get(); },
     ...createIdentityStore(db, transaction),
     readSessionContext: (tenantId: string, id: string): SessionContext | null => {
       const row = db.prepare('SELECT payload FROM session_contexts WHERE tenant_id = ? AND id = ?').get(tenantId, id);

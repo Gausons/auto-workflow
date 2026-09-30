@@ -22,6 +22,8 @@
 !migrations/
 !migrations/**
 !scripts/
+!scripts/database/
+!scripts/database/**
 !scripts/deploy/
 !scripts/deploy/container-health.mjs
 **/node_modules
