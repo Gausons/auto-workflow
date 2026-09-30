@@ -14,6 +14,7 @@
     "kill:port": "node --import tsx scripts/kill-port.ts",
     "kill:4173": "node --import tsx scripts/kill-4173.ts",
     "device:connect": "node --env-file=.env.device --import tsx scripts/device-sync.ts",
+    "device:connect:dev": "node --env-file=.env.device.dev --import tsx scripts/device-sync.ts",
     "device:sync": "node --import tsx scripts/device-sync.ts",
     "context:bundle": "node --import tsx scripts/context-bundle.ts",
     "pretest": "pnpm build:client",
