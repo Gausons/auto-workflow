@@ -6,8 +6,8 @@ import os from 'node:os';
 import { createAgentHistory } from '../src/agentHistory/index.js';
 import { createSessionDelivery } from '../src/sessionDelivery/index.ts';
 import { deliverRecord } from '../src/sessionDelivery/records.ts';
-import { createApp } from '../server.js';
-import { openDatabase } from '../src/database.js';
+import { createApp } from '../scripts/testing/database.js';
+import { openDatabase } from '../scripts/testing/database.js';
 import type { Environment } from '../src/issueSources/types.js';
 
 const timestamp = '2026-09-09T01:00:00Z';
@@ -163,7 +163,7 @@ test('HTTP handoff requires a member session and respects tenant source boundari
   const app = createApp({ rootDir: f.root, environment: { ...f.environment, DEFAULT_TENANT_TOKEN: setupToken } });
   t.after(() => app.close());
   const otherSetup = 'other-setup-'.repeat(4);
-  const database = openDatabase(app.filename);
+  const database = openDatabase(app.databaseKey);
   database.createTenant({ id: 'other', name: 'Other', token: otherSetup });
   database.close();
   await new Promise<void>(resolve => app.server.listen(0, '127.0.0.1', resolve));

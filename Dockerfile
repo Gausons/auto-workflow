@@ -33,7 +33,7 @@ COPY scripts/database ./scripts/database
 COPY scripts/deploy/container-health.mjs ./scripts/deploy/container-health.mjs
 RUN mkdir -p /app/.workflow-data /var/lib/auto-workflow/runtime /var/lib/auto-workflow/tenants /var/lib/auto-workflow/workspace \
     && chown -R node:node /app/.workflow-data /var/lib/auto-workflow
-ENV NODE_ENV=production HOST=0.0.0.0 PORT=4173 DATABASE_PATH=/var/lib/auto-workflow/workflow.sqlite TENANT_ENV_DIR=/var/lib/auto-workflow/tenants
+ENV NODE_ENV=production HOST=0.0.0.0 PORT=4173 DATABASE_DRIVER=postgres TENANT_ENV_DIR=/var/lib/auto-workflow/tenants
 USER node
 EXPOSE 4173
 HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 CMD ["node", "scripts/deploy/container-health.mjs"]

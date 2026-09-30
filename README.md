@@ -52,7 +52,7 @@ flowchart TB
     Connector --> RemoteAgent
   end
 
-  DB[("SQLite<br/>账号 / 缺陷 / 任务 / 执行 / 上下文与传输对象")]
+  DB[("PostgreSQL + pgvector<br/>账号 / 缺陷 / 任务 / 执行 / 上下文与传输对象")]
   Files["工作台本地文件<br/>Agent 历史 / 上下文 Markdown / 图片与附件"]
   Jira["Jira"]
   AI["模型 API<br/>分配建议 / 可选上下文归纳"]
@@ -151,10 +151,9 @@ CODEX_WORKSPACE_DIR=/absolute/path/to/your/repository
 | --- | --- | --- |
 | `HOST` | `127.0.0.1` | HTTP 监听地址 |
 | `PORT` | `4173` | HTTP 监听端口 |
-| `DATABASE_DRIVER` | `sqlite` | 开发和生产配置为 `postgres`；SQLite / MySQL 保留旧库兼容，连接失败不会回退 |
+| `DATABASE_DRIVER` | `postgres` | 唯一支持的数据库驱动，配置错误直接报错 |
 | `PGHOST` / `PGPORT` | 无 / `5432` | 本机开发 `127.0.0.1:15432`，生产 Docker 内 `auto-workflow-postgres:5432` |
 | `PGDATABASE` / `PGUSER` / `PGPASSWORD` | 无 | PostgreSQL 数据库和应用账号；密码只保存于环境文件 |
-| `DATABASE_PATH` | `.workflow-data/workflow.sqlite` | SQLite 数据库路径 |
 | `CODEX_WORKSPACE_DIR` | 项目根目录 | 默认 Agent 工作目录 |
 
 如需通过局域网或反向代理访问，可设置 `HOST=0.0.0.0`。请在可信网络中部署，并在对外开放时配置 HTTPS、访问控制和备份策略。
@@ -288,7 +287,7 @@ pnpm device:sync
 
 默认沿用来源设备和工作目录。也可以在运行配置中选另一台设备；跨设备时必须明确填写目标设备上的工作目录，可通过“选择目录”在目标设备上选择，不能直接沿用来源路径。目标设备必须运行 `WORKBENCH_EXECUTE_CODEX=true` 的连接器，并已同步可用 Agent/项目。两端代码仓库需由用户自行准备为同一仓库；此功能只传会话上下文，不复制代码或其他工作文件。系统读取固定边界内的用户消息、助手公开回复、工具记录及附件引用，并剔除 Codex 注入的插件列表、环境、技能和仓库指令等运行时包装；不迁移隐藏推理或工具授权。新会话自动归属原任务，继承记录可展开查看；再次切换时携带原上下文与新增对话，不重复嵌套之前的注入文本。
 
-本机来源的完整原始快照保存在 SQLite 的 `session_contexts` 表；远端来源在工作台只保存来源标识及已同步片段，完整原始记录在连接器首次执行时于来源设备冻结。本机交接文件位于 `.workflow-data/context/<tenant>/handoff-<id>-<version>.md`，远端交接文件位于连接器的 `WORKBENCH_DEVICE_DIR/executions/context/`；文件按来源记录号列出用户目标、助手公开进展和全部可读取的历史记录（包括完整的长工具输出）。新会话收到目标设备上的文件路径和本轮消息，不再把历史正文重复塞入提示词；ACP 会话还会直接附带 MD 文件资源链接。配置了 `OPENAI_API_KEY` 时，本机默认使用 `AI_ASSIGNMENT_MODEL`（可由 `CONTEXT_SUMMARY_MODEL` 覆盖）对脱敏后的文本摘录再做模型归纳，每条结论附来源记录号；可设 `ENABLE_CONTEXT_SUMMARY=false` 关闭。远端连接器目前使用规则摘取。模型不可用或整理失败会在 MD 中明确标注，并保留规则摘取。启用模型整理时会把选取的历史文本发送到配置的 `OPENAI_BASE_URL`。历史中的 PNG、JPEG、GIF 和 WebP 图片会从 Base64 文本中提取到同目录的 `assets/`，按 SHA-256 去重，并以原始字节的数据 URI 内嵌在完整 MD 的对应消息处，不缩放或重新编码；支持图片输入的 ACP Agent 还会收到相同原始字节的原生图片内容块，Codex 原生通道也会收到对应的本地图片输入，以便视觉识别。单独存储的证据快照仅供内部核对，不要求 Agent 再读取第二个文件。
+本机来源的完整原始快照保存在 PostgreSQL 的 `session_contexts` 表；远端来源在工作台只保存来源标识及已同步片段，完整原始记录在连接器首次执行时于来源设备冻结。本机交接文件位于 `.workflow-data/context/<tenant>/handoff-<id>-<version>.md`，远端交接文件位于连接器的 `WORKBENCH_DEVICE_DIR/executions/context/`；文件按来源记录号列出用户目标、助手公开进展和全部可读取的历史记录（包括完整的长工具输出）。新会话收到目标设备上的文件路径和本轮消息，不再把历史正文重复塞入提示词；ACP 会话还会直接附带 MD 文件资源链接。配置了 `OPENAI_API_KEY` 时，本机默认使用 `AI_ASSIGNMENT_MODEL`（可由 `CONTEXT_SUMMARY_MODEL` 覆盖）对脱敏后的文本摘录再做模型归纳，每条结论附来源记录号；可设 `ENABLE_CONTEXT_SUMMARY=false` 关闭。远端连接器目前使用规则摘取。模型不可用或整理失败会在 MD 中明确标注，并保留规则摘取。启用模型整理时会把选取的历史文本发送到配置的 `OPENAI_BASE_URL`。历史中的 PNG、JPEG、GIF 和 WebP 图片会从 Base64 文本中提取到同目录的 `assets/`，按 SHA-256 去重，并以原始字节的数据 URI 内嵌在完整 MD 的对应消息处，不缩放或重新编码；支持图片输入的 ACP Agent 还会收到相同原始字节的原生图片内容块，Codex 原生通道也会收到对应的本地图片输入，以便视觉识别。单独存储的证据快照仅供内部核对，不要求 Agent 再读取第二个文件。
 
 来源任务仍在工作台执行时，新会话会等待本轮结束再自动读取最终记录；执行结果未知时先核对，不自动重复发送。该等待机制只跟踪工作台管理的执行，外部客户端正在运行的会话应先结束当前轮次。ACP 连续聊天复用连接，重连时仅在 Agent 支持 `session/load` 时恢复；不支持恢复会明确报错，不偷偷改为另一个原生会话。
 
@@ -341,15 +340,9 @@ pnpm context:bundle -- import-snapshot /absolute/output/handoff-1 /absolute/impo
 
 ## 数据、升级与备份
 
-开发和生产业务数据保存在 PostgreSQL 17 + pgvector 0.8.6，SQLite 保留用于隔离测试与旧库导入。SQLite 数据库迁移会在启动时自动执行；第 4 版迁移保留缺陷与任务中心数据，并移除旧流水线运行和执行记录；第 5 版新增不可变会话上下文存储；第 6 版新增跨设备交付摘要与状态记录；第 7 版新增隔离的图片对象与 v3 清单存储。
+开发、生产和自动测试统一使用 PostgreSQL 17 + pgvector 0.8.6。应用启动时按 migrations/postgres/ 中的版本顺序执行事务迁移。版本 2 删除已完成迁移的历史导入回执。
 
-备份建议：
-
-1. 停止服务，避免复制到不一致的 SQLite 状态。
-2. 复制 `DATABASE_PATH` 对应的数据库文件。
-3. 复制 `TENANT_ENV_DIR`、`.workflow-data/context/`、需要保留的 Agent 历史目录和远端连接器状态目录。
-
-不要让多个服务进程同时使用同一个 SQLite 文件。真实凭据、业务数据库、附件、日志和 Agent 历史不得提交到版本控制。
+备份使用 pg_dump -Fc，恢复使用 pg_restore；恢复前停止应用并核对数据库版本。同时保存租户配置、上下文文件和远端连接器状态。凭据、业务数据库、附件、日志和 Agent 历史不得提交到版本控制。
 
 ## 开发
 
@@ -383,7 +376,7 @@ public/       HTML 与基础样式；build/ 为 Vite 生成产物
 src/          服务端领域逻辑与集成；http/ 为 HTTP 基础处理
 packages/     context-engine 核心引擎与 context-adapters 数据源适配器
 scripts/      多设备连接器与本地运维命令
-migrations/   SQLite 迁移与 mysql/、postgres/ 独立迁移
+migrations/   postgres/ 中的 PostgreSQL 版本迁移
 test/         Node.js 测试
 ```
 
@@ -391,7 +384,7 @@ test/         Node.js 测试
 
 ### GitHub CI / CD
 
-仓库使用 [CI / CD](https://github.com/Gausons/auto-workflow/actions/workflows/ci-cd.yml) 工作流。每个 PR、main 推送和手动运行都会安装锁定依赖，执行类型检查、全部单元/组件测试、真实 PostgreSQL / pgvector 与旧 MySQL 迁移测试、Chromium 浏览器测试和部署脚本检查。Node 固定为 22.23.3，pnpm 固定为 package.json 中的 10.33.2。
+仓库使用 [CI / CD](https://github.com/Gausons/auto-workflow/actions/workflows/ci-cd.yml) 工作流。每个 PR、main 推送和手动运行都会安装锁定依赖，执行类型检查、全部单元/组件测试、真实 PostgreSQL / pgvector 测试、Chromium 浏览器测试和部署脚本检查。Node 固定为 22.23.3，pnpm 固定为 package.json 中的 10.33.2。
 
 main 的检查通过后自动发布到 `https://autoworkflow.top`；PR 不读取生产凭据，也不发布。手动发布在 Actions 页面选择该工作流的 Run workflow，并选择 main。已被新提交替代的旧版本会跳过发布。CI 使用多阶段 Dockerfile 构建镜像，验证容器页面、静态资源、认证边界和重启，再通过 SSH 传输压缩镜像。镜像标记为 `auto-workflow:<commit SHA>`，生产服务器无需访问镜像仓库。`.dockerignore` 使用允许列表，环境文件、数据库和会话数据不进入镜像。
 
@@ -408,7 +401,7 @@ GitHub 的 `production` Environment 只允许 main 分支，包含以下配置�
 
 发布持有服务器文件锁，先载入镜像并验证版本标签及导入能力，再停旧容器、备份数据库和配置，启动新容器。首次迁移时停止旧 `auto-workflow.service`，容器验证成功后禁用该服务的开机启动。后续由 Docker 的 `unless-stopped` 策略负责开机启动和进程退出重启。健康检查失败时恢复旧容器或首次迁移前的 systemd 服务；数据库不会自动回退，以免覆盖数据或重复执行 Agent 指令。若数据库迁移与旧代码不兼容，需要停服并核对备份后人工恢复。公网 HTTPS 检查失败只报告失败，不自动回滚已启动的容器。
 
-备份保存在 `/opt/auto-workflow/backups/`，包含 PostgreSQL 的 `postgres.dump` 一致性转储、环境配置、运行目录及保留的 SQLite 文件；含敏感数据，仅 root 可读，不上传 GitHub。`PREVIOUS_IMAGE`（首次迁移时为 `PREVIOUS_RELEASE`）记录前一版本，`/opt/auto-workflow/DOCKER_IMAGE` 记录当前版本。旧容器停止并关闭自动重启，保留供回退；当前不自动清理旧镜像、容器和备份，需定期检查磁盘。
+备份保存在 `/opt/auto-workflow/backups/`，包含 PostgreSQL 的 `postgres.dump` 一致性转储、环境配置和运行目录；含敏感数据，仅 root 可读，不上传 GitHub。`PREVIOUS_IMAGE`（首次迁移时为 `PREVIOUS_RELEASE`）记录前一版本，`/opt/auto-workflow/DOCKER_IMAGE` 记录当前版本。旧容器停止并关闭自动重启，保留供回退；当前不自动清理旧镜像、容器和备份，需定期检查磁盘。
 
 ### Docker 部署与维护
 
@@ -418,13 +411,13 @@ GitHub 的 `production` Environment 只允许 main 分支，包含以下配置�
 
 | 宿主机路径 | 容器路径 | 用途 |
 | --- | --- | --- |
-| `/var/lib/auto-workflow` | 原路径 | 保留的 SQLite 旧库、租户配置和工作目录 |
+| `/var/lib/auto-workflow` | 原路径 | 租户配置和工作目录 |
 | `/var/lib/auto-workflow/runtime` | `/app/.workflow-data` | 会话交付和其他运行数据 |
 | `/etc/auto-workflow` | `/run/config`（只读） | 环境配置 |
 | `/var/lib/auto-workflow-postgres` | PostgreSQL 的 `/var/lib/postgresql/data` | PostgreSQL 持久化数据 |
 | `/etc/auto-workflow-postgres` | 单独密码文件挂载到 `/run/secrets`（只读） | 管理员与应用密码；宿主机父目录仅 root 可访问 |
 
-Node 使用 `--env-file-if-exists=/run/config/auto-workflow.env` 解析环境文件，支持原有带引号的值；绑定端口、数据库路径和禁用服务器 Agent 等部署参数由容器环境变量覆盖。修改宿主机环境文件后执行 `docker restart auto-workflow` 生效，CI/CD 不覆盖此文件。容器内 `localhost` 指容器自身；本地 Mac 的 AI 代理仍需提供服务器可访问的地址。
+Node 使用 `--env-file-if-exists=/run/config/auto-workflow.env` 解析环境文件，支持原有带引号的值；绑定端口、数据库连接和禁用服务器 Agent 等部署参数由容器环境变量覆盖。修改宿主机环境文件后执行 `docker restart auto-workflow` 生效，CI/CD 不覆盖此文件。容器内 `localhost` 指容器自身；本地 Mac 的 AI 代理仍需提供服务器可访问的地址。
 
 ```bash
 # 在服务器上执行
@@ -445,7 +438,7 @@ docker run --rm --name auto-workflow-local -p 127.0.0.1:4174:4173 \
   -v workflow-local-runtime:/app/.workflow-data auto-workflow:local
 ```
 
-当前公网入口为 `https://autoworkflow.top`；`www.autoworkflow.top` 跳转到主域名。80 端口用于证书验证和 HTTPS 跳转；`auto-workflow-cert-renew.timer` 保持原有证书续期任务。数据库、环境配置与 runtime 目录都在容器外，删除或替换容器不会删除它们。SQLite 备份需停服或使用一致性备份，不能只复制正在写入的主数据库文件。
+当前公网入口为 `https://autoworkflow.top`；`www.autoworkflow.top` 跳转到主域名。80 端口用于证书验证和 HTTPS 跳转；`auto-workflow-cert-renew.timer` 保持原有证书续期任务。数据库、环境配置与 runtime 目录都在容器外，删除或替换容器不会删除它们。数据库备份通过 pg_dump 获取一致性快照。
 
 ### 本地开发 PostgreSQL + pgvector
 
@@ -482,17 +475,9 @@ docker compose -f compose.postgres.yaml up -d --wait
 bash scripts/deploy/setup-postgres.sh scripts/database/postgres-init/001-app.sh
 ```
 
-脚本拒绝覆盖已有数据或配置，生成随机密码，初始化普通应用账号并启用 pgvector。数据库设置 128 MB shared_buffers 和 30 个连接。生产 `.env` 配置 `DATABASE_DRIVER=postgres`、`PGHOST=auto-workflow-postgres`、`PGPORT=5432`、`PGDATABASE=auto_workflow`、`PGUSER=auto_workflow`，`PGPASSWORD` 来自服务器的应用密码文件。旧 MySQL 容器在切换验证成功后停止，但保留数据和配置。
+脚本拒绝覆盖已有数据或配置，生成随机密码，初始化普通应用账号并启用 pgvector。数据库设置 128 MB shared_buffers 和 30 个连接。生产 `.env` 配置 `DATABASE_DRIVER=postgres`、`PGHOST=auto-workflow-postgres`、`PGPORT=5432`、`PGDATABASE=auto_workflow`、`PGUSER=auto_workflow`，`PGPASSWORD` 来自服务器的应用密码文件。
 
-MySQL 迁移步骤：停止所有源库写入服务，备份 MySQL、环境文件和运行目录。在同一环境文件中临时保留旧库 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_DATABASE`、`MYSQL_USER`、`MYSQL_PASSWORD`，并配置新库 `PG*` 参数，然后执行：
-
-```bash
-node --env-file=<环境文件> --import tsx scripts/database/import-postgres.ts
-```
-
-工具持有旧库写锁，导入全部 14 张业务表，逐表核对内容，包括密码哈希、会话和附件字节，修正 PostgreSQL 审计 ID 序列，在单事务内提交。相同源内容再次导入会跳过，非空目标库拒绝被其他源覆盖；不支持的数据（例如文本 NUL）会报错并回滚。源 MySQL 不删除。SQLite 旧库可先使用保留的 `import-sqlite.ts` 导入临时 MySQL，再迁入 PostgreSQL。
-
-迁移验证完成后创建 `/var/lib/auto-workflow/POSTGRES_MIGRATED` 标记，并安装新版 `scripts/deploy/release.sh`。CI 发布检查此标记，停应用后通过 `pg_dump -Fc` 备份到 `postgres.dump`，再替换应用容器。恢复需管理员停服、核对版本后使用 `pg_restore`；不会自动恢复旧库，避免覆盖任务或重复执行 Agent 指令。新库接收写入后不可直接切回旧库。
+PostgreSQL 初始化验证完成后创建 `/var/lib/auto-workflow/POSTGRES_MIGRATED` 标记，并安装新版 `scripts/deploy/release.sh`。CI 发布检查此标记，停应用后通过 `pg_dump -Fc` 备份到 `postgres.dump`，再替换应用容器。恢复需管理员停服、核对版本后使用 `pg_restore`；不会自动恢复旧库，避免覆盖任务或重复执行 Agent 指令。新库接收写入后不可直接切回旧库。
 
 PostgreSQL 的建表位于 `migrations/postgres/`，使用事务和 advisory lock 执行迁移，拒绝未知新版本；通过数据库事务锁保留既有串行写入语义。当前仍使用工作线程维持同步数据库接口，每次查询最多等待 30 秒，连接失效后不自动重复写入，核对结果后重启应用恢复。`GET /api/health` 检查数据库，失败返回 503。
 
@@ -500,7 +485,13 @@ PostgreSQL 的建表位于 `migrations/postgres/`，使用事务和 advisory loc
 
 pgvector 扩展已启用，集成测试覆盖向量写入、余弦距离排序、HNSW 索引及带租户条件的查询。业务向量表、文本切分、embedding 模型和维度尚未选定，因此本次不创建固定维度的业务向量列，也不新增搜索 HTTP 接口。后续应按租户及模型版本隔离向量，并在查询中检查业务授权；有 HNSW 索引并不自动提供租户权限隔离。可参考 [pgvector 官方文档](https://github.com/pgvector/pgvector)。
 
-CI 使用独立 `workflow_test` 数据库进行 MySQL → PostgreSQL 导入、事务、认证与向量回归。手动运行 `test/postgres.test.ts` 时需提供 `POSTGRES_TEST=1`、两套测试库连接变量（`PG*` 和 `MYSQL_*`），并先由管理员在 PostgreSQL 测试库执行 `CREATE EXTENSION vector`。测试会清理测试库，禁止连接开发或生产业务库。
+pnpm test 和 pnpm test:e2e 自动启动临时 PostgreSQL 容器，测试结束后移除容器及其数据卷；本地需要 Docker。CI 复用工作流的 PostgreSQL 服务。所有测试仅允许 workflow_test 库，各测试使用独立 schema，并发和重连均在真实数据库上验证。运行指定测试：
+
+```bash
+node --import tsx scripts/testing/run.ts node test/database.test.ts
+```
+
+CI 的 TEST_PGHOST、TEST_PGPORT、TEST_PGUSER、TEST_PGPASSWORD、TEST_PGDATABASE 仅连接临时测试服务；不得用于业务库。
 
 开发机从本地服务切换到云端时，设置 `WORKBENCH_URL` 为新的 HTTPS 地址，使用云端个人账号，并给 `WORKBENCH_DEVICE_DIR` 指定新目录（例如 `.workflow-data/device-cloud`）。原状态目录绑定旧服务，不能直接复用。连接器保持运行后，在手机浏览器的“设备与 Agent”页面选择该设备新建远端任务。
 

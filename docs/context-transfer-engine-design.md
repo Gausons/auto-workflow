@@ -30,7 +30,7 @@
 | `src/remoteCodexWorker.ts` | 来源冻结、上传下载、目标上下文落盘、执行领取 | 共用引擎；设备进程保留连接、心跳与执行宿主 |
 | `src/codexExecution.ts` / `acpAgent.ts` | Agent 启动、恢复、停止、结果核对 | 经 AgentTarget 端口复用，不重写执行器 |
 | `src/issueSources/` | 已有 IssueSource 注册机制与 Jira 接入 | 包装成只读上下文来源；分配、状态修改保留业务接口 |
-| `src/database.ts` | `session_contexts` 与租户任务数据 | 引擎存储端口的 SQLite 实现 |
+| `src/database.ts` | `session_contexts` 与租户任务数据 | 引擎存储端口的 PostgreSQL 实现 |
 
 当前关键耦合：完整交付限制为 Codex/Claude；编译器再次判断厂商记录结构；引擎候选代码依赖 `public/taskTypes`、HTTP 错误和业务数据库；跨设备包校验在服务端与 worker 重复实现。仅移动文件不能形成真正的扩展边界。
 
@@ -53,7 +53,7 @@ flowchart TB
 
 工作台负责认证、RBAC 规则、任务归属和执行调度；通过受信宿主提供授权上下文。引擎每个入口仍调用授权端口并要求明确租户和设备范围，不能把上游 HTTP 已鉴权当作唯一边界。任务/execution 通过外部关联 ID 接入，不能成为纯导出、离线导入的必选实体。
 
-设备连接器负责实际文件访问、Agent 进程和目标工作区映射；工作台协调传输并保存状态。设备不是整库副本，多机交换不可变数据与明确命令，不进行 SQLite 文件复制或任意双向业务状态合并。
+设备连接器负责实际文件访问、Agent 进程和目标工作区映射；工作台协调传输并保存状态。设备不是整库副本，多机交换不可变数据与明确命令，不进行 PostgreSQL 文件复制或任意双向业务状态合并。
 
 建议目录：
 
@@ -67,7 +67,7 @@ packages/context-adapters/
   src/sources/         codex-history、claude-history、issue-source、markdown
   src/targets/         acp、codex-native、export
   src/renderers/       markdown、summary
-  src/storage/         sqlite、filesystem
+  src/storage/         postgres、filesystem
   src/transports/      workbench-http、local
 src/engineIntegration/ 工作台服务适配、任务映射与组合入口
 ```
@@ -177,7 +177,7 @@ Delivery: waiting_source → waiting_bundle → preparing → ready
 
 建议新增引擎专属表 `context_captures`、`context_snapshots`、`context_bundles`、`context_objects`、`context_bundle_objects`、`context_deliveries`、`context_delivery_events`；按阶段落地，租户 ID 进入所有主/外键及唯一约束。状态、请求指纹、revision、租约与错误阶段落库，不仅放在内存。
 
-对象字节通过 BlobStore 保存于租户隔离目录；SQLite 保存元数据、引用和事务状态。文件发布成功后才提交 available，失败由可恢复的暂存记录清理；垃圾回收只删除无引用且超过宽限期的对象，并排除进行中的上传与交付。
+对象字节通过 BlobStore 保存于租户隔离目录；PostgreSQL 保存元数据、引用和事务状态。文件发布成功后才提交 available，失败由可恢复的暂存记录清理；垃圾回收只删除无引用且超过宽限期的对象，并排除进行中的上传与交付。
 
 引擎事件与交付状态在同一事务写入；通过 outbox 或宿主同库事务更新任务时间线。不能靠两个互不相关的写入分别宣称“交付已创建”和“执行已绑定”。不同存储宿主使用幂等事件消费及补偿核对。
 

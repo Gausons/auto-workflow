@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createApp } from '../server.js';
+import { createApp } from './testing/database.js';
 
 const port = Number(process.env.BUGFLOW_E2E_PORT || 4191);
 const rootDir = await mkdtemp(path.join(tmpdir(), 'bugflow-e2e-'));

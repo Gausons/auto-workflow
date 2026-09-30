@@ -3,17 +3,16 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { openDatabase } from '../src/database.js';
+import { openDatabase } from '../scripts/testing/database.js';
 import { freezeSnapshot } from '@auto-workflow/context-engine';
 import { detachSnapshot } from '@auto-workflow/context-engine/detached-bundle';
-import { DatabaseSync } from 'node:sqlite';
 
 const tokenA = 'a'.repeat(43), tokenB = 'b'.repeat(43);
 const snapshot = (title: string) => ({ bugs: [{ id: 'same-bug', title }] });
 
-test('SQLite isolates identical user and entity IDs by tenant, rolls back failed snapshots and survives reopen', async () => {
+test('PostgreSQL isolates identical user and entity IDs by tenant, rolls back failed snapshots and survives reopen', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'bugflow-db-'));
-  const filename = path.join(root, 'workflow.sqlite');
+  const filename = path.join(root, 'workflow.database-key');
   let db = openDatabase(filename);
   try {
     db.createTenant({ id: 'a', token: tokenA });
@@ -40,7 +39,7 @@ test('SQLite isolates identical user and entity IDs by tenant, rolls back failed
 
 test('legacy import supports the old doubled users directory, is atomic and does not repeat', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'bugflow-migrate-'));
-  const db = openDatabase(':memory:');
+  const db = openDatabase();
   try {
     db.createTenant({ id: 'default', token: tokenA });
     const dir = path.join(root, '.workflow-data/users/users/person');
@@ -66,7 +65,7 @@ test('legacy import supports the old doubled users directory, is atomic and does
 
 test('transfer receipt survives reopen, stays tenant-scoped and cannot change a sealed digest', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'context-receipt-'));
-  const filename = path.join(root, 'workflow.sqlite');
+  const filename = path.join(root, 'workflow.database-key');
   let db = openDatabase(filename);
   try {
     db.createTenant({ id: 'a', token: tokenA }); db.createTenant({ id: 'b', token: tokenB });
@@ -88,32 +87,10 @@ test('transfer receipt survives reopen, stays tenant-scoped and cannot change a 
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
 });
 
-test('migrations 006 through 008 upgrade an existing v5 database without changing its session snapshots', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'context-upgrade-'));
-  const filename = path.join(root, 'workflow.sqlite');
-  try {
-    const first = openDatabase(filename);
-    first.createTenant({ id: 'a', token: tokenA });
-    const context = freezeSnapshot([{ role: 'user', text: '升级前记录', source: 's' }], ['s']);
-    first.saveSessionContext('a', context);
-    first.close();
-    const old = new DatabaseSync(filename);
-    old.exec('DROP TABLE auth_identities; DROP TABLE context_transfer_manifests; DROP TABLE context_transfer_objects; DROP TABLE context_transfers; PRAGMA user_version = 5;');
-    old.close();
-    const upgraded = openDatabase(filename);
-    try {
-      assert.deepEqual(upgraded.readSessionContext('a', context.id), context);
-      assert.equal(upgraded.readContextTransfer('a', 'missing'), undefined);
-      const check = new DatabaseSync(filename);
-      try { assert.equal(check.prepare('PRAGMA user_version').get()?.user_version, 8); }
-      finally { check.close(); }
-    } finally { upgraded.close(); }
-  } finally { await rm(root, { recursive: true, force: true }); }
-});
 
 test('detached objects and manifest survive restart, remain tenant scoped, and reject changed bytes', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'context-objects-'));
-  const filename = path.join(root, 'workflow.sqlite');
+  const filename = path.join(root, 'workflow.database-key');
   let db = openDatabase(filename);
   try {
     db.createTenant({ id: 'a', token: tokenA }); db.createTenant({ id: 'b', token: tokenB });
@@ -133,24 +110,4 @@ test('detached objects and manifest survive restart, remain tenant scoped, and r
     assert.throws(() => db.saveContextObject('a', 'job', '0'.repeat(64), 'image/png', image), /摘要无效/);
     assert.equal(db.readContextManifest('a', 'job')?.manifestDigest, detached.manifest.manifestDigest);
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
-});
-
-test('migrations 007 and 008 upgrade a v6 database with existing transfer receipts', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'context-v6-upgrade-'));
-  const filename = path.join(root, 'workflow.sqlite');
-  try {
-    const first = openDatabase(filename);
-    first.createTenant({ id: 'a', token: tokenA });
-    const snapshot = freezeSnapshot([{ role: 'user', text: '原交接', source: 's' }], ['s']);
-    first.recordContextTransfer('a', 'job', 'A', 'B', snapshot);
-    first.close();
-    const old = new DatabaseSync(filename);
-    old.exec('DROP TABLE auth_identities; DROP TABLE context_transfer_manifests; DROP TABLE context_transfer_objects; PRAGMA user_version = 6;');
-    old.close();
-    const upgraded = openDatabase(filename);
-    try {
-      assert.equal(upgraded.readContextTransfer('a', 'job')?.snapshotDigest, snapshot.digest);
-      assert.equal(upgraded.readContextManifest('a', 'job'), null);
-    } finally { upgraded.close(); }
-  } finally { await rm(root, { recursive: true, force: true }); }
 });

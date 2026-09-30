@@ -29,6 +29,5 @@
 **/node_modules
 **/.env*
 **/.workflow-*
-**/*.sqlite*
 **/*.log
 **/*.test.*

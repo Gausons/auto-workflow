@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createApp } from '../server.js';
+import { createApp } from '../scripts/testing/database.js';
 
 const password = 'personal-account-password';
 

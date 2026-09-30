@@ -1,11 +1,11 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from '../src/database.js';
-import { databasePath, generateToken, loadEnvironment, provisionDefaultTenant } from '../src/tenancy.js';
+import { generateToken, loadEnvironment, provisionDefaultTenant } from '../src/tenancy.js';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const environment = loadEnvironment(rootDir);
-const database = openDatabase(databasePath(rootDir, environment), environment);
+const database = openDatabase(environment);
 try {
   const [command, id, ...nameParts] = process.argv.slice(2);
   if (command === 'list') {

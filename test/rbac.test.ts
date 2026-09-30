@@ -4,9 +4,8 @@ import { once } from 'node:events';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { DatabaseSync } from 'node:sqlite';
-import { createApp } from '../server.js';
-import { hashToken, openDatabase } from '../src/database.js';
+import { createApp } from '../scripts/testing/database.js';
+import { rawDatabase, hashToken, openDatabase } from '../scripts/testing/database.js';
 
 const setupToken = 'setup-token-'.repeat(4);
 const password = 'correct-member-password';
@@ -99,7 +98,7 @@ test('organization members, role enforcement, cross-organization access and imme
     await request(loggedOut.token, '/api/auth/logout', 'POST');
     assert.equal((await request(loggedOut.token, '/api/bootstrap')).status, 401);
 
-    const db = openDatabase(app.filename);
+    const db = openDatabase(app.databaseKey);
     db.createTenant({ id: 'other', token: 'other-setup-'.repeat(4) });
     db.close();
     await request('other-setup-'.repeat(4), '/api/auth/setup', 'POST', { username: winner, password: 'other-organization-password' });
@@ -123,18 +122,13 @@ test('organization members, role enforcement, cross-organization access and imme
   } finally { await app.close(); await rm(rootDir, { recursive: true, force: true }); }
 });
 
-test('version 1 migration preserves tenant data; salted passwords, session expiry and concurrent privilege checks', async () => {
+test('PostgreSQL tenant data; salted passwords, session expiry and concurrent privilege checks', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'bugflow-rbac-migration-'));
-  const filename = path.join(root, 'workflow.sqlite');
-  let raw = new DatabaseSync(filename);
-  raw.exec(await readFile(new URL('../migrations/001_initial.sql', import.meta.url), 'utf8'));
-  raw.prepare('INSERT INTO tenants VALUES (?, ?, ?, ?)').run('test', 'Legacy organization', hashToken(setupToken), '2026-01-01');
-  raw.prepare('INSERT INTO tenant_settings(tenant_id, config) VALUES (?, ?)').run('test', '{"assignee":"legacy-line"}');
-  raw.prepare('INSERT INTO user_states VALUES (?, ?, ?)').run('test', 'person', '2026-01-01');
-  raw.prepare('INSERT INTO workflow_items VALUES (?, ?, ?, ?, ?, ?)').run('test', 'person', 'bugs', 'legacy-bug', 0, '{"id":"legacy-bug","title":"preserved"}');
-  raw.prepare('INSERT INTO workflow_items VALUES (?, ?, ?, ?, ?, ?)').run('test', 'person', 'runs', 'legacy-run', 0, '{"id":"legacy-run"}');
-  raw.exec('PRAGMA user_version = 1'); raw.close();
+  const filename = path.join(root, 'workflow.database-key');
   const db = openDatabase(filename);
+  db.createTenant({ id: 'test', name: 'Test organization', token: setupToken });
+  db.writeSettings('test', { config: { assignee: 'legacy-line' } });
+  db.createStore('test').scheduleSave('person', { bugs: [{ id: 'legacy-bug', title: 'preserved' }] });
   try {
     assert.equal(db.readSettings('test').config.assignee, 'legacy-line');
     assert.equal(db.createStore('test').readUserState('person').bugs[0].title, 'preserved');
@@ -147,15 +141,12 @@ test('version 1 migration preserves tenant data; salted passwords, session expir
     await assert.rejects(pending, { statusCode: 403 });
     assert.equal(db.listUsers('test').length, 2);
     const session = await db.login('test', 'owner', password);
-    raw = new DatabaseSync(filename);
+    const raw = rawDatabase(filename);
     const hashes = raw.prepare('SELECT password_hash FROM organization_users').all();
     assert.ok(hashes.every((row) => String(row.password_hash).startsWith('scrypt$') && !String(row.password_hash).includes(password)));
     assert.notEqual(hashes[0]!.password_hash, hashes[1]!.password_hash);
     raw.prepare('UPDATE user_sessions SET expires_at = ?').run(Date.now() - 1);
     assert.equal(db.authenticateSession(session.token), null);
-    assert.equal(raw.prepare('PRAGMA user_version').get()?.user_version, 8);
-    assert.ok(raw.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'auth_identities'").get());
-    assert.equal(raw.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workflow_items'").get(), undefined);
     assert.equal(raw.prepare('SELECT count(*) AS count FROM issue_items').get()?.count, 1);
     raw.close();
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }

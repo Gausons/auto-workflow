@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { CodexRunner, createCodexExecution, executionPrompt } from '../src/codexExecution.js';
 import { createTaskCenter } from '../src/taskCenter.js';
-import { openDatabase } from '../src/database.js';
+import { openDatabase } from '../scripts/testing/database.js';
 import type { Actor, Session } from '../shared/taskTypes.js';
 
 interface CallParams {
@@ -47,7 +47,7 @@ const last = <T>(values: T[]): T => { const value = values.at(-1); assert.ok(val
 test('git operations reuse the recently discovered local target', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'codex-git-target-')); t.after(() => rm(root, { recursive: true, force: true }));
   await promisify(execFile)('git', ['-C', root, 'init', '-b', 'main']);
-  const db = openDatabase(':memory:'); t.after(() => db.close()); db.createTenant({ id: 'default', token: 'x'.repeat(32) });
+  const db = openDatabase(); t.after(() => db.close()); db.createTenant({ id: 'default', token: 'x'.repeat(32) });
   let discoveries = 0;
   const service = createCodexExecution({ database: db, tenantId: 'default', workspace: () => root, runnerFactory: () => ({
     projects: async () => { discoveries++; return [{ id: 'project', name: 'Repo', cwd: root }]; }, close() {}
@@ -192,7 +192,7 @@ test('mirrors the complete Codex model catalog and its default model', async t =
 test('durable execution reservations isolate tenants, reject duplicates, and recover restart as unknown', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'codex-execution-')); t.after(() => rm(root, { recursive: true, force: true }));
   const alternative = path.join(root, 'another-project'); await mkdir(alternative);
-  const db = openDatabase(':memory:'); t.after(() => db.close());
+  const db = openDatabase(); t.after(() => db.close());
   db.createTenant({ id: 'default', token: 'x'.repeat(32) }); db.createTenant({ id: 'other', token: 'y'.repeat(32) });
   const history = { catalog: async () => ({ sessions: [], providers: [] }) };
   const center = createTaskCenter({ database: db, tenantId: 'default', history });
@@ -236,7 +236,7 @@ test('durable execution reservations isolate tenants, reject duplicates, and rec
 test('remote device claims once, reports real thread state, and rejects other device accounts', async t => {
   const { RemoteCodexWorker } = await import('../src/remoteCodexWorker.js');
   const root = await mkdtemp(path.join(os.tmpdir(), 'remote-codex-')); t.after(() => rm(root, { recursive: true, force: true }));
-  const db = openDatabase(':memory:'); t.after(() => db.close()); db.createTenant({ id: 'default', token: 'x'.repeat(32) });
+  const db = openDatabase(); t.after(() => db.close()); db.createTenant({ id: 'default', token: 'x'.repeat(32) });
   const center = createTaskCenter({ database: db, tenantId: 'default', history: { catalog: async () => ({ sessions: [], providers: [] }) } });
   const owner: Actor = { id: 'device-owner' };
   await center.command({ action: 'heartbeat', deviceId: 'remote', name: 'Remote Mac', agents: ['codex'], sessions: [], codexProjects: [{ id: 'p', name: 'Repo', cwd: root }] }, owner);
@@ -330,7 +330,7 @@ test('busy or unavailable original threads never fall back to a new thread', asy
 });
 
 test('history continuation is scoped, idempotent, task-owned and retains a single session', async t => {
-  const db = openDatabase(':memory:'); db.createTenant({ id: 'default', token: 'x'.repeat(32) }); t.after(() => db.close());
+  const db = openDatabase(); db.createTenant({ id: 'default', token: 'x'.repeat(32) }); t.after(() => db.close());
   const id = 'a'.repeat(64), nativeId = '12345678-1234-1234-1234-123456789abc';
   let agent = 'codex';
   const historySession = (): Session => ({ id, sessionId: nativeId, agent, deviceId: 'local', title: '历史任务', cwd: '/repo', updatedAt: new Date().toISOString() });
@@ -446,7 +446,7 @@ test('desktop submission timeout stays unknown and never falls back to a direct 
 
 test('uploaded attachments reach the local runner as durable file references and reject remote execution', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'execution-files-')); t.after(() => rm(root, { recursive: true, force: true }));
-  const db = openDatabase(':memory:'); t.after(() => db.close()); db.createTenant({ id: 'default', token: 'x'.repeat(32) });
+  const db = openDatabase(); t.after(() => db.close()); db.createTenant({ id: 'default', token: 'x'.repeat(32) });
   const center = createTaskCenter({ database: db, tenantId: 'default', history: { catalog: async () => ({ sessions: [], providers: [] }) } });
   await center.command({ action: 'create', title: 'Read attachment' }, { id: 'owner' });
   const task = (await center.snapshot()).tasks[0]; let started: ExecutionJob | undefined;

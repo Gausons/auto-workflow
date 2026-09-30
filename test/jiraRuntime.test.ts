@@ -4,8 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { registerIssueSource, createIssueSource } from '../src/issueSources/index.ts';
-import { createApp } from '../server.js';
-import { openDatabase } from '../src/database.js';
+import { createApp } from '../scripts/testing/database.js';
+import { openDatabase } from '../scripts/testing/database.js';
 import type { Environment } from '../src/issueSources/types.ts';
 
 test('Jira runtime sync, attachment/assignment dispatch, auth, failure atomicity and source switching', async () => {
@@ -88,7 +88,7 @@ test('Jira runtime sync, attachment/assignment dispatch, auth, failure atomicity
     assert.doesNotMatch(JSON.stringify(failed.body), /fictional-jira-token/);
     // Persisted legacy keys remain recoverable and are never mixed with Jira IDs.
     await app!.close(); app = undefined;
-    const db = openDatabase(path.join(rootDir, '.workflow-data/workflow.sqlite'));
+    const db = openDatabase(rootDir);
     await db.createStore('default').writeUserState('default', { bugs: [{ id: '100', aid: '100', title: 'Archived fixture issue' }] });
     db.close();
     environment.ISSUE_PROVIDER = 'fixture';

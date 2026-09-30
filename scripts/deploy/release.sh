@@ -79,11 +79,8 @@ else
   exit 1
 fi
 
-# Stop the application writer before backing up PostgreSQL and retaining the legacy SQLite files.
+# Stop the application writer before backing up PostgreSQL.
 docker exec -u postgres auto-workflow-postgres pg_dump -U postgres -d auto_workflow -Fc > "$backup/postgres.dump"
-shopt -s nullglob
-database_files=("$data"/workflow.sqlite*)
-if [[ ${#database_files[@]} -gt 0 ]]; then cp -a "${database_files[@]}" "$backup/"; fi
 cp -a /etc/auto-workflow/auto-workflow.env "$backup/"
 tar -czf "$backup/runtime-and-tenants.tar.gz" -C "$data" runtime tenants
 
@@ -100,7 +97,7 @@ docker create --name auto-workflow --restart unless-stopped --init \
   --env HOST=0.0.0.0 --env PORT=4173 --env NODE_ENV=production \
   --env DATABASE_DRIVER=postgres --env PGHOST=auto-workflow-postgres \
   --env PGDATABASE=auto_workflow --env PGUSER=auto_workflow --env PGPORT=5432 \
-  --env "DATABASE_PATH=$data/workflow.sqlite" --env "TENANT_ENV_DIR=$data/tenants" \
+  --env "TENANT_ENV_DIR=$data/tenants" \
   --env "CODEX_WORKSPACE_DIR=$data/workspace" --env ACP_ENABLED=false \
   --env CODEX_EXECUTABLE=/nonexistent/codex \
   "$image" > /dev/null

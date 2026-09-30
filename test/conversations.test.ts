@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, appendFile, readFile, rm } from 'node:fs/pro
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { openDatabase } from '../src/database.js';
+import { openDatabase } from '../scripts/testing/database.js';
 import { createAgentHistory } from '../src/agentHistory/index.js';
 import { createSessionDelivery } from '../src/sessionDelivery/index.js';
 import { createConversations } from '../src/conversations.js';
@@ -25,7 +25,7 @@ async function fixture(t: TestContext) {
   const file = path.join(records, 'session.jsonl');
   await writeFile(file, line({ type: 'session_meta', payload: { id: 'source-native', cwd: root } }) + line(message('保持原接口兼容')) + line(message('先定位问题，再补充测试', 'assistant')));
   const environment = { IDE_HISTORY_CODEX_DIR: records, IDE_HISTORY_CLAUDE_DIR: path.join(root, 'absent'), SECRET: 'secret-for-context-test' };
-  const database = openDatabase(path.join(root, 'data.sqlite')); database.createTenant({ id: 'default', token: 'x'.repeat(32) }); database.createTenant({ id: 'other', token: 'y'.repeat(32) });
+  const database = openDatabase(path.join(root, 'data.database-key')); database.createTenant({ id: 'default', token: 'x'.repeat(32) }); database.createTenant({ id: 'other', token: 'y'.repeat(32) });
   const history = createAgentHistory({ environment, workspace: () => root });
   const delivery = createSessionDelivery({ history, environment });
   const source = (await history.catalog()).sessions[0]!.id;

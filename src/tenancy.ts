@@ -20,17 +20,13 @@ export function loadEnvironment(rootDir: string): Environment {
   return { ...readEnvFile(path.join(rootDir, '.env')), ...process.env };
 }
 
-export function databasePath(rootDir: string, environment: Environment) {
-  return path.resolve(rootDir, environment.DATABASE_PATH || '.workflow-data/workflow.sqlite');
-}
-
 export const generateToken = () => randomBytes(32).toString('base64url');
 
 export function provisionDefaultTenant(database: TenantDatabase, rootDir: string, environment: Environment) {
   if (database.getTenant('default')) return false;
   const token = environment.DEFAULT_TENANT_TOKEN || generateToken();
   // The token remains an internal compatibility field. New personal accounts register without it.
-  const dir = path.dirname(databasePath(rootDir, environment));
+  const dir = path.resolve(rootDir, '.workflow-data');
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   database.createTenant({ id: 'default', name: '默认团队', token });
   return true;

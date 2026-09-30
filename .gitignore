@@ -53,7 +53,6 @@ coverage/
 dist/
 public/build/
 .DS_Store
-*.sqlite*
 *.db
 *.db-*
 *.jsonl

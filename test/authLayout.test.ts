@@ -5,7 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { once } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
-import { createApp } from '../server.js';
+import { createApp } from '../scripts/testing/database.js';
 
 test('login page and its entire JavaScript import graph are served without authentication', async () => {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), 'bugflow-login-assets-'));

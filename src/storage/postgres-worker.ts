@@ -30,16 +30,23 @@ async function initialize() {
   await client.query("SET lock_timeout = '10s'");
   const extension = await client.query("SELECT 1 FROM pg_extension WHERE extname = 'vector'");
   if (!extension.rowCount) throw new Error('PGVECTOR_NOT_INSTALLED');
+  if (config.initializeSchema === false) return;
+  const schema = config.schema || 'public';
+  if (config.schema) await client.query(`SET search_path TO "${config.schema}", public`);
   await client.query('BEGIN');
   try {
     await client.query('SELECT pg_advisory_xact_lock(710042, 1)');
-    await client.query('CREATE TABLE IF NOT EXISTS schema_migrations (version INT PRIMARY KEY)');
-    const versions = await client.query('SELECT MAX(version) AS version FROM schema_migrations');
+    await client.query(`CREATE TABLE IF NOT EXISTS "${schema}".schema_migrations (version INT PRIMARY KEY)`);
+    const versions = await client.query(`SELECT MAX(version) AS version FROM "${schema}".schema_migrations`);
     const version = Number(versions.rows[0].version || 0);
-    if (version > 1) throw new Error('SCHEMA_VERSION_UNSUPPORTED');
+    if (version > 2) throw new Error('SCHEMA_VERSION_UNSUPPORTED');
     if (!version) {
-      await client.query(readFileSync(new URL('../../migrations/postgres/001_initial.sql', import.meta.url), 'utf8'));
-      await client.query('INSERT INTO schema_migrations VALUES (1)');
+      await client.query(readFileSync(new URL('../../migrations/postgres/001_initial.sql', import.meta.url), 'utf8').replaceAll('CREATE TABLE IF NOT EXISTS ', `CREATE TABLE IF NOT EXISTS "${schema}".`));
+      await client.query(`INSERT INTO "${schema}".schema_migrations VALUES (1)`);
+    }
+    if (version < 2) {
+      await client.query(readFileSync(new URL('../../migrations/postgres/002_remove_import_receipts.sql', import.meta.url), 'utf8'));
+      await client.query(`INSERT INTO "${schema}".schema_migrations VALUES (2)`);
     }
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; }
@@ -55,7 +62,7 @@ async function execute(operation: string, sql: string, params: SqlValue[]) {
   if (!client || broken) throw new Error('CONNECTION_UNAVAILABLE');
   if (operation === 'close') { await client.end(); return null; }
   if (operation === 'exec') {
-    if (sql === 'BEGIN IMMEDIATE') { await begin(); return null; }
+    if (sql === 'BEGIN') { await begin(); return null; }
     if (sql === 'COMMIT' || sql === 'ROLLBACK') { await client.query(sql); transaction = false; return null; }
     throw new Error('UNSUPPORTED_EXEC');
   }

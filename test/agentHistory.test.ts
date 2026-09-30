@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
 import { createAgentHistory } from '../src/agentHistory/index.js';
-import { createApp } from '../server.js';
+import { createApp } from '../scripts/testing/database.js';
 import { canonicalWorkspace } from '../src/tenancy.js';
 import type { Environment } from '../src/issueSources/types.js';
 import type { HistoryAdapter, JsonObject } from '../src/agentHistory/types.js';

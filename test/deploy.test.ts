@@ -34,7 +34,7 @@ test('failed Docker health checks restore the previous container without restori
     const data = path.join(directory, 'data');
     const config = path.join(directory, 'config');
     await Promise.all([bin, path.join(base, 'backups'), data, config].map(dir => mkdir(dir, { recursive: true })));
-    await writeFile(path.join(data, 'workflow.sqlite'), 'existing-database');
+    await writeFile(path.join(data, 'workflow.database-key'), 'existing-database');
     await writeFile(path.join(data, 'POSTGRES_MIGRATED'), 'verified');
     await writeFile(path.join(config, 'auto-workflow.env'), 'TEST=value');
     const revision = 'a'.repeat(40);
@@ -71,7 +71,7 @@ esac
     assert.ok(commands.some(command => /^rename auto-workflow-previous-.* auto-workflow$/.test(command)));
     assert.ok(commands.includes('update --restart=unless-stopped auto-workflow'));
     assert.equal(commands.filter(command => command === 'start auto-workflow').length, 2);
-    assert.equal(await readFile(path.join(data, 'workflow.sqlite'), 'utf8'), 'existing-database');
+    assert.equal(await readFile(path.join(data, 'workflow.database-key'), 'utf8'), 'existing-database');
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -1,6 +1,4 @@
-import { openSqlite } from './storage/sqlite.js';
 import { openPostgres, postgresConfig } from './storage/postgres.js';
-import { openMysql, mysqlConfig } from './storage/mysql.js';
 import type { Connection } from './storage/connection.js';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -23,13 +21,12 @@ const parseTaskCenter = (value: unknown): TaskCenterData => JSON.parse(String(va
 
 export const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
 
-export function openDatabase(filename: string, environment: Record<string, string | undefined> = {}) {
-  const driver = environment.DATABASE_DRIVER || 'sqlite';
-  if (driver !== 'sqlite' && driver !== 'mysql' && driver !== 'postgres') throw new Error('DATABASE_DRIVER 仅支持 sqlite、mysql 或 postgres');
-  const db: Connection = driver === 'postgres' ? openPostgres(postgresConfig(environment)) : driver === 'mysql' ? openMysql(mysqlConfig(environment)) : openSqlite(filename);
+export function openDatabase(environment: Record<string, string | undefined>) {
+  if (environment.DATABASE_DRIVER && environment.DATABASE_DRIVER !== 'postgres') throw new Error('DATABASE_DRIVER 仅支持 postgres');
+  const db: Connection = openPostgres(postgresConfig(environment));
 
   function transaction<T>(fn: () => T): T {
-    db.exec('BEGIN IMMEDIATE');
+    db.exec('BEGIN');
     try { const result = fn(); db.exec('COMMIT'); return result; }
     catch (error) { try { db.exec('ROLLBACK'); } catch { /* Preserve the original uncertain outcome. */ } throw error; }
   }

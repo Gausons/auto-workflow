@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createCodexExecution } from '../src/codexExecution.js';
 import { createTaskCenter } from '../src/taskCenter.js';
-import { openDatabase } from '../src/database.js';
+import { openDatabase } from '../scripts/testing/database.js';
 import { RemoteCodexWorker } from '../src/remoteCodexWorker.js';
 import { remoteContinuationProject } from '../src/remoteSession.js';
 
@@ -16,7 +16,7 @@ type Report = Parameters<Parameters<NonNullable<Options['runnerFactory']>>[0]>[0
 
 async function fixture(t: import('node:test').TestContext) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'remote-continuation-'));
-  const db = openDatabase(':memory:');
+  const db = openDatabase();
   db.createTenant({ id: 'default', token: 'x'.repeat(32) });
   db.createTenant({ id: 'other', token: 'y'.repeat(32) });
   const owner = { id: 'connector-owner' }, nativeId = randomUUID();

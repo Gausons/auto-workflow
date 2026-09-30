@@ -7,7 +7,7 @@ import { createAuthHandler } from './src/authHttp.js';
 import { createStaticHandler } from './src/http/staticAssets.js';
 import { sendJson } from './src/http/response.js';
 import { permissionForRoute, permissionsFor } from './src/rbac.js';
-import { assertSeparateWorkspaces, canonicalWorkspace, databasePath, loadEnvironment, provisionDefaultTenant, tenantEnvironment } from './src/tenancy.js';
+import { assertSeparateWorkspaces, canonicalWorkspace, loadEnvironment, provisionDefaultTenant, tenantEnvironment } from './src/tenancy.js';
 import type { Tenant } from './src/database.js';
 import type { Environment } from './src/issueSources/types.js';
 
@@ -18,8 +18,7 @@ type ErrorLike = Error & { statusCode?: number };
 const asError = (value: unknown): ErrorLike => value instanceof Error ? value as ErrorLike : new Error(String(value));
 
 export function createApp({ rootDir = projectDir, environment = loadEnvironment(rootDir), fetchImpl }: AppOptions = {}) {
-  const filename = databasePath(rootDir, environment);
-  const database = openDatabase(filename, environment);
+  const database = openDatabase(environment);
   const handleAuth = createAuthHandler(database, { environment, fetchImpl });
   const serveWeb = createStaticHandler(projectDir);
   const runtimes = new Map<string, TenantRuntime>();
@@ -101,7 +100,6 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
 
   return {
     server,
-    filename,
     async close() {
       closing = true;
       const stopped = new Promise((resolve) => server.close(resolve));
@@ -122,7 +120,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   app.server.listen(port, host, () => {
     const address = app.server.address();
     console.log(`Auto bug workflow workbench: http://${host}:${typeof address === 'object' && address ? address.port : port}`);
-    console.log(`Database: ${environment.DATABASE_DRIVER === 'postgres' ? 'PostgreSQL + pgvector' : environment.DATABASE_DRIVER === 'mysql' ? 'MySQL' : app.filename}`);
+    console.log('Database: PostgreSQL + pgvector');
     console.log('首次使用请在登录页注册个人账号，也可以配置 Google 登录。');
   });
   let stopping = false;

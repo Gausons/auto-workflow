@@ -41,7 +41,7 @@
 | 原会话续聊 | `continueHistory` 支持本机 Codex；具备 requestId 去重、忙碌检查及未知结果核对 | Claude 和远端历史尚未支持；桌面 IPC 是实验性路径 |
 | 多设备 | `scripts/device-sync.ts` 同步目录、片段、交接包；RemoteCodexWorker 领取执行 | 默认不上传正文；可选仅最近 30 条中的用户/助手文本、末尾 24000 字符；收到包不会启动 |
 | 文件与代码 | 任务保存文件描述；执行支持本地附件；可查询/切换 Git 分支 | 未交付未提交改动、附件和仓库快照；远端执行拒绝上传附件 |
-| 持久化 | SQLite 事务及租户隔离；任务中心存放于每租户一个 JSON payload | 交接、执行、上下文缺少独立约束和索引，不宜长期承载完整历史 |
+| 持久化 | PostgreSQL 事务及租户隔离；任务中心存放于每租户一个 JSON payload | 交接、执行、上下文缺少独立约束和索引，不宜长期承载完整历史 |
 
 最影响核心体验的三个断点：
 
@@ -139,7 +139,7 @@ flowchart LR
 | `public/taskCenter.ts`、历史页 | 带上下文新开会话、继承历史展示、后台准备进度、普通聊天输入框 |
 | 新增数据库迁移 | context_snapshots、context_evidence、session_handoffs、handoff_attempts |
 
-新增表均带 tenant_id；`(tenant_id, request_id)` 唯一，executionId 与 handoffId 建立唯一绑定。首期执行仍可保留在 task_centers payload，通过同一 SQLite 事务协调新增表和旧 payload；后续再拆 executions，避免为交接功能先重写整个任务中心。
+新增表均带 tenant_id；`(tenant_id, request_id)` 唯一，executionId 与 handoffId 建立唯一绑定。首期执行仍可保留在 task_centers payload，通过同一 PostgreSQL 事务协调新增表和旧 payload；后续再拆 executions，避免为交接功能先重写整个任务中心。
 
 建议新增接口：`POST /api/sessions/:id/continue-as-new`，入参为 requestId、targetAgent、可选 message/目标位置，直接返回新会话标识和 preparing/ready 状态。来源解析、快照生成、执行绑定均由服务端完成。保留后台交接查询、取消和核对接口，但不让前端先调用 preview 再提交快照。继续沿用已有 execution 状态和交互接口。
 

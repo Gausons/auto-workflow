@@ -1,14 +1,16 @@
 import { MessageChannel, receiveMessageOnPort, Worker } from 'node:worker_threads';
 import type { Connection, SqlRow, SqlValue } from './connection.js';
 
-export interface PostgresConfig { host: string; port: number; user: string; password: string; database: string }
+export interface PostgresConfig { host: string; port: number; user: string; password: string; database: string; schema?: string; initializeSchema?: boolean }
 export function postgresConfig(env: Record<string, string | undefined>): PostgresConfig {
   const { PGHOST: host, PGUSER: user, PGPASSWORD: password, PGDATABASE: database } = env;
   const port = Number(env.PGPORT || 5432);
   if (!host || !user || !password || !database || !Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error('PostgreSQL 配置不完整：需要 PGHOST、PGUSER、PGPASSWORD、PGDATABASE 和有效端口');
   }
-  return { host, port, user, password, database };
+  const schema = env.PGSCHEMA;
+  if (schema && !/^[a-z][a-z0-9_]{0,62}$/.test(schema)) throw new Error('PGSCHEMA 无效');
+  return { host, port, user, password, database, ...(schema ? { schema } : {}) };
 }
 
 // Keep existing synchronous transaction callbacks on one dedicated connection.

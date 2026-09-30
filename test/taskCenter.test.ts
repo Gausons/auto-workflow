@@ -5,17 +5,17 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { once } from 'node:events';
 import os from 'node:os';
 import path from 'node:path';
-import { openDatabase } from '../src/database.js';
+import { openDatabase } from '../scripts/testing/database.js';
 import { createTaskCenter } from '../src/taskCenter.js';
 import { syncDeviceOnce } from '../scripts/device-sync.js';
-import { createApp } from '../server.js';
+import { createApp } from '../scripts/testing/database.js';
 import type { Actor, Task, TaskCenterData } from '../shared/taskTypes.js';
 import type { HistorySession } from '../src/agentHistory/types.js';
 
 const actor: Actor = { id: 'owner' };
 const source: HistorySession = { id: 'a'.repeat(64), agent: 'codex', agentLabel: 'Codex', deviceId: 'local', sessionId: 'source', title: '登录修复', cwd: '/repo', workspaces: ['/repo'], model: '', branch: '', status: 'completed', archived: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), messageCount: 0, partial: false };
 const history = { catalog: async () => ({ providers: [{ id: 'codex' }, { id: 'claude' }], sessions: [source] }) };
-function fixture(t: TestContext, filename = ':memory:') {
+function fixture(t: TestContext, filename: string | undefined = undefined) {
   const database = openDatabase(filename);
   database.createTenant({ id: 'default', token: 'x'.repeat(32) });
   database.createTenant({ id: 'other', token: 'y'.repeat(32) });
@@ -103,7 +103,7 @@ test('branches, references, running source protection, and device identity', asy
 test('task data survives reopening the database', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'task-persist-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
-  const filename = path.join(dir, 'data.sqlite');
+  const filename = path.join(dir, 'data.database-key');
   let db = openDatabase(filename); db.createTenant({ id: 'default', token: 'x'.repeat(32) });
   await createTaskCenter({ database: db, tenantId: 'default', history }).command({ action: 'create', title: '持久化任务' }, actor);
   db.close(); db = openDatabase(filename);

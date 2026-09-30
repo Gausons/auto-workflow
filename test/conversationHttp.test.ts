@@ -6,8 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { createApp } from '../server.js';
-import { openDatabase } from '../src/database.js';
+import { createApp } from '../scripts/testing/database.js';
+import { openDatabase } from '../scripts/testing/database.js';
 import { freezeSnapshot } from '@auto-workflow/context-engine';
 import { detachSnapshot } from '@auto-workflow/context-engine/detached-bundle';
 import type { Device, Execution } from '../shared/taskTypes.js';
@@ -81,7 +81,7 @@ test('authenticated HTTP and real ACP subprocess support new conversation, two t
   const ownerId = (ownerLogin.user as { id?: string } | undefined)?.id;
   assert.ok(ownerId);
   const executionId = randomUUID(), at = new Date().toISOString();
-  const database = openDatabase(app.filename);
+  const database = openDatabase(app.databaseKey);
   try {
     database.mutateTaskCenter('default', state => {
       state.devices.push(...(['A', 'B'] as const).map(deviceId => ({ id: deviceId, name: deviceId, owner: ownerId, agents: ['codex'], lastSeen: at, transport: 'connector' as const } satisfies Device)));
