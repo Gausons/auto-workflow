@@ -176,3 +176,38 @@ test('device setup selects remote target and browser controls a remote original 
   await request.post('/api/task-center/execution-action', { headers, data: { action: 'report', executionId: execution.id, controlAck: stop.execution.control.id, report: { ...report, request: null, status: 'interrupted' } } });
   await expect(page.getByRole('button', { name: '重新编辑本轮消息' })).toBeVisible();
 });
+
+test('workbench reading layout handles long sync messages, filtering and narrow screens', async ({ page }) => {
+  await login(page);
+  await page.route('**/api/bootstrap', async route => {
+    const response = await route.fetch();
+    const data = await response.json();
+    await route.fulfill({ json: { ...data,
+      bugs: [
+        { id: 'BUG-1', title: '报表页面加载失败，需要检查数据请求', status: '待处理', priority: '高', assignee: '测试人员', updatedAt: '1790155034256', description: '<p>打开报表后出现空白页面。</p><p><strong>复现步骤</strong></p><ol><li>进入工作台</li><li>打开报表</li></ol>' },
+        { id: 'BUG-2', title: '导出结果缺少字段', status: '待处理', priority: '中' }
+      ], metrics: { total: 2, pending: 2, processing: 0, resolved: 0 },
+      scheduler: { lastRunMessage: `同步失败：${'连接超时，请检查数据源设置。'.repeat(30)}` }
+    } });
+  });
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.getByRole('link', { name: '缺陷工作台', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '报表页面加载失败，需要检查数据请求' })).toBeVisible();
+  const heading = page.getByRole('heading', { name: '个人缺陷', exact: true });
+  expect((await heading.boundingBox())!.height).toBeLessThan(30);
+  const list = page.locator('.bug-list-panel');
+  const detail = page.locator('.bug-detail-panel');
+  expect((await detail.boundingBox())!.x).toBeGreaterThan((await list.boundingBox())!.x + (await list.boundingBox())!.width);
+  await page.locator('summary').filter({ hasText: '同步信息' }).click();
+  await expect(page.getByText(/^同步失败：/)).toBeVisible();
+  await page.locator('summary').filter({ hasText: '同步信息' }).click();
+  await page.screenshot({ path: 'test-results/workbench-desktop.png', fullPage: true });
+  await page.getByRole('searchbox', { name: '搜索缺陷' }).fill('BUG-2');
+  await expect(page.getByRole('heading', { name: '导出结果缺少字段' })).toBeVisible();
+  await page.getByRole('searchbox', { name: '搜索缺陷' }).clear();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(heading).toBeVisible();
+  expect((await detail.boundingBox())!.y).toBeGreaterThan((await list.boundingBox())!.y);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+  await page.screenshot({ path: 'test-results/workbench-mobile.png', fullPage: true });
+});

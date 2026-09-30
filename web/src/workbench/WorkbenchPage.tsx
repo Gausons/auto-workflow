@@ -2,12 +2,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest, hasSessionToken } from '../api/client.js';
+import { IssueContent, formatIssueTime } from './IssueContent.js';
+import styles from './WorkbenchPage.module.css';
 
 interface Attachment { name?: string; url?: string }
 interface Recommendation { status?: string; reason?: string; error?: string; assigneeId?: string; assigneeName?: string }
 interface Bug {
   id: string; code?: string; title: string; status?: string; priority?: string; severity?: string;
-  assignee?: string; updatedAt?: string; description?: string; expected?: string; actual?: string;
+  assignee?: string; updatedAt?: string | number; description?: string; expected?: string; actual?: string;
   attachments?: Attachment[]; attachmentsLoaded?: boolean; assignmentRecommendation?: Recommendation;
 }
 interface Bootstrap {
@@ -38,6 +40,7 @@ export function WorkbenchPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [preview, setPreview] = useState<Attachment | null>(null);
   const [message, setMessage] = useState('');
+  const [search, setSearch] = useState('');
 
   useEffect(() => {
     const update = () => setActive(isWorkbenchRoute());
@@ -60,7 +63,8 @@ export function WorkbenchPage() {
     refetchIntervalInBackground: false
   });
   const bugs = query.data?.bugs || [];
-  const selected = bugs.find(bug => bug.id === selectedId) || bugs[0] || null;
+  const filtered = bugs.filter(bug => `${bug.code || bug.id} ${bug.title} ${bug.assignee || ''}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
+  const selected = filtered.find(bug => bug.id === selectedId) || filtered[0] || null;
   const canExecute = query.data?.permissions.includes('work.execute') === true;
 
   const command = useMutation({
@@ -101,13 +105,13 @@ export function WorkbenchPage() {
   const actions = document.querySelector<HTMLElement>('#workbenchActions');
   const previewUrl = safeAttachmentUrl(preview?.url);
 
-  return <>
+  return <div className={styles.page}>
     {actions && active && createPortal(<>
       <button className="button secondary" type="button" disabled={!canExecute || busy} onClick={() => run({ command: 'apply-all' })}>一键分配</button>
       <button className="button secondary" type="button" disabled={!canExecute || busy} onClick={() => run({ command: 'sync' })}>立即拉取</button>
       <button className="button primary" type="button" disabled={!canExecute || !selected || busy} onClick={() => selected && run({ command: 'task', bugId: selected.id })}>从缺陷生成任务</button>
     </>, actions)}
-    <p role="status" aria-live="polite">{message}</p>
+    <div className={styles.feedback} role="status" aria-live="polite">{message}</div>
     {query.isPending ? <p role="status">正在读取缺陷…</p> : query.isError ?
       <p role="alert">加载失败：{errorMessage(query.error)} <button className="button secondary" type="button" onClick={() => query.refetch()}>重试</button></p> : <>
       <section className="metric-grid" aria-label="缺陷概览">
@@ -116,22 +120,24 @@ export function WorkbenchPage() {
       </section>
       <section className="workbench" id="workbench">
         <div className="bug-list-panel">
-          <div className="panel-title"><h2>个人缺陷</h2><span>{query.data?.scheduler.lastRunMessage || '尚未同步'}</span></div>
-          <div className="bug-list">{bugs.length ? bugs.map(bug => <button className={`bug-item ${bug.id === selected?.id ? 'active' : ''}`} key={bug.id} type="button" onClick={() => { setSelectedId(bug.id); setMessage(''); setPreview(null); }}>
+          <div className="panel-title"><h2>个人缺陷</h2><span>{filtered.length} 项</span></div>
+          <label className={styles.search}><span aria-hidden="true">⌕</span><input type="search" aria-label="搜索缺陷" placeholder="搜索标题、编号或经办人" value={search} onChange={event => setSearch(event.target.value)} /></label>
+          <details className={styles.sync}><summary>同步信息{/failed|error|失败|异常|超时/i.test(query.data?.scheduler.lastRunMessage || '') && <span className={styles.syncError}> · 同步异常</span>}</summary><p>{query.data?.scheduler.lastRunMessage || '尚未同步'}</p></details>
+          <div className="bug-list">{filtered.length ? filtered.map(bug => <button className={`bug-item ${bug.id === selected?.id ? 'active' : ''}`} key={bug.id} aria-pressed={bug.id === selected?.id} type="button" onClick={() => { setSelectedId(bug.id); setMessage(''); setPreview(null); }}>
             <strong>{bug.code || bug.id}</strong><span>{bug.title}</span><small>{bug.status || '未知'} · {bug.priority || bug.severity || '未定级'}</small>
-          </button>) : <div className="empty">暂无缺陷，点击“立即拉取”。</div>}</div>
+          </button>) : <div className="empty">{search.trim() ? '没有匹配的缺陷，试试其他关键词。' : '暂无缺陷，点击“立即拉取”。'}</div>}</div>
         </div>
         <div className="bug-detail-panel">
           <div className="panel-title"><h2>缺陷详情</h2><span>{selected?.code || selected?.id || '未选择'}</span></div>
           <article className="bug-detail">{selected ? <>
-            <div className="detail-heading"><div><span className="tag">{selected.status || '未知'}</span><h2>{selected.title}</h2><p>{selected.code || selected.id}</p></div>
+            <div className="detail-heading"><div><span className="tag">{selected.status || '未知'}</span><h2>{selected.title}</h2></div>
               {canExecute && <button className="button primary" type="button" disabled={busy} onClick={() => run({ command: 'task', bugId: selected.id })}>生成任务</button>}</div>
             <dl><div><dt>优先级</dt><dd>{selected.priority || selected.severity || '未填写'}</dd></div>
               <div><dt>经办人</dt><dd>{selected.assignee || '未分配'}</dd></div>
-              <div><dt>更新时间</dt><dd>{selected.updatedAt || '未知'}</dd></div></dl>
-            <h3>问题描述</h3><p>{selected.description || '未填写'}</p>
-            {selected.expected && <><h3>预期结果</h3><p>{selected.expected}</p></>}
-            {selected.actual && <><h3>实际结果</h3><p>{selected.actual}</p></>}
+              <div><dt>更新时间</dt><dd>{formatIssueTime(selected.updatedAt)}</dd></div></dl>
+            <section className={styles.content}><h3>问题描述</h3><IssueContent text={selected.description || '未填写'} /></section>
+            {selected.expected && <section className={styles.content}><h3>预期结果</h3><IssueContent text={selected.expected} /></section>}
+            {selected.actual && <section className={styles.content}><h3>实际结果</h3><IssueContent text={selected.actual} /></section>}
             <h3>附件</h3><div className="attachment-list">{selected.attachmentsLoaded
               ? selected.attachments?.length ? selected.attachments.map((item, index) => <button className="button ghost" type="button" key={`${item.name}-${index}`} disabled={!safeAttachmentUrl(item.url)} onClick={() => setPreview(item)}>{item.name || '附件'}</button>) : '无附件'
               : <button className="button ghost" type="button" disabled={busy} onClick={() => run({ command: 'attachments', bugId: selected.id })}>加载附件</button>}</div>
@@ -152,5 +158,5 @@ export function WorkbenchPage() {
         <div className="attachment-preview-stage"><img src={previewUrl} alt={preview.name || '附件'} /></div>
       </div>
     </div>, document.body)}
-  </>;
+  </div>;
 }

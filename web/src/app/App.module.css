@@ -1,0 +1,50 @@
+.shell.shell { grid-template-columns: 232px minmax(0, 1fr); }
+.shell.shell :global(.sidebar) { padding: 26px 12px 16px; gap: 24px; background: #f9f9f9; border-right: 1px solid #f0f0f0; }
+.shell :global(.brand) { padding: 0 12px; gap: 10px; }
+.shell :global(.brand-mark) { width: 27px; height: 27px; flex-basis: 27px; stroke-width: 1.6; }
+.shell :global(.brand strong) { font-size: 19px; letter-spacing: -.5px; }
+.shell :global(.brand span) { font-size: 10px; margin-top: 5px; }
+.shell.shell :global(.nav-list a), .shell :global(.settings-link) { min-height: 42px; gap: 12px; padding: 0 12px; border-radius: 10px; font-size: 14px; font-weight: 400; color: #333; }
+.shell.shell :global(.nav-create-task span) { font-size: 14px; margin: 0; }
+.shell.shell :global(.nav-create-task) { margin-bottom: 12px; background: transparent; }
+.shell.shell :global(.nav-list a:hover), .shell.shell :global(.nav-list a.active) { background: #eaeaea; }
+.shell.shell :global(.nav-icon) { width: 19px; height: 19px; flex: 0 0 19px; color: #444; }
+.shell.shell :global(.sidebar-note) { border: 0; min-height: auto; padding: 0 12px; font-size: 11px; }
+.shell.shell :global(.main) { padding: 30px 36px; }
+.shell :global(.topbar) { align-items: center; margin-bottom: 32px; min-height: 50px; }
+.shell :global(.topbar > div:first-child) { display: flex; flex-direction: column-reverse; gap: 6px; }
+.shell :global(.topbar h1) { font-size: 21px; font-weight: 550; letter-spacing: -.4px; }
+.shell :global(.topbar .eyebrow) { font-size: 11px; margin: 0; font-weight: 400; color: #777; }
+.shell :global(.top-actions) { flex-wrap: wrap; gap: 8px; }
+.shell :global(.top-actions .button) { min-height: 36px; border-radius: 20px; padding: 0 16px; font-size: 12px; }
+.shell.shell .account { display: flex; align-items: center; gap: 10px; border-top: 1px solid #eaeaea; padding: 18px 8px 0; }
+.shell .avatar { display: grid; place-items: center; width: 32px; height: 32px; flex: 0 0 32px; border-radius: 50%; background: #e6e9df; color: #4e5942; font-size: 13px; font-weight: 600; }
+.identity { display: grid; gap: 4px; min-width: 0; flex: 1; }
+.identity strong { font-size: 12px; font-weight: 550; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.identity span { font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.logout { border: 0; background: transparent; color: #737373; font-size: 10px; padding: 6px 0; cursor: pointer; white-space: nowrap; }
+.logout:hover { color: #222; text-decoration: underline; }
+@media (max-width: 1100px) {
+  .shell.shell { grid-template-columns: 208px minmax(0, 1fr); }
+  .shell.shell :global(.main) { padding: 24px; }
+  .shell :global(.topbar) { flex-wrap: wrap; gap: 16px; }
+}
+@media (max-width: 860px) {
+  .shell.shell { display: block; }
+  .shell.shell :global(.sidebar) { padding: 10px 84px 10px 10px; }
+  .shell.shell .account { display: none; }
+  .shell.shell :global(.nav-create-task) { margin-bottom: 0; }
+  .shell.shell :global(.main) { padding: 22px 18px; }
+  .shell :global(.settings-link) { right: 8px; top: 10px; padding: 0 8px; }
+  .shell :global(.settings-link .nav-icon) { display: none; }
+  .shell :global(.topbar) { margin-bottom: 24px; }
+}
+
+:global(body[data-view="history"]) .shell.shell :global(.main),
+:global(body[data-view="settings"]) .shell.shell :global(.main) { padding: 0; }
+
+@media (max-width: 680px) {
+  .shell :global(.topbar) { align-items: flex-start; text-align: left; }
+  .shell :global(.top-actions) { width: 100%; justify-content: flex-start; }
+  .shell :global(.top-actions .button) { width: auto; padding: 0 12px; }
+}

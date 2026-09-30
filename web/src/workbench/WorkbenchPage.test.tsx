@@ -40,6 +40,38 @@ describe('WorkbenchPage', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('formats source HTML and timestamps without trusting attributes or executable markup', async () => {
+    const data = bootstrap(['read']);
+    const bug = { ...data.bugs[0], updatedAt: '1790155034256', description: '<p onclick="alert(1)">环境：日常<br>第二行 <strong>重点</strong></p><p><img src="x" onerror="alert(1)"><script>alert(1)</script></p>' };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...data, bugs: [bug] }))));
+    renderWorkbench();
+    expect(await screen.findByText('重点')).toHaveProperty('tagName', 'STRONG');
+    expect(screen.getByText(/环境：日常/).querySelector('br')).toBeTruthy();
+    expect(document.querySelector('[onclick], [onerror], script, img')).toBeNull();
+    expect(screen.queryByText('1790155034256')).toBeNull();
+    expect(screen.getByText(/2026\/09\/23/)).toBeTruthy();
+  });
+
+  it('searches by title, code and assignee, selects visible results and restores the list', async () => {
+    const data = bootstrap(['read']);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...data, bugs: [...data.bugs, { id: 'BUG-2', title: '导出报表失败', assignee: '张三' }] }))));
+    renderWorkbench();
+    await screen.findByRole('heading', { name: '登录失败' });
+    const user = userEvent.setup();
+    const search = screen.getByRole('searchbox', { name: '搜索缺陷' });
+    for (const keyword of ['报表', 'bug-2', '张三']) {
+      await user.clear(search);
+      await user.type(search, keyword);
+      expect(screen.getByRole('heading', { name: '导出报表失败' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /BUG-1/ })).toBeNull();
+    }
+    await user.clear(search);
+    await user.type(search, '不存在');
+    expect(screen.getByText('没有匹配的缺陷，试试其他关键词。')).toBeTruthy();
+    await user.clear(search);
+    expect(screen.getByRole('button', { name: /BUG-1/ })).toBeTruthy();
+  });
+
   it('creates one task and sends its id to the existing task center', async () => {
     const fetchMock = vi.fn().mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(path === '/api/bootstrap'
       ? bootstrap(['read', 'work.execute'])

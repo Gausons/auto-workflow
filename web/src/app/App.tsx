@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
+import styles from './App.module.css';
 import { createBrowserRouter, Link, Navigate, Outlet, useLocation, useNavigate, useParams } from 'react-router';
 import { RouterProvider } from 'react-router/dom';
 import { apiRequest, clearSessionToken, hasSessionToken } from '../api/client.js';
@@ -49,6 +50,18 @@ function SettingsPage() {
   return <section className="page settings-page"><header className="page-heading settings-heading"><div><h1>设置</h1><p>管理分配策略、外部服务与个人账号</p></div></header><div className="settings-layout"><nav className="settings-nav" aria-label="设置导航">{items.map(([id, icon, title, subtitle]) => <Link key={id} to={`/settings/${id}`} className={current === id ? 'active' : ''} aria-current={current === id ? 'page' : undefined}><span aria-hidden="true">{icon}</span><span><strong>{title}</strong><small>{subtitle}</small></span></Link>)}</nav><div className="settings-content"><div className="settings-panel">{current === 'assignment' ? <AssignmentPanel /> : current === 'config' ? <ConfigPanel /> : <AccountPanel />}</div></div></div></section>;
 }
 
+function NavIcon({ name }: { name: 'new' | 'tasks' | 'bugs' | 'history' | 'devices' | 'settings' }) {
+  const paths = {
+    new: 'M12 5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7M16 3l5 5M10 14l2-5 6-6 3 3-6 6-5 2',
+    tasks: 'M8 5h12M8 12h12M8 19h12M3 5h.01M3 12h.01M3 19h.01',
+    bugs: 'M12 3l9 9-9 9-9-9 9-9M12 8v5M12 16h.01',
+    history: 'M3 11a9 9 0 1 1 2 7M3 4v7h7M12 7v5l3 2',
+    devices: 'M3 4h18v12H3zM8 21h8M12 16v5',
+    settings: 'M4 7h16M4 17h16M8 4v6M16 14v6'
+  };
+  return <svg className="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;
+}
+
 function Shell() {
   const bootstrap = useQuery({ queryKey: ['app', 'bootstrap'], queryFn: ({ signal }) => apiRequest<Bootstrap>('/api/bootstrap', { signal }) }).data!;
   const location = useLocation();
@@ -93,9 +106,9 @@ function Shell() {
     try { await apiRequest('/api/auth/logout', { method: 'POST' }); } catch { /* local logout still clears the session */ }
     clearSessionToken(); window.location.assign('/tasks');
   }
-  return <div className="app-shell" id="workspaceShell"><aside className="sidebar"><div className="brand"><svg className="brand-mark" viewBox="0 0 36 36" aria-hidden="true"><rect x="4" y="5" width="28" height="26" rx="6" /><path d="M11 14h18M11 21h10M24 20l4 4-4 4" /></svg><div><strong>BugFlow</strong><span>多设备 Agent 工作台</span></div></div>
-    <nav className="nav-list" aria-label="主导航"><Link className={`nav-create-task ${view === 'new-task' ? 'active' : ''}`} to="/tasks/new"><span className="nav-icon" aria-hidden="true">＋</span><span>新建任务</span></Link><Link className={['tasks', 'inbox'].includes(view) ? 'active' : ''} to="/tasks"><span className="nav-icon" aria-hidden="true">▣</span><span>任务中心</span></Link><Link className={view === 'workbench' ? 'active' : ''} to="/workbench"><span className="nav-icon" aria-hidden="true">◇</span><span>缺陷工作台</span></Link><Link className={view === 'history' ? 'active' : ''} to="/history"><span className="nav-icon" aria-hidden="true">◷</span><span>Agent 历史会话</span></Link><Link className={view === 'devices' ? 'active' : ''} aria-current={view === 'devices' ? 'page' : undefined} to="/devices"><span className="nav-icon" aria-hidden="true">▤</span><span>设备与 Agent</span></Link></nav>
-    <Link className={`settings-link ${view === 'settings' ? 'active' : ''}`} to="/settings/assignment"><span className="nav-icon" aria-hidden="true">⚙</span><span>设置</span></Link><div className="sidebar-note"><span className={`status-dot ${bootstrap.config?.issueSourceConfigured ? 'online' : ''}`} /><span>{bootstrap.config?.issueSourceConfigured ? '数据源已连接' : '数据源未配置'}</span></div><div className="tenant-panel"><span>当前账号</span><strong>{bootstrap.user?.displayName || ''}</strong><span>{bootstrap.user?.username || ''}</span><button className="button secondary" type="button" onClick={() => void logout()}>退出登录</button></div></aside>
+  return <div className={`app-shell ${styles.shell}`} id="workspaceShell"><aside className="sidebar"><div className="brand"><svg className="brand-mark" viewBox="0 0 36 36" aria-hidden="true"><rect x="4" y="5" width="28" height="26" rx="6" /><path d="M11 14h18M11 21h10M24 20l4 4-4 4" /></svg><div><strong>BugFlow</strong><span>多设备 Agent 工作台</span></div></div>
+    <nav className="nav-list" aria-label="主导航"><Link className={`nav-create-task ${view === 'new-task' ? 'active' : ''}`} to="/tasks/new"><NavIcon name="new" /><span>新建任务</span></Link><Link className={['tasks', 'inbox'].includes(view) ? 'active' : ''} to="/tasks"><NavIcon name="tasks" /><span>任务中心</span></Link><Link className={view === 'workbench' ? 'active' : ''} to="/workbench"><NavIcon name="bugs" /><span>缺陷工作台</span></Link><Link className={view === 'history' ? 'active' : ''} to="/history"><NavIcon name="history" /><span>Agent 历史会话</span></Link><Link className={view === 'devices' ? 'active' : ''} aria-current={view === 'devices' ? 'page' : undefined} to="/devices"><NavIcon name="devices" /><span>设备与 Agent</span></Link></nav>
+    <Link className={`settings-link ${view === 'settings' ? 'active' : ''}`} to="/settings/assignment"><NavIcon name="settings" /><span>设置</span></Link><div className="sidebar-note"><span className={`status-dot ${bootstrap.config?.issueSourceConfigured ? 'online' : ''}`} /><span>{bootstrap.config?.issueSourceConfigured ? '数据源已配置' : '数据源未配置'}</span></div><div className={`tenant-panel ${styles.account}`}><span className={styles.avatar} aria-hidden="true">{(bootstrap.user?.displayName || bootstrap.user?.username || 'B').slice(0, 1).toUpperCase()}</span><div className={styles.identity}><strong>{bootstrap.user?.displayName || bootstrap.user?.username}</strong><span>{bootstrap.user?.username}</span></div><button className={styles.logout} type="button" onClick={() => void logout()}>退出登录</button></div></aside>
     <main className="main"><header className="topbar"><div><p className="eyebrow">{title[1]}</p><h1>{title[0]}</h1></div><div className="top-actions" id="workbenchActions" /></header><Outlet /></main></div>;
 }
 
