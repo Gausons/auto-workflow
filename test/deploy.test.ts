@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-test('CI publishes only verified main images and promotes latest after production verification', async () => {
+test('CI publishes verified images, negotiates registry deployment and promotes latest after verification', async () => {
   const workflow = await readFile('.github/workflows/ci-cd.yml', 'utf8');
   assert.match(workflow, /REGISTRY_IMAGE: ghcr\.io\/gausons\/auto-workflow/);
   assert.match(workflow, /Publish verified commit image[\s\S]*github\.ref == 'refs\/heads\/main'[\s\S]*docker push "\$tagged"/);
@@ -16,7 +16,9 @@ test('CI publishes only verified main images and promotes latest after productio
   assert.ok(publicCheck >= 0 && promotion > publicCheck);
   assert.match(workflow.slice(promotion), /needs\.checks\.outputs\.verified_image/);
   assert.match(workflow.slice(promotion), /docker buildx imagetools create --tag "\$REGISTRY_IMAGE:latest" "\$VERIFIED_IMAGE"/);
-  assert.match(workflow, /"\$DEPLOY_USER@\$DEPLOY_HOST" "deploy \$GITHUB_SHA" < release\.tar\.gz/);
+  assert.match(workflow, /capability=.*capabilities[\s\S]*registry-v1/);
+  assert.match(workflow, /"deploy \$GITHUB_SHA \$digest"/);
+  assert.match(workflow, /using the release archive[\s\S]*"deploy \$GITHUB_SHA" < release\.tar\.gz/);
 });
 
 test('CI SSH entrypoint rejects shell access and passes only a validated revision to sudo', async () => {
@@ -27,7 +29,8 @@ test('CI SSH entrypoint rejects shell access and passes only a validated revisio
       encoding: 'utf8', env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, SSH_ORIGINAL_COMMAND: command }
     });
     const revision = 'a'.repeat(40);
-    for (const command of ['', 'sh', 'whoami', `deploy ${revision}; id`, `deploy ${revision}\nwhoami`, 'deploy ../../etc/passwd', `deploy ${'a'.repeat(39)}`, `deploy ${revision} extra`]) {
+    const digest = `sha256:${'b'.repeat(64)}`;
+    for (const command of ['', 'sh', 'whoami', `deploy ${revision}; id`, `deploy ${revision}\nwhoami`, 'deploy ../../etc/passwd', `deploy ${'a'.repeat(39)}`, `deploy ${revision} sha256:${'b'.repeat(63)}`, `deploy ${revision} sha256:${'g'.repeat(64)}`, `deploy ${revision} extra`]) {
       const result = invoke(command);
       assert.equal(result.status, 64, command);
       assert.equal(result.stdout, '', command);
@@ -35,6 +38,12 @@ test('CI SSH entrypoint rejects shell access and passes only a validated revisio
     const result = invoke(`deploy ${revision}`);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout, `-n\n/usr/local/sbin/auto-workflow-deploy\n${revision}\n`);
+    const registry = invoke(`deploy ${revision} ${digest}`);
+    assert.equal(registry.status, 0, registry.stderr);
+    assert.equal(registry.stdout, `-n\n/usr/local/sbin/auto-workflow-deploy\n${revision}\n${digest}\n`);
+    const capabilities = invoke('capabilities');
+    assert.equal(capabilities.status, 0, capabilities.stderr);
+    assert.equal(capabilities.stdout, 'registry-v1\n');
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -52,6 +61,7 @@ test('failed Docker health checks restore the previous container without restori
     await writeFile(path.join(data, 'POSTGRES_MIGRATED'), 'verified');
     await writeFile(path.join(config, 'auto-workflow.env'), 'TEST=value');
     const revision = 'a'.repeat(40);
+    const digest = `sha256:${'b'.repeat(64)}`;
     const log = path.join(directory, 'commands');
     const mock = `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$COMMAND_LOG"
@@ -69,7 +79,7 @@ esac
     // Isolate OS paths and root-only validation; all Docker operations are recorded fixtures.
     const source = (await readFile('scripts/deploy/release.sh', 'utf8'))
       .replace(/^export PATH=.*$/m, `export PATH="${bin}:$PATH"`)
-      .replace('$EUID == 0 && ', '')
+      .replace('[[ $EUID == 0 ]] || exit 64', 'true')
       .replace('base=/opt/auto-workflow', `base="${base}"`)
       .replace('data=/var/lib/auto-workflow', `data="${data}"`)
       .replaceAll('/etc/auto-workflow', config)
@@ -77,7 +87,7 @@ esac
       .replace('/var/tmp/auto-workflow-image.', path.join(directory, 'image.'));
     const script = path.join(directory, 'release.sh');
     await writeFile(script, source);
-    const result = spawnSync('bash', [script, revision], { encoding: 'utf8', input: 'fixture-image',
+    const result = spawnSync('bash', [script, revision, digest], { encoding: 'utf8',
       env: { ...process.env, COMMAND_LOG: log, REVISION: revision } });
     assert.equal(result.status, 1, result.stderr);
     const commands = (await readFile(log, 'utf8')).split('\n');
@@ -85,6 +95,8 @@ esac
     assert.ok(commands.some(command => /^rename auto-workflow-previous-.* auto-workflow$/.test(command)));
     assert.ok(commands.includes('update --restart=unless-stopped auto-workflow'));
     assert.equal(commands.filter(command => command === 'start auto-workflow').length, 2);
+    assert.ok(commands.includes(`pull ghcr.io/gausons/auto-workflow@${digest}`));
+    assert.ok(!commands.some(command => command.startsWith('load ')));
     assert.equal(await readFile(path.join(data, 'workflow.database-key'), 'utf8'), 'existing-database');
   } finally {
     await rm(directory, { recursive: true, force: true });

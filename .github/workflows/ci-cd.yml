@@ -150,6 +150,7 @@ jobs:
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          VERIFIED_IMAGE: ${{ needs.checks.outputs.verified_image }}
         run: |
           umask 077
           key="$RUNNER_TEMP/deploy-key"
@@ -157,10 +158,19 @@ jobs:
           trap 'rm -f "$key" "$hosts"' EXIT
           printf '%s\n' "$DEPLOY_KEY" > "$key"
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$hosts"
-          ssh -T -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes \
+          ssh_args=(-T -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$hosts" \
-            -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
-            "$DEPLOY_USER@$DEPLOY_HOST" "deploy $GITHUB_SHA" < release.tar.gz
+            -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+          if capability=$(ssh "${ssh_args[@]}" "$DEPLOY_USER@$DEPLOY_HOST" capabilities 2>/dev/null) \
+            && [[ "$capability" == registry-v1 ]]; then
+            [[ "$VERIFIED_IMAGE" == "$REGISTRY_IMAGE@sha256:"* ]]
+            digest=${VERIFIED_IMAGE#"$REGISTRY_IMAGE@"}
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            ssh "${ssh_args[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "deploy $GITHUB_SHA $digest"
+          else
+            echo 'Server deploy helper does not advertise registry-v1; using the release archive.'
+            ssh "${ssh_args[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "deploy $GITHUB_SHA" < release.tar.gz
+          fi
       - name: Verify public HTTPS
         if: steps.revision.outputs.current == 'true'
         run: curl --fail --silent --show-error --retry 3 --max-time 20 https://autoworkflow.top/devices > /dev/null

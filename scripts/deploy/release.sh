@@ -3,15 +3,24 @@ set -euo pipefail
 export PATH=/opt/node/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 umask 077
 
-[[ $EUID == 0 && $# == 1 && $1 =~ ^[0-9a-f]{40}$ ]] || exit 64
-revision=$1
-image="auto-workflow:$revision"
+[[ $EUID == 0 ]] || exit 64
+if [[ $# == 2 && $1 =~ ^[0-9a-f]{40}$ && $2 =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  revision=$1
+  digest=$2
+  image="ghcr.io/gausons/auto-workflow@$digest"
+elif [[ $# == 1 && $1 =~ ^[0-9a-f]{40}$ ]]; then
+  revision=$1
+  digest=''
+  image="auto-workflow:$revision"
+else
+  exit 64
+fi
 base=/opt/auto-workflow
 data=/var/lib/auto-workflow
 exec 9>/run/lock/auto-workflow-deploy.lock
 flock -w 900 9
 
-archive=$(mktemp /var/tmp/auto-workflow-image.XXXXXX)
+archive=''
 previous_container=''
 legacy=false
 stopped=false
@@ -23,7 +32,7 @@ previous_policy='unless-stopped'
 recover() {
   result=$?
   trap - EXIT
-  rm -f "$archive"
+  if [[ -n $archive ]]; then rm -f "$archive"; fi
   if [[ $result != 0 && $stopped == true ]]; then
     if [[ $created == true ]]; then docker rm -f auto-workflow || true; fi
     if [[ -n $previous_container ]]; then
@@ -41,8 +50,13 @@ trap 'recover' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
-cat > "$archive"
-docker load --input "$archive"
+if [[ -n $digest ]]; then
+  docker pull "$image"
+else
+  archive=$(mktemp /var/tmp/auto-workflow-image.XXXXXX)
+  cat > "$archive"
+  docker load --input "$archive"
+fi
 [[ $(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image") == "$revision" ]]
 [[ $(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image") == linux/amd64 ]]
 # Never mount production data during import validation.
