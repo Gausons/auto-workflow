@@ -230,7 +230,24 @@ IDE_HISTORY_SCOPE=all
 
 ### 从网页连接开发机并远程控制
 
-在浏览器点击左侧主导航“设备与 Agent”（`/devices`，任务中心内也有同名标签），使用“连接本机 Agent”向导填写服务地址并复制三项登录配置。在开发机准备好本项目与依赖，线上工作台配置保存为项目根目录的 `.env.device`，在本机填写账号密码后运行：
+在浏览器点击左侧主导航“设备与 Agent”（`/devices`，任务中心内也有同名标签），使用“连接本机 Agent”向导填写服务地址并复制三项登录配置。开发机只需 Node.js 22.16+、Git 和已安装登录的 Agent，无需下载本项目源码。
+
+连接器独立包发布到 npm 后，可以安装并运行：
+
+```bash
+npm install -g bugflow-agent
+bugflow-agent --env-file ./agent.env
+```
+
+先将向导生成的配置保存到 `agent.env` 并填写账号密码；macOS/Linux 使用 `chmod 600 agent.env`，Windows 使用文件权限限制当前用户可读。尚未发布到 registry 时，可安装维护者提供的 `bugflow-agent-0.3.0.tgz`：`npm install -g ./bugflow-agent-0.3.0.tgz`，同样无需源码。安装包不包含 Agent 可执行程序，Codex / Claude 仍需自行安装并登录。
+
+`bugflow-agent` 默认读取 `~/.bugflow/agent.env`（存在时），支持 `--env-file`、`--help`、`--version` 和仅同步模式的 `--once`。已有环境变量优先，不自动读取当前目录的 `.env`。默认设备状态位于 `~/.workflow-data/devices/<连接标识>/`，从不同目录启动不会改变设备身份。迁移已有连接器时，先正常停止旧进程，再将 `WORKBENCH_DEVICE_DIR` 指向旧状态目录的绝对路径以保留身份和执行日志；不要同时运行两个处理同一设备的进程。升级包不会删除设备状态。
+
+维护者运行 `pnpm agent:pack` 生成 `dist/device-agent/bugflow-agent-0.3.0.tgz`；CI 也保存独立安装包供下载。构建只复用已有 Vite 和 ACP SDK，不发布整个工作台，不包含 `.env`、数据库和本地会话。npm 发布由 `agent-vX.Y.Z` 标签触发，完整 CI 通过后发布同一次构建的安装包，普通构建不会发布。配置见下文“连接器 npm 发布”，包说明见 [device-agent](packages/device-agent/README.md)。仓库开发仍统一使用 pnpm，上面的 npm 命令用于开发机安装发行包。
+
+### 从源码启动连接器（开发调试）
+
+维护工作台源码时，仍可把线上连接配置保存为项目根目录的 `.env.device`，在本机填写账号密码后运行：
 
 ```bash
 chmod 600 .env.device
@@ -259,8 +276,8 @@ pnpm device:connect:dev
 同时连接多台服务器时，将三项登录配置分别保存为已被 Git 忽略的 `.env.server-a`、`.env.server-b`，并在不同终端启动：
 
 ```bash
-node --env-file=.env.server-a --import tsx scripts/device-sync.ts
-node --env-file=.env.server-b --import tsx scripts/device-sync.ts
+bugflow-agent --env-file .env.server-a
+bugflow-agent --env-file .env.server-b
 ```
 
 两个进程会使用不同的自动状态目录和设备标识，互不复用执行日志。
@@ -295,7 +312,7 @@ pnpm device:sync
 | 变量 | 说明 |
 | --- | --- |
 | `WORKBENCH_DEVICE_NAME` | 工作台中显示的设备名；默认使用主机名 |
-| `WORKBENCH_DEVICE_DIR` | 连接器状态与交接包目录；默认按服务器、租户和账号隔离在 `.workflow-data/devices/` 下 |
+| `WORKBENCH_DEVICE_DIR` | 连接器状态与交接包目录；独立包默认在 `~/.workflow-data/devices/`，源码脚本默认在启动目录的 `.workflow-data/devices/` 下，均按服务器、租户和账号隔离 |
 | `CODEX_WORKSPACE_DIR` | 默认 Agent 工作目录；默认当前用户主目录 |
 | `WORKBENCH_SYNC_EXCERPTS=false` | 关闭会话摘要正文同步；默认同步 |
 | `WORKBENCH_EXECUTE_CODEX=false` | 关闭远端 Agent 执行；默认启用 |
@@ -407,7 +424,28 @@ test/         Node.js 测试
 
 ### GitHub CI / CD
 
-仓库使用 [CI / CD](https://github.com/Gausons/auto-workflow/actions/workflows/ci-cd.yml) 工作流。每个 PR、main 推送和手动运行都会安装锁定依赖，执行类型检查、全部单元/组件测试、真实 PostgreSQL / pgvector 测试、Chromium 浏览器测试和部署脚本检查。Node 固定为 22.23.3，pnpm 固定为 package.json 中的 10.33.2。
+仓库使用 [CI / CD](https://github.com/Gausons/auto-workflow/actions/workflows/ci-cd.yml) 工作流。每个 PR、main 推送、`agent-v*` 标签推送和手动运行都会安装锁定依赖，执行类型检查、全部单元/组件测试、真实 PostgreSQL / pgvector 测试、Chromium 浏览器测试和部署脚本检查。Node 固定为 22.23.3，pnpm 固定为 package.json 中的 10.33.2。
+
+#### 连接器 npm 发布
+
+`publish_agent` 只在本仓库推送 `agent-vX.Y.Z` 正式版本标签且全部检查通过后运行，与网站部署独立；标签提交必须已合入 main，标签版本必须等于 `packages/device-agent/package.json` 及安装包中的版本。发布任务下载本次 CI 的 `bugflow-agent` Artifact，不重新构建，串行发布到 npm 的 `latest`。PR、普通 main 提交、手动 Run workflow 不会发布 npm；连接器标签不会部署网站。
+
+首次配置：
+
+1. 在 GitHub 创建独立的 `npm` Environment，仅允许 `agent-v*` 标签，建议设置审核人，并用仓库 Ruleset 限制这些标签的创建、更新和删除。
+2. 包已存在时，在 npm 包设置添加 GitHub Actions Trusted Publisher：Owner **Gausons**、Repository **auto-workflow**、Workflow **ci-cd.yml**、Environment **npm**，允许直接 `npm publish`。字段大小写须完全一致。OIDC 使用短期凭据，无需保存本机登录 Token。参考 [npm 可信发布文档](https://docs.npmjs.com/trusted-publishers/)。
+3. 若包尚不存在，可先由维护者手动发布首个已验证 tgz，再配置可信发布；也可在 `npm` Environment 添加临时 `NPM_TOKEN` Secret，让首次标签发布在 CI 完成。后者需要有创建该包权限、可非交互发布的 npm granular token（按账号策略设置 bypass 2FA、最小权限及短有效期）。本机 `npm login` 不会给 GitHub Runner 授权。不要将本机 `.npmrc` 提交或把 Token 发到聊天中。首次发布完成并配置好可信发布后删除该 Secret。
+
+后续发布先修改连接器包的 `version`、提交并合入 main，再对包含这些改动的提交打标签，例如版本为 0.3.0 时：
+
+```bash
+git tag agent-v0.3.0 <已合入-main-的提交SHA>
+git push origin agent-v0.3.0
+```
+
+发布使用固定 npm 11.5.1（支持 OIDC）；仓库依赖和这个隔离的发布工具仍由 pnpm 安装。发布后从公共 registry 安装精确版本并核对 CLI 版本，不启动 Agent。若发布失败或发布后验证失败，先检查 npm 上该版本的状态再处理；已发布的同名同版本不可覆盖，不自动递增版本、重发、撤回或移动旧标签。网络传播延迟导致安装验证失败时也不代表发布未发生。
+
+#### 工作台网站部署
 
 main 的检查通过后自动发布到 `https://autoworkflow.top`；PR 不读取生产凭据、不推送镜像，也不发布。手动发布在 Actions 页面选择该工作流的 Run workflow，并选择 main。已被新提交替代的旧版本会跳过发布。CI 使用多阶段 Dockerfile 构建镜像，验证容器页面、静态资源、认证边界和重启，然后将同一个已验证镜像以 `ghcr.io/gausons/auto-workflow:<commit SHA>` 推送到 GHCR。新版服务器部署助手声明 `registry-v1` 能力后，生产机直接按不可变 digest 拉取该镜像；升级过渡期若服务器仍是旧助手，工作流会使用同一次构建导出的压缩镜像。生产公网健康检查通过后，同一镜像摘要才会提升为 `latest`；正式部署和问题核对仍应使用 commit SHA 或 digest，不依赖可变的 `latest`。`.dockerignore` 使用允许列表，环境文件、数据库和会话数据不进入镜像。
 

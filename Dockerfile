@@ -4,6 +4,7 @@ RUN corepack enable && corepack prepare pnpm@10.33.2 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/context-engine/package.json ./packages/context-engine/package.json
 COPY packages/context-adapters/package.json ./packages/context-adapters/package.json
+COPY packages/device-agent/package.json ./packages/device-agent/package.json
 
 FROM base AS build
 RUN pnpm install --frozen-lockfile

@@ -7,6 +7,8 @@
   "scripts": {
     "build": "pnpm build:client && pnpm typecheck",
     "build:client": "vite build",
+    "build:agent": "node --import tsx scripts/build-device-agent.ts",
+    "agent:pack": "pnpm --dir packages/device-agent pack --pack-destination ../../dist/device-agent",
     "prestart": "pnpm build:client && pnpm kill:4173",
     "start": "node --import tsx --import ./src/issueSources/preload.ts server.ts",
     "predev": "pnpm build:client && pnpm kill:4173",

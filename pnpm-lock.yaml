@@ -81,6 +81,12 @@ importers:
 
   packages/context-engine: {}
 
+  packages/device-agent:
+    dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: 1.4.0
+        version: 1.4.0(zod@4.6.5)
+
 packages:
 
   '@agentclientprotocol/sdk@1.4.0':

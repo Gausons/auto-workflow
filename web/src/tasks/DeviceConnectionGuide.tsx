@@ -22,9 +22,9 @@ export function DeviceConnectionGuide({ username = '' }: { username?: string }) 
     <p>浏览器通过工作台控制开发机。开发机主动连接服务端，无需开放入站端口；请保持开机、联网和连接器运行。</p>
     <label>工作台访问地址<input value={url} onChange={event => { setUrl(event.target.value); setCopied(false); }} /></label>
     {/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/.test(url) && <p className="tc-callout">当前地址仅指向连接器所在机器。跨设备使用时，请改为开发机能够访问的工作台 HTTPS 地址。</p>}
-    <ol><li>在开发机准备本项目、Node.js 22.16+、pnpm 及已登录的 Agent，运行 <code>pnpm install</code>。</li>
-      <li>将下面配置保存为项目根目录的 <code>.env.device</code>，在本机填写账号密码。该文件已被 Git 忽略，请仅允许当前用户读取。</li>
-      <li>运行 <code>pnpm device:connect</code>，回到本页等待设备上线。</li>
+    <ol><li>在开发机准备 Node.js 22.16+ 及已登录的 Agent。安装已发布的连接器：<code>npm install -g bugflow-agent</code>，无需下载工作台源码。若尚未发布到 npm，可安装管理员提供的 tgz 包。</li>
+      <li>将下面配置保存为 <code>agent.env</code>，在本机填写账号密码，并将文件权限限制为当前用户可读。</li>
+      <li>运行 <code>bugflow-agent --env-file ./agent.env</code>，回到本页等待设备上线。</li>
       <li>在“新建任务”选择该设备执行；在历史会话中打开受支持的 Codex 会话，可直接发送消息、审批或停止。</li></ol>
     {error ? <p role="alert">{error}</p> : <><textarea className={styles.config} aria-label="设备连接配置" readOnly rows={4} value={config} />
       <button className="button secondary" type="button" onClick={() => { void navigator.clipboard.writeText(config).then(() => setCopied(true)).catch(() => setCopied(false)); }}>{copied ? '已复制配置' : '复制配置'}</button></>}

@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ['agent-v*']
   workflow_dispatch:
 
 permissions:
@@ -55,12 +56,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
+      - name: Package standalone device agent
+        run: pnpm agent:pack
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: bugflow-agent
+          path: dist/device-agent/*.tgz
+          if-no-files-found: error
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
       - name: Validate deployment scripts
         run: |
-          for script in scripts/deploy/*.sh; do bash -n "$script"; done
-          shellcheck scripts/deploy/*.sh
+          for script in scripts/deploy/*.sh scripts/npm/*.sh; do bash -n "$script"; done
+          shellcheck scripts/deploy/*.sh scripts/npm/*.sh
       - name: Save browser failure diagnostics
         if: failure()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -114,6 +122,58 @@ jobs:
           path: release.tar.gz
           retention-days: 7
           if-no-files-found: error
+
+  publish_agent:
+    name: Publish standalone device agent to npm
+    needs: checks
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/agent-v') && github.repository == 'Gausons/auto-workflow'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: npm
+    concurrency:
+      group: npm-bugflow-agent
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Require a commit already merged into main
+        run: git merge-base --is-ancestor HEAD origin/main
+      - uses: pnpm/action-setup@f520eceda224fe1a4aed5a2a27a194379a409996 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22.23.3
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: bugflow-agent
+          path: dist/device-agent
+      - name: Validate release tag and archive
+        id: agent
+        run: bash scripts/npm/validate-release.sh
+      - name: Prepare OIDC-capable npm CLI
+        run: |
+          mkdir -p "$RUNNER_TEMP/npm-cli"
+          pnpm --dir "$RUNNER_TEMP/npm-cli" add npm@11.5.1 --ignore-scripts --registry=https://registry.npmjs.org
+      - name: Publish verified archive
+        env:
+          # Optional bootstrap token for the first release; remove after configuring OIDC.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          AGENT_ARCHIVE: ${{ steps.agent.outputs.archive }}
+        run: '"$RUNNER_TEMP/npm-cli/node_modules/.bin/npm" publish "$AGENT_ARCHIVE" --access public --tag latest --ignore-scripts --registry=https://registry.npmjs.org'
+      - name: Verify public installation
+        env:
+          AGENT_VERSION: ${{ steps.agent.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/agent-smoke"
+          pnpm --dir "$RUNNER_TEMP/agent-smoke" add "bugflow-agent@$AGENT_VERSION" --ignore-scripts --registry=https://registry.npmjs.org
+          installed=$("$RUNNER_TEMP/agent-smoke/node_modules/.bin/bugflow-agent" --version)
+          [[ "$installed" == "$AGENT_VERSION" ]]
 
   deploy:
     name: Deploy production
