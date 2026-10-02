@@ -91,14 +91,16 @@ function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) 
         <dt>模型 / 分支</dt><dd>{session.model || '未知'} / {session.branch || '未知'}</dd><dt>记录状态</dt><dd>{statusLabel(session.status)}</dd>
         <dt>创建 / 更新</dt><dd>{time(session.createdAt)} / {time(session.updatedAt)}</dd>
       </dl></details>
-      {session.partial && <p className="history-warning">部分记录损坏、尚未写完或超出读取上限，当前展示部分内容。</p>}
+      {session.recordMode === 'excerpt'
+        ? <p className="history-meta">{first.total > 0 ? '当前仅展示远程设备同步的文本摘要，可能经过截断，不包含完整消息、工具记录和图片。完整会话请在来源设备查看。' : '尚未同步远程会话正文，请确认来源设备连接器在线且已开启摘要同步，或在来源设备查看完整会话。'}</p>
+        : session.partial && <p className="history-warning">部分记录损坏、尚未写完或超出读取上限，当前展示部分内容。</p>}
       {first.inherited && <details className="history-inherited"><summary>接续自原会话 · {first.inherited.count} 条上下文{first.inherited.partial ? ' · 部分记录' : ''}</summary>
         {inheritedMessages.length > 0 && <SafeMessages messages={inheritedMessages} />}
         {inherited.isError && <p role="alert">{errorMessage(inherited.error)}</p>}
         {inheritedMessages.length < inheritedTotal && <button type="button" className="button secondary" disabled={inherited.isFetching} onClick={() => void (inherited.data ? inherited.fetchNextPage() : inherited.refetch())}>{inheritedMessages.length ? '加载更多继承记录' : '查看继承记录'}</button>}
       </details>}
       <SafeMessages messages={messages} />
-      <div className="history-chat-footer"><span>已显示 {messages.length} / {synced?.total ?? first.total} 条记录</span>{!synced && detail.hasNextPage && <button className="button secondary" type="button" disabled={detail.isFetchingNextPage} onClick={() => void detail.fetchNextPage()}>加载更多记录</button>}</div>
+      <div className="history-chat-footer"><span>{session.recordMode === 'excerpt' ? (first.total > 0 ? '已显示同步摘要 · 非完整历史' : '暂无同步摘要') : `已显示 ${messages.length} / ${synced?.total ?? first.total} 条记录`}</span>{!synced && detail.hasNextPage && <button className="button secondary" type="button" disabled={detail.isFetchingNextPage} onClick={() => void detail.fetchNextPage()}>加载更多记录</button>}</div>
       <div id="historyLiveOutput" />
     </div></div>
     <HistoryComposer session={session} historyMessages={messages} canEdit={canExecute} syncHistory={syncHistory} />
@@ -155,7 +157,7 @@ export function HistoryPage() {
         {list.isError && <button className="button secondary" type="button" onClick={() => list.refetch()}>重试</button>}
         <div className="history-list">{data?.sessions.map(session => <button className="history-card" type="button" key={session.id} aria-pressed={session.id === route.id} onClick={() => { location.hash = `history/${session.id}`; }}>
           <strong>{session.title}</strong><span className="history-meta">{session.agentLabel} · {time(session.updatedAt)}</span>
-          <span>{statusLabel(session.status)} · {session.messageCount} 条记录{session.managed ? ' · 已继承上下文' : ''}{session.archived ? ' · 已归档' : ''}{session.partial ? ' · 部分记录' : ''}</span>
+          <span>{statusLabel(session.status)} · {session.recordMode === 'excerpt' ? (session.messageCount > 0 ? '仅同步摘要' : '正文未同步') : `${session.messageCount} 条记录`}{session.managed ? ' · 已继承上下文' : ''}{session.archived ? ' · 已归档' : ''}{session.partial && session.recordMode !== 'excerpt' ? ' · 部分记录' : ''}</span>
           <span className="history-meta">{directoryName(session.cwd)}{session.branch ? ` · ${session.branch}` : ''}</span>
         </button>)}</div>
         <div className="history-pagination"><button className="button secondary" type="button" disabled={!data || data.offset === 0} aria-label="上一页" onClick={() => setFilters(previous => ({ ...previous, offset: Math.max(0, previous.offset - 30) }))}>←</button>

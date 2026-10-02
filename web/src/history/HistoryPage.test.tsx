@@ -55,6 +55,34 @@ describe('HistoryPage', () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => String(path).includes('agent=codex') && String(path).includes('q=%E5%9B%9E%E5%BD%92'))).toBe(true));
   });
 
+  it.each([true, false])('labels remote excerpts without reporting corrupt records (has excerpt: %s)', async hasExcerpt => {
+    const remote = { ...session, deviceId: 'remote', partial: true, recordMode: 'excerpt', messageCount: hasExcerpt ? 1 : 0 };
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(path.startsWith('/api/agent-sessions?') ? { ...list, sessions: [remote] }
+      : path.startsWith(`/api/agent-sessions/${id}`) ? { session: remote, messages: hasExcerpt ? [{ role: 'assistant', text: 'user: 问题\n\nassistant: 答复' }] : [], total: hasExcerpt ? 1 : 0 }
+        : { permissions: ['read'] }), { status: 200 }))));
+    renderHistory(`#history/${id}`);
+
+    expect(await screen.findByText(hasExcerpt ? /当前仅展示远程设备同步的文本摘要/ : /尚未同步远程会话正文/)).toBeTruthy();
+    expect(await screen.findByRole('button', { name: hasExcerpt ? /仅同步摘要/ : /正文未同步/ })).toBeTruthy();
+    expect(screen.getByText(hasExcerpt ? '已显示同步摘要 · 非完整历史' : '暂无同步摘要')).toBeTruthy();
+    expect(screen.queryByText(/部分记录损坏/)).toBeNull();
+    expect(screen.queryByText(/已显示 \d+ \/ \d+ 条记录/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /条记录/ })).toBeNull();
+  });
+
+  it.each(['local', 'remote'])('keeps partial record warnings for actual transcripts on %s devices', async deviceId => {
+    const partial = { ...session, deviceId, source: 'conversation', managed: true, partial: true };
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(path.startsWith('/api/agent-sessions?') ? { ...list, sessions: [partial] }
+      : path.startsWith(`/api/agent-sessions/${id}`) ? { session: partial, messages: [{ role: 'user', text: '可用的原始消息' }], total: 1 }
+        : { permissions: ['read'] }), { status: 200 }))));
+    renderHistory(`#history/${id}`);
+
+    expect(await screen.findByText(/部分记录损坏/)).toBeTruthy();
+    expect(screen.getByText('已显示 1 / 1 条记录')).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /1 条记录.*部分记录/ })).toBeTruthy();
+    expect(screen.queryByText(/当前仅展示远程设备同步的文本摘要/)).toBeNull();
+  });
+
   it('refreshes the list even when search filters have not changed', async () => {
     const fetchMock = vi.fn().mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(path.startsWith('/api/agent-sessions?') ? list : { permissions: ['read'] }), { status: 200 })));
     vi.stubGlobal('fetch', fetchMock);

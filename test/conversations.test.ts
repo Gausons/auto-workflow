@@ -41,6 +41,37 @@ async function fixture(t: TestContext) {
   return { root, file, database, history, delivery, source, execution, options, service, launched, finish };
 }
 
+test('remote history identifies excerpts for existing records without changing transcript completeness or tenant scope', async t => {
+  const f = await fixture(t);
+  const excerpt = 'user: 历史问题\n\nassistant: 历史回复';
+  f.database.mutateTaskCenter('default', data => data.sessions.push(
+    { id: 'remote-excerpt', nativeId: 'native', deviceId: 'remote', agent: 'codex', title: '远端摘要', cwd: f.root, updatedAt: new Date().toISOString(), partial: true, excerpt },
+    { id: 'remote-empty', deviceId: 'remote', agent: 'codex', title: '远端无正文', cwd: f.root, updatedAt: new Date().toISOString(), partial: true }
+  ));
+  const created = await f.service.create(f.source, { requestId: randomUUID(), targetAgent: 'claude' });
+  const list = await f.service.historyList();
+  for (const id of ['remote-excerpt', 'remote-empty']) {
+    const listed = list.sessions.find(session => session.id === id);
+    assert.ok(listed && 'recordMode' in listed);
+    assert.equal(listed.recordMode, 'excerpt');
+    const detail = f.service.remoteDetail(id);
+    assert.equal(detail?.session.recordMode, 'excerpt');
+    assert.equal(detail?.session.partial, true);
+    assert.equal(detail?.total, id === 'remote-excerpt' ? 1 : 0);
+  }
+  assert.equal(f.service.remoteDetail('remote-excerpt')?.messages[0]?.text, excerpt);
+  assert.equal(f.service.remoteDetail('remote-excerpt', new URLSearchParams({ offset: '1' }))?.messages.length, 0);
+  for (const id of [f.source, created.sessionId]) {
+    const listed = list.sessions.find(session => session.id === id);
+    assert.ok(listed);
+    assert.ok(!('recordMode' in listed) || listed.recordMode === undefined);
+  }
+  const foreign = createConversations({ ...f.options, tenantId: 'other', history: { catalog: async () => ({ sessions: [] }) } });
+  assert.equal(foreign.remoteDetail('remote-excerpt'), null);
+  assert.equal((await foreign.historyList()).sessions.length, 0);
+  assert.equal(f.launched.length, 0);
+});
+
 test('new conversation is ready without executing historical requests; first message inherits full evidence', async t => {
   const f = await fixture(t), long = 'TOOL_RESULT_'.repeat(4000);
   await appendFile(f.file, line({ type: 'response_item', payload: { type: 'function_call_output', call_id: 'test', output: long } }) + line(message('secret-for-context-test')) + line(message('hidden-system', 'system')));

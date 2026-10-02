@@ -101,6 +101,7 @@ export interface Session {
   cwd: string;
   status?: string;
   excerpt?: string;
+  recordMode?: 'excerpt';
   partial?: boolean;
   missing?: boolean;
   managed?: boolean;
