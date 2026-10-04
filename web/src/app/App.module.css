@@ -40,6 +40,7 @@
   .shell :global(.topbar) { margin-bottom: 24px; }
 }
 
+:global(body[data-view="tasks"]) .shell.shell :global(.main),
 :global(body[data-view="history"]) .shell.shell :global(.main),
 :global(body[data-view="settings"]) .shell.shell :global(.main) { padding: 0; }
 

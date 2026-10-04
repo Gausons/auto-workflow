@@ -273,3 +273,60 @@ test('workbench reading layout handles long sync messages, filtering and narrow 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   await page.screenshot({ path: 'test-results/workbench-mobile.png', fullPage: true });
 });
+
+test('task workspace keeps controls visible, filters consistently and uses mobile drill-in navigation', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  const tasks = Array.from({ length: 30 }, (_, index) => ({
+    id: `workspace-task-${index}`, title: index === 0 ? '整理项目 README，补全本地开发与部署说明' : index === 1 ? '修复缺陷 BIP-BUG-00291698：智能体输出时只有脚本结果，缺少思考过程和工作条目，等待时无法判断任务进度' : `优化工作台交互细节 ${index}`,
+    status: index === 0 ? 'error' : index % 3 === 0 ? 'completed' : index % 3 === 1 ? 'ready' : 'running',
+    revision: 1, contextVersion: 1, content: '## 目标\n整理项目说明，让新成员能够快速启动开发环境。\n\n## 验收标准\n- 补全安装与启动步骤\n- 核对部署说明与常用命令',
+    sessionIds: [], events: [], createdAt: '2026-10-04T08:00:00Z', updatedAt: '2026-10-04T09:22:00Z'
+  }));
+  const executions = Array.from({ length: 18 }, (_, index) => ({ id: `workspace-job-${index}`, taskId: tasks[0]!.id, status: index === 17 ? 'failed' : 'completed', agent: 'codex', agentLabel: 'Codex', deviceId: 'local', cwd: '/repo', title: '整理项目说明', contextVersion: 1, prompt: '整理项目说明', message: index === 17 ? '执行中断，请检查设备连接后再继续。' : '', output: index === 17 ? '' : '已检查项目结构，补充了开发环境说明。', createdAt: `2026-10-04T09:${String(index).padStart(2, '0')}:00Z`, updatedAt: '2026-10-04T09:22:00Z' }));
+  await page.route('**/api/task-center', route => route.fulfill({ json: { tasks, sessions: [], devices: [], executions, handoffs: [] } }));
+  await login(page);
+  const list = page.getByRole('complementary', { name: '任务列表' });
+  const detail = page.getByRole('region', { name: '任务详情' });
+  const heading = page.getByRole('heading', { name: tasks[0]!.title });
+  await expect(heading).toBeVisible();
+  const longTask = list.getByRole('button', { name: new RegExp('修复缺陷 BIP-BUG') });
+  expect((await longTask.boundingBox())!.height).toBeLessThan(110);
+  const action = page.getByRole('button', { name: '继续任务', exact: true });
+  const before = await action.boundingBox();
+  expect(before!.y + before!.height).toBeLessThanOrEqual(1000);
+  // Find the actual independently scrolling ancestor of the timeline.
+  await detail.locator('.tc-timeline').evaluate(element => {
+    let parent = element.parentElement;
+    while (parent && getComputedStyle(parent).overflowY !== 'auto') parent = parent.parentElement;
+    if (!parent) throw new Error('活动记录缺少独立滚动容器');
+    parent.scrollTop = parent.scrollHeight;
+  });
+  await expect(page.getByText('执行中断，请检查设备连接后再继续。')).toBeVisible();
+  expect((await action.boundingBox())!.y).toBe(before!.y);
+  await expect(heading).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('task-workspace-desktop.png'), fullPage: true });
+  await page.getByRole('button', { name: '已完成', exact: true }).click();
+  await expect(page.getByRole('button', { name: '重新打开任务' })).toBeVisible();
+  await page.getByRole('textbox', { name: '搜索任务与会话' }).fill('不存在的任务');
+  await expect(page.getByRole('button', { name: '重新打开任务' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '没有匹配的任务' })).toBeVisible();
+  await page.getByRole('button', { name: '清除筛选' }).click();
+  await expect(heading).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(list).toBeVisible();
+  await expect(detail).toBeHidden();
+  await longTask.click();
+  await expect(detail).toBeVisible();
+  await expect(list).toBeHidden();
+  await expect(page.getByRole('heading', { name: tasks[1]!.title })).toBeFocused();
+  await expect(action).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const mobileAction = await action.boundingBox();
+  expect(mobileAction!.y + mobileAction!.height).toBeLessThanOrEqual(844);
+  await page.screenshot({ path: testInfo.outputPath('task-workspace-mobile.png'), fullPage: true });
+  await page.getByRole('button', { name: '返回任务列表' }).click();
+  await expect(list).toBeVisible();
+  await expect(longTask).toBeFocused();
+  await expect(longTask).toHaveAttribute('aria-pressed', 'true');
+});

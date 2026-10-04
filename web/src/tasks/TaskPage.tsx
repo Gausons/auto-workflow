@@ -8,11 +8,21 @@ import { taskContent } from '../../../shared/taskContent.js';
 import type { AgentProject, Execution, Handoff, Session, Task, TaskCenterData } from '../../../shared/taskTypes.js';
 import { SessionRecords } from './TaskAuxPage.js';
 import overlayStyles from '../styles/Overlay.module.css';
+import styles from './TaskPage.module.css';
 
 type Dialog = { kind: 'edit' | 'execute' | 'handoff' | 'unlink' | 'move' | 'respond' | 'packet' | 'failed' | 'started'; id?: string } | null;
 interface Targets { projects: AgentProject[]; localError?: string }
 interface DirectoryResult { status: 'pending' | 'selecting' | 'completed' | 'cancelled' | 'failed'; requestId: string; cwd?: string; message?: string }
 const labels: Record<string, string> = { waiting: '等待输入', error: '执行异常', running: '进行中', ready: '待接续', review: '待验收', completed: '已完成' };
+const filters = [{ id: 'all', label: '全部' }, { id: 'attention', label: '待处理' }, { id: 'active', label: '进行中' }, { id: 'completed', label: '已完成' }] as const;
+type TaskFilter = typeof filters[number]['id'];
+const matchesFilter = (task: Task, filter: TaskFilter) => filter === 'all' || (filter === 'attention' ? ['waiting', 'error', 'review'].includes(task.status) : filter === 'active' ? ['ready', 'running'].includes(task.status) : task.status === 'completed');
+
+function Icon({ name }: { name: 'search' | 'refresh' | 'plus' | 'back' | 'arrow' }) {
+  const paths = { search: 'M21 21l-5-5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0', refresh: 'M20 7v5h-5M4 17v-5h5M6 6a8 8 0 0 1 13 3M5 15a8 8 0 0 0 13 3', plus: 'M12 5v14M5 12h14', back: 'M15 5l-7 7 7 7', arrow: 'M5 12h14M13 6l6 6-6 6' };
+  return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;
+}
+
 const handoffLabels: Record<string, string> = { pending: '待接收', received: '已接收 · 待执行', started: '已开始执行', cancelled: '已取消', failed: '失败' };
 const executionLabels: Record<string, string> = { blocked: '会话被占用 · 未发送', queued: '等待执行', launching: '正在创建会话', running: 'Agent 执行中', waiting: '等待你处理', completed: '本轮已完成', interrupted: '已停止', failed: '执行失败', unknown: '结果待核对' };
 const modeLabels: Record<string, string> = { continue: '接着做', branch: '另开分支', reference: '引用信息' };
@@ -45,7 +55,7 @@ function packetText(handoff: Handoff, data: TaskCenterData) {
 function ExecutionCard({ job, canEdit, open, act, busy }: { job: Execution; canEdit: boolean; open(dialog: Dialog): void; act(action: string, id: string): void; busy: boolean }) {
   const codexThreadId = job.threadId || (job.agent === 'codex' ? job.sessionId : null);
   const releaseLabels: Record<string, string> = { releasing: '正在释放网页连接…', released: '网页连接已释放', failed: '会话释放失败，请检查服务进程' };
-  return <article className="tc-execution"><div className="tc-actions"><strong>{executionLabels[job.status] || job.status}</strong><span className="tc-meta">{time(job.createdAt)}</span></div>
+  return <article className="tc-execution" data-status={job.status}><div className="tc-actions"><strong>{executionLabels[job.status] || job.status}</strong><span className="tc-meta">{time(job.createdAt)}</span></div>
     {['failed', 'blocked', 'unknown', 'waiting', 'interrupted'].includes(job.status) && job.message && <p>{job.message}</p>}
     <details className="tc-execution-details"><summary>执行详情</summary>{job.desktopMessage && <p className="tc-meta">{job.desktopMessage}</p>}{job.controlError && <p role="alert">{job.controlError}</p>}{job.releaseStatus && <p className="tc-meta">{releaseLabels[job.releaseStatus]}</p>}
       {job.deviceId !== 'local' && (job.sessionId || job.threadId) && <p className="tc-meta">目标设备的 Agent 会话：{job.sessionId || job.threadId}</p>}
@@ -72,18 +82,29 @@ export function TaskPage() {
   const [active, setActive] = useState(route);
   const [selected, setSelected] = useState<string | null>(() => requestedTaskId);
   const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<TaskFilter>('all');
+  const [mobileDetail, setMobileDetail] = useState(() => Boolean(requestedTaskId));
+  const detailScroll = useRef<HTMLDivElement>(null);
+  const detailHeading = useRef<HTMLHeadingElement>(null);
+  const list = useRef<HTMLDivElement>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const queryClient = useQueryClient();
   useEffect(() => { const update = () => setActive(route()); window.addEventListener('hashchange', update); return () => window.removeEventListener('hashchange', update); }, []);
-  useEffect(() => { const open = (event: Event) => { const id = (event as CustomEvent<{ taskId?: string }>).detail?.taskId; if (id) { rememberTask(id); setSelected(id); location.hash = 'tasks'; } }; window.addEventListener('bugflow:open-task', open); return () => window.removeEventListener('bugflow:open-task', open); }, []);
+  useEffect(() => { const open = (event: Event) => { const id = (event as CustomEvent<{ taskId?: string }>).detail?.taskId; if (id) { rememberTask(id); setSearch(''); setFilter('all'); setMobileDetail(true); setSelected(id); location.hash = 'tasks'; } }; window.addEventListener('bugflow:open-task', open); return () => window.removeEventListener('bugflow:open-task', open); }, []);
   const snapshot = useQuery({ queryKey: ['task-center', 'snapshot'], queryFn: ({ signal }) => apiRequest<TaskCenterData>('/api/task-center', { signal }), enabled: active && hasSessionToken() });
   useTaskCenterUpdates(active, snapshot.data?.syncVersion);
   const identity = useQuery({ queryKey: ['task-center', 'identity'], queryFn: ({ signal }) => apiRequest<{ permissions: string[] }>('/api/bootstrap', { signal }), enabled: active && hasSessionToken() });
   const targets = useQuery({ queryKey: ['task-center', 'targets'], queryFn: ({ signal }) => apiRequest<Targets>('/api/task-center/codex', { signal }), enabled: active && dialog?.kind === 'execute', retry: false });
   const data = snapshot.data;
-  const task = data?.tasks.find(item => item.id === selected) || data?.tasks[0];
+  const needle = search.trim().toLowerCase();
+  const visible = (data?.tasks || []).filter(item => matchesFilter(item, filter) && (!needle || [item.title, taskContent(item), ...(data?.sessions || []).filter(session => item.sessionIds.includes(session.id)).flatMap(session => [session.title, session.cwd, session.agent])].join(' ').toLowerCase().includes(needle))).sort((a, b) => Number(b.status === 'waiting') - Number(a.status === 'waiting') || taskActivity(b, data!) - taskActivity(a, data!));
+  const task = visible.find(item => item.id === selected) || visible[0];
+  useLayoutEffect(() => {
+    if (detailScroll.current) detailScroll.current.scrollTop = 0;
+    if (mobileDetail && window.matchMedia?.('(max-width: 800px)').matches) detailHeading.current?.focus();
+  }, [task?.id, mobileDetail]);
   const canEdit = identity.data?.permissions.includes('work.execute') === true;
   const mutate = useMutation({ retry: false, mutationFn: ({ path, body }: { path: string; body: Record<string, unknown> }) => apiRequest<{ taskId?: string }>(path, { method: 'POST', body: JSON.stringify(body) }), onSuccess: (result, variables) => { if (result.taskId) setSelected(result.taskId); if (variables.path === '/api/task-center/execute') setNotice('已提交 Agent，执行状态将自动更新'); setDialog(null); setError(''); void queryClient.invalidateQueries({ queryKey: ['task-center', 'snapshot'] }); }, onError: failure => { setError(errorMessage(failure)); void queryClient.invalidateQueries({ queryKey: ['task-center', 'snapshot'] }); } });
   const send = (body: Record<string, unknown>, path = '/api/task-center') => { if (!mutate.isPending) mutate.mutate({ path, body }); };
@@ -92,26 +113,40 @@ export function TaskPage() {
   if (!active) return null;
   if (snapshot.isPending) return <p role="status">正在汇总任务与会话…</p>;
   if (snapshot.isError || !data) return <p role="alert">{errorMessage(snapshot.error)} <button className="button secondary" type="button" onClick={() => void snapshot.refetch()}>重试</button></p>;
-  const needle = search.trim().toLowerCase();
-  const visible = data.tasks.filter(item => !needle || [item.title, taskContent(item), ...data.sessions.filter(session => item.sessionIds.includes(session.id)).flatMap(session => [session.title, session.cwd, session.agent])].join(' ').toLowerCase().includes(needle)).sort((a, b) => Number(b.status === 'waiting') - Number(a.status === 'waiting') || taskActivity(b, data) - taskActivity(a, data));
   const unassigned = data.sessions.filter(session => !data.tasks.some(item => item.sessionIds.includes(session.id)));
   const timeline = task ? taskTimeline(task, data) : [];
   const jobs = task ? data.executions.filter(job => job.taskId === task.id) : [];
   const waiting = jobs.find(job => job.status === 'waiting' && job.request);
   const activeJob = jobs.some(job => ['queued', 'launching', 'running', 'waiting', 'unknown'].includes(job.status));
-  return <><header className="tc-heading"><div><p className="eyebrow">跨设备 · 跨 Agent</p><h1>任务中心</h1></div><button className="button secondary" type="button" disabled={snapshot.isFetching} onClick={() => void snapshot.refetch()}>刷新</button></header>
-    <nav className="tc-nav" aria-label="任务中心视图"><a href="#tasks" aria-current="page">全部任务<span>{data.tasks.length}</span></a><a href="#inbox">未归属会话<span>{unassigned.length}</span></a><a href="#devices">设备与 Agent<span>{data.devices.length}</span></a></nav>
-    <div className="tc-layout"><aside className="tc-list" aria-label="任务列表"><label className="tc-task-search">搜索任务与会话<input value={search} onChange={event => setSearch(event.target.value)} placeholder="任务、会话标题、工作目录" maxLength={200} /></label>{visible.length ? visible.map(item => <button key={item.id} className="tc-task" type="button" aria-pressed={task?.id === item.id} onClick={() => setSelected(item.id)}><strong>{item.title}</strong><span>{labels[item.status] || item.status}</span><small>{time(new Date(taskActivity(item, data)).toISOString())} · {item.sessionIds.length} 段会话</small></button>) : <p className="tc-meta">暂无匹配任务</p>}</aside>
-      <div className="tc-detail">{!task ? <div className="tc-empty"><h2>从一件事开始</h2><p>创建任务，或把未归属会话关联到任务。</p></div> : <>
-        <header className="tc-detail-head"><div><span className="tc-tag">{labels[task.status] || task.status}</span><h2>{task.title}</h2><p className="tc-meta">{task.sessionIds.length} 段会话 · 最近活动 {time(new Date(taskActivity(task, data)).toISOString())}</p></div>{canEdit && <div className="tc-actions"><button className="button secondary" type="button" onClick={() => open({ kind: 'edit' })}>编辑任务</button><button className="button secondary" type="button" onClick={() => open({ kind: 'handoff' })}>转交 / 分支</button></div>}</header>
-        <SafeMarkdown content={taskContent(task)} className="tc-task-content" />
-        <div className="tc-actions"><h3>任务时间线</h3>{canEdit && <a className="button secondary" href="#inbox">关联历史会话</a>}</div>
-        <div className="tc-timeline">{timeline.map(item => <article className="tc-timeline-item" key={`${item.kind}:${item.id}`}><time className="tc-meta">{time(item.at)}</time>{item.kind === 'session' ? <><SessionItem session={item.value as Session} data={data} canEdit={canEdit} open={open} />{item.jobs.filter(job => job.status !== 'completed').map(job => <ExecutionCard key={job.id} job={job as Execution} canEdit={canEdit} open={open} act={act} busy={mutate.isPending} />)}</> : item.kind === 'execution' ? <ExecutionCard job={item.value as Execution} canEdit={canEdit} open={open} act={act} busy={mutate.isPending} /> : <HandoffCard handoff={item.value as Handoff} data={data} canEdit={canEdit} open={open} send={send} busy={mutate.isPending} />}</article>)}</div>
-        <footer className="tc-task-footer tc-actions">{canEdit ? <>{!activeJob && <button className="button secondary" type="button" disabled={mutate.isPending} onClick={() => send({ action: 'update', taskId: task.id, revision: task.revision, content: taskContent(task), status: task.status === 'completed' ? 'ready' : 'completed' })}>{task.status === 'completed' ? '重新打开任务' : '标记任务完成'}</button>}{waiting ? <button className="button primary" type="button" onClick={() => open({ kind: 'respond', id: waiting.id })}>处理待办</button> : !activeJob && task.status !== 'completed' && <button className="button primary" type="button" onClick={() => open({ kind: 'execute' })}>继续任务</button>}</> : <span className="tc-meta">只读</span>}</footer>
-      </>}</div></div>
-    {notice && <p role="status">{notice}</p>}
+  return <div className={styles.workspace}>
+    <header className={styles.heading}><div><h1>任务中心</h1><span>让每一件事，持续向前</span></div><div className="tc-actions"><button className={styles.iconButton} type="button" aria-label="刷新任务" title="刷新任务" disabled={snapshot.isFetching} onClick={() => void snapshot.refetch()}><Icon name="refresh" /></button>{canEdit && <a className={`button primary ${styles.newTask}`} aria-label="创建任务" href="#new-task"><Icon name="plus" />新建任务</a>}</div></header>
+    <nav className={styles.navigation} aria-label="任务中心视图"><a href="#tasks" aria-current="page">全部任务<span>{data.tasks.length}</span></a><a href="#inbox">未归属会话<span>{unassigned.length}</span></a><a href="#devices">设备与 Agent<span>{data.devices.length}</span></a></nav>
+    <div className={styles.layout} data-mobile-detail={mobileDetail}>
+      <aside className={styles.list} aria-label="任务列表">
+        <div className={styles.listTools}><div className={styles.search}><Icon name="search" /><input aria-label="搜索任务与会话" value={search} onChange={event => { setSearch(event.target.value); open(null); }} placeholder="搜索任务、会话或目录" maxLength={200} />{search && <button type="button" aria-label="清除搜索" onClick={() => setSearch('')}>×</button>}</div>
+          <div className={styles.filters} role="group" aria-label="任务状态筛选">{filters.map(item => <button key={item.id} type="button" aria-pressed={filter === item.id} onClick={() => { setFilter(item.id); open(null); }}>{item.label}</button>)}</div>
+        </div>
+        <div className={styles.listSummary}><span>{filter === 'all' ? '最近任务' : filters.find(item => item.id === filter)?.label}</span><span aria-live="polite">{visible.length} 个任务</span></div>
+        <div ref={list} className={styles.listScroll}>{visible.length ? visible.map(item => <button key={item.id} className={styles.task} type="button" aria-pressed={task?.id === item.id} onClick={() => { setSelected(item.id); setMobileDetail(true); open(null); }}><div className={styles.taskTitle}><i className={styles.dot} data-status={item.status} aria-hidden="true" /><strong title={item.title}>{item.title}</strong></div><div className={styles.taskMeta}><span>{labels[item.status] || item.status} · {item.sessionIds.length} 段会话</span><time>{time(new Date(taskActivity(item, data)).toISOString())}</time></div></button>) : <div className={styles.listEmpty}><Icon name="search" /><p>{data.tasks.length ? '没有匹配的任务' : '还没有任务'}</p>{data.tasks.length > 0 && <button className={styles.textButton} type="button" onClick={() => { setSearch(''); setFilter('all'); }}>清除筛选</button>}</div>}</div>
+      </aside>
+      <section className={styles.detail} aria-label="任务详情">
+        <button className={styles.back} type="button" onClick={() => { setMobileDetail(false); requestAnimationFrame(() => list.current?.querySelector<HTMLButtonElement>('[aria-pressed="true"]')?.focus()); }}><Icon name="back" />返回任务列表</button>
+        {!task ? <div className={styles.empty}><span className={styles.emptyMark}><Icon name={data.tasks.length ? 'search' : 'plus'} /></span><h2>{data.tasks.length ? '没有匹配的任务' : '从一件事开始'}</h2><p>{data.tasks.length ? '试试其他关键词，或清除筛选查看全部任务。' : '描述你的目标，让 Agent 帮你推进工作。'}</p>{data.tasks.length ? <button className="button secondary" type="button" onClick={() => { setSearch(''); setFilter('all'); }}>查看全部任务</button> : canEdit && <a className="button primary" href="#new-task">创建第一个任务</a>}</div> : <>
+          <header className={styles.detailHead}><div className={styles.detailTitle}><div className={styles.status} data-status={task.status}><i className={styles.dot} data-status={task.status} aria-hidden="true" />{labels[task.status] || task.status}</div><h2 ref={detailHeading} tabIndex={-1} title={task.title}>{task.title}</h2><p>{task.sessionIds.length} 段会话<span>·</span>更新于 {time(new Date(taskActivity(task, data)).toISOString())}</p></div>{canEdit && <div className={styles.detailActions}><button className="button secondary" type="button" onClick={() => open({ kind: 'edit' })}>编辑任务</button><button className="button secondary" type="button" onClick={() => open({ kind: 'handoff' })}>转交 / 分支</button></div>}</header>
+          <div ref={detailScroll} className={styles.detailScroll}><div className={styles.reading}>
+            <details className={styles.context} key={`context:${task.id}`} open={timeline.length === 0}><summary>任务上下文<span>查看目标与约束</span></summary><SafeMarkdown content={taskContent(task)} className="tc-task-content" /></details>
+            <div className={styles.timelineHeading}><h3>活动记录<span>{timeline.length}</span></h3>{canEdit && <a href="#inbox">关联历史会话 <span aria-hidden="true">↗</span></a>}</div>
+            {timeline.length === 0 && <div className={styles.timelineEmpty}><p>准备好后，开始第一轮工作</p><span>Agent 的会话、执行结果和交接记录会显示在这里。</span></div>}
+            <div className={`tc-timeline ${styles.timeline}`}>{timeline.map(item => <article className="tc-timeline-item" key={`${task.id}:${item.kind}:${item.id}`}><time className="tc-meta">{time(item.at)}</time>{item.kind === 'session' ? <><SessionItem session={item.value as Session} data={data} canEdit={canEdit} open={open} />{item.jobs.filter(job => job.status !== 'completed').map(job => <ExecutionCard key={job.id} job={job as Execution} canEdit={canEdit} open={open} act={act} busy={mutate.isPending} />)}</> : item.kind === 'execution' ? <ExecutionCard job={item.value as Execution} canEdit={canEdit} open={open} act={act} busy={mutate.isPending} /> : <HandoffCard handoff={item.value as Handoff} data={data} canEdit={canEdit} open={open} send={send} busy={mutate.isPending} />}</article>)}</div>
+          </div></div>
+          <footer className={styles.footer}><div className={styles.footerHint}><i className={styles.dot} data-status={task.status} aria-hidden="true" /><span>{waiting ? 'Agent 正在等待你的回复' : activeJob ? '执行状态自动更新' : task.status === 'completed' ? '任务已完成' : '准备好继续推进了吗？'}</span></div><div className="tc-actions">{canEdit ? <>{!activeJob && <button className="button secondary" type="button" disabled={mutate.isPending} onClick={() => send({ action: 'update', taskId: task.id, revision: task.revision, content: taskContent(task), status: task.status === 'completed' ? 'ready' : 'completed' })}>{task.status === 'completed' ? '重新打开任务' : '标记任务完成'}</button>}{waiting ? <button className="button primary" type="button" onClick={() => open({ kind: 'respond', id: waiting.id })}>处理待办<Icon name="arrow" /></button> : !activeJob && task.status !== 'completed' && <button className="button primary" type="button" onClick={() => open({ kind: 'execute' })}>继续任务<Icon name="arrow" /></button>}</> : <span className="tc-meta">只读</span>}</div></footer>
+        </>}
+      </section>
+    </div>
+    {error && !dialog && <p role="alert" className={styles.notice}>{error}</p>}
+    {notice && <p role="status" className={styles.notice}>{notice}</p>}
     {dialog && task && <TaskDialog dialog={dialog} task={task} data={data} targets={targets.data} targetsError={targets.error} onClose={() => open(null)} send={send} busy={mutate.isPending} error={error} setError={setError} />}
-  </>;
+  </div>;
 }
 
 function HandoffCard({ handoff, data, canEdit, open, send, busy }: { handoff: Handoff; data: TaskCenterData; canEdit: boolean; open(dialog: Dialog): void; send(body: Record<string, unknown>): void; busy: boolean }) {

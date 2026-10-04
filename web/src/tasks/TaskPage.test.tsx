@@ -68,3 +68,52 @@ describe('TaskPage', () => {
     expect(JSON.parse(String(fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')?.[1]?.body))).toEqual({ executionId: 'job-2', action: 'respond', answers: { q1: '继续' } });
   });
 });
+
+describe('TaskPage browsing', () => {
+  afterEach(() => { cleanup(); sessionStorage.clear(); location.hash = ''; vi.unstubAllGlobals(); });
+
+  it('combines status and session searches and keeps the detail inside the visible results', async () => {
+    const user = userEvent.setup();
+    setup(['work.execute'], { ...snapshot, tasks: [task,
+      { ...task, id: 'waiting', title: '等待确认部署', status: 'waiting', sessionIds: ['session'] },
+      { ...task, id: 'done', title: '已交付文档', status: 'completed' },
+      { ...task, id: 'error', title: '构建失败', status: 'error' },
+      { ...task, id: 'review', title: '等待验收', status: 'review' }
+    ], sessions: [{ id: 'session', title: '检查服务', cwd: '/projects/deploy', agent: 'codex', deviceId: 'local' }] });
+    expect(await screen.findByRole('heading', { name: '等待确认部署' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: '待处理' }));
+    expect(screen.getByText('3 个任务')).toBeTruthy();
+    await user.type(screen.getByRole('textbox', { name: '搜索任务与会话' }), '/projects/deploy');
+    expect(screen.getByText('1 个任务')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '等待确认部署' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: '已完成' }));
+    expect(screen.queryByRole('heading', { name: '等待确认部署' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '编辑任务' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: '清除搜索' }));
+    expect(screen.getByRole('heading', { name: '已交付文档' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '重新打开任务' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: '进行中' }));
+    expect(screen.getByRole('heading', { name: task.title })).toBeTruthy();
+  });
+
+  it('preserves selection when returning from the mobile detail and resets empty searches', async () => {
+    const user = userEvent.setup();
+    setup(['work.execute'], { ...snapshot, tasks: [task, { ...task, id: 'second', title: '第二个任务' }] });
+    await user.click(await screen.findByRole('button', { name: /第二个任务/ }));
+    expect(screen.getByRole('heading', { name: '第二个任务' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: '返回任务列表' }));
+    expect(screen.getByRole('button', { name: /第二个任务/ }).getAttribute('aria-pressed')).toBe('true');
+    await user.type(screen.getByRole('textbox', { name: '搜索任务与会话' }), '不存在的任务');
+    expect(screen.queryByRole('button', { name: '继续任务' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: '清除筛选' }));
+    expect(screen.getByRole('heading', { name: '第二个任务' })).toBeTruthy();
+  });
+
+  it('shows a failed footer action without a dialog and does not retry it', async () => {
+    const fetchMock = setup(['work.execute'], snapshot, 409);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: '标记任务完成' }));
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', '任务版本已变化');
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
+});
