@@ -2,7 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { taskContent, taskTitle } from '../shared/taskContent.js';
 import { hostname } from 'node:os';
 import { httpError } from './rbac.js';
-import type { Actor, AgentProject, Device, Handoff, HandoffMode, HandoffStatus, Session, Task, TaskCenterData, TaskContext, TaskStatus } from '../shared/taskTypes.js';
+import { normalizeRemoteHistory, remoteHistorySummary } from './remoteHistory.js';
+import type { Actor, AgentProject, Device, Handoff, HandoffMode, HandoffStatus, RemoteHistory, Session, Task, TaskCenterData, TaskContext, TaskStatus } from '../shared/taskTypes.js';
 
 const statuses: TaskStatus[] = ['waiting', 'error', 'running', 'ready', 'review', 'completed'];
 const contextKeys: Array<keyof TaskContext> = ['goal', 'constraints', 'decisions', 'next', 'files'];
@@ -10,6 +11,7 @@ type InputRecord = Record<string, unknown>;
 interface TaskCenterDatabase {
   readTaskCenter(tenantId: string): TaskCenterData;
   mutateTaskCenter<T>(tenantId: string, update: (data: TaskCenterData) => T): T;
+  setRemoteSessionHistory(tenantId: string, sessionId: string, history: RemoteHistory | null): void;
 }
 interface HistoryCatalog {
   providers: Array<{ id: string }>;
@@ -75,7 +77,7 @@ export function createTaskCenter({ database, tenantId, history }: { database: Ta
     const synthetic = new Set(data.sessions.filter(s => ['codexExecution', 'agentExecution', 'conversation'].includes(s.source || '')).map(s => `${s.deviceId}:${s.nativeId}`));
     const sessions = [...local.sessions.filter(s => !synthetic.has(`local:${s.nativeId}`)), ...data.sessions.filter(s => ['codexExecution', 'agentExecution', 'conversation'].includes(s.source || '') || !synthetic.has(`${s.deviceId}:${s.nativeId}`)).map(s => ['codexExecution', 'agentExecution', 'conversation'].includes(s.source || '') && s.source !== 'conversation' && s.deviceId === 'local' ? { ...s, historyId: local.sessions.find(l => l.nativeId === s.nativeId)?.historyId } : s)];
     return { ...data, devices: [local.device, ...data.devices].map(d => ({ ...d, online: online(d) })),
-      sessions, tasks: data.tasks.map(task => ({ ...task, content: taskContent(task) })).sort((a, b) => statuses.indexOf(a.status) - statuses.indexOf(b.status) || b.updatedAt.localeCompare(a.updatedAt)) };
+      sessions: sessions.map(remoteHistorySummary), tasks: data.tasks.map(task => ({ ...task, content: taskContent(task) })).sort((a, b) => statuses.indexOf(a.status) - statuses.indexOf(b.status) || b.updatedAt.localeCompare(a.updatedAt)) };
   }
   async function command(rawInput: unknown, actor: Actor) {
     if (!isRecord(rawInput)) throw httpError(400, '请求必须是对象');
@@ -181,14 +183,18 @@ export function createTaskCenter({ database, tenantId, history }: { database: Ta
             const id = sessionKey(device.id, `${agent}:${nativeId}`);
             const createdAt = typeof s.createdAt === 'string' && Number.isFinite(Date.parse(s.createdAt)) ? new Date(s.createdAt).toISOString() : undefined;
             const updatedAt = typeof s.updatedAt === 'string' && Number.isFinite(Date.parse(s.updatedAt)) ? new Date(s.updatedAt).toISOString() : now();
-            const item: Session = { id, nativeId, deviceId: device.id, agent, agentLabel: agent, title: required(s.title, 120), cwd: text(s.cwd ?? '', 2000), createdAt,
+            const remoteHistory = s.remoteHistory === undefined ? undefined : normalizeRemoteHistory(s.remoteHistory);
+            const item: Session = { id, nativeId, deviceId: device.id, agent, agentLabel: text(s.agentLabel ?? agent, 120), title: required(s.title, 120), cwd: text(s.cwd ?? '', 2000), createdAt,
+              model: text(s.model ?? '', 500), branch: text(s.branch ?? '', 500), remoteHistory,
               status: text(s.status ?? 'unknown', 80), archived: s.archived === true, updatedAt,
               // Connectors may differ slightly in character/byte counting. Bound the
               // accepted input, then normalize it server-side so one legacy record
               // cannot reject an otherwise valid heartbeat batch.
               excerpt: text(s.excerpt ?? '', 240000).slice(-23000), partial: true };
+            database.setRemoteSessionHistory(tenantId, id, remoteHistory ?? null);
+            const summary = remoteHistorySummary(item);
             const old = data.sessions.findIndex(session => session.id === id);
-            if (old < 0) data.sessions.push(item); else data.sessions[old] = item;
+            if (old < 0) data.sessions.push(summary); else data.sessions[old] = summary;
           }
           return { deviceId: id };
         }

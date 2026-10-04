@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { TaskAuxPage } from './TaskAuxPage.js';
+import { SessionRecords, TaskAuxPage } from './TaskAuxPage.js';
 
 const sessionId = 'a'.repeat(64);
 const snapshot = {
@@ -45,6 +45,20 @@ describe('TaskAuxPage', () => {
     expect(await screen.findByText('<img src=x onerror=alert(1)>')).toBeTruthy();
     expect(document.querySelector('img')).toBeNull();
     expect(screen.getByText('已显示 1 / 1 条记录')).toBeTruthy();
+  });
+
+  it('loads structured remote records through the detail endpoint instead of displaying the legacy excerpt', async () => {
+    sessionStorage.setItem('bugflow.sessionToken', 'test-token');
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ messages: [{ role: 'user', text: '远端问题' }, { role: 'assistant', text: '**远端回复**' }], total: 2, session: { partial: true } }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><SessionRecords session={{ ...snapshot.sessions[0], deviceId: 'remote', recordMode: 'synced', excerpt: '旧纯文本摘要' }} /></QueryClientProvider>);
+
+    expect(await screen.findByText('远端问题')).toBeTruthy();
+    expect(screen.getByText('远端回复').tagName).toBe('STRONG');
+    expect(screen.getByText('已显示 2 / 2 条已同步记录 · 部分记录')).toBeTruthy();
+    expect(screen.queryByText('旧纯文本摘要')).toBeNull();
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api/agent-sessions/${sessionId}?limit=100&offset=0`);
   });
 
   it('links one session using the selected task revision and opens the task', async () => {

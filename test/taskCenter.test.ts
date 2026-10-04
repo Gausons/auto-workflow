@@ -3,9 +3,10 @@ import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { once } from 'node:events';
+import { createHash, randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { openDatabase } from '../scripts/testing/database.js';
+import { openDatabase, rawDatabase } from '../scripts/testing/database.js';
 import { createTaskCenter } from '../src/taskCenter.js';
 import { syncDeviceOnce } from '../scripts/device-sync.js';
 import { createApp } from '../scripts/testing/database.js';
@@ -200,6 +201,102 @@ test('connector sync is incremental and the server normalizes oversized excerpts
   assert.equal(posts[1].sessions.length, 0);
   assert.equal(detailCalls, 1);
   assert.equal((await center.snapshot()).sessions.find(item => item.deviceId === 'remote')?.excerpt?.length, 23000);
+});
+
+test('structured history batches stay below the HTTP byte limit and retry only unacknowledged batches', async t => {
+  const { center, cmd, database } = fixture(t);
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'task-history-batches-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const index: Record<string, string> = {};
+  const sessions = Array.from({ length: 8 }, (_, i) => ({ ...source, id: `s${i}`, sessionId: `native${i}`, messageCount: 1 }));
+  const remoteHistory = { catalog: async () => ({ providers: [{ id: 'codex' }], sessions }), detail: async () => ({ total: 1, messages: [{ role: 'user', text: '中文内容'.repeat(6000), images: [{ dataUrl: 'data:image/png;base64,' + 'A'.repeat(250000), alt: '测试图片' }] }] }) };
+  let failed = false, posts = 0;
+  const request = async (method: string, body?: unknown) => {
+    if (method === 'GET') return center.snapshot();
+    posts++;
+    assert.ok(Buffer.byteLength(JSON.stringify(body)) < 1000000);
+    if (posts === 2 && !failed) { failed = true; throw new Error('模拟断网'); }
+    return cmd(body);
+  };
+  const options = { request, history: remoteHistory, deviceId: 'remote', name: 'Linux', outputDir: dir, includeExcerpts: true, sessionIndex: index };
+  await assert.rejects(syncDeviceOnce(options), /模拟断网/);
+  assert.ok(Object.keys(index).length > 0 && Object.keys(index).length < sessions.length);
+  await syncDeviceOnce(options);
+  assert.equal(Object.keys(index).length, sessions.length);
+  assert.equal(database.readTaskCenter('default').sessions.filter(session => session.deviceId === 'remote').length, sessions.length);
+  assert.ok(database.readTaskCenter('default').sessions.every(session => !session.remoteHistory && database.readRemoteSessionHistory('default', session.id)?.messages[0].role === 'user'));
+  const before = database.readTaskCenter('default');
+  const existing = before.sessions[0];
+  const previewBefore = database.readRemoteSessionHistory('default', existing.id);
+  await assert.rejects(cmd({ action: 'heartbeat', deviceId: 'remote', name: 'Linux', agents: ['codex'], sessions: [
+    { nativeId: existing.nativeId, agent: 'codex', title: '删除预览应回滚' },
+    { nativeId: 'new', agent: 'codex', title: '应回滚', remoteHistory: { offset: 0, total: 1, sourcePartial: false, truncated: false, messages: [{ role: 'user', text: '新预览也应回滚' }] } },
+    { nativeId: 'invalid', agent: 'codex', title: '无效数据', remoteHistory: { offset: -1, total: 1, sourcePartial: false, truncated: false, messages: [] } }
+  ] }), { statusCode: 400 });
+  assert.deepEqual(database.readTaskCenter('default'), before);
+  assert.deepEqual(database.readRemoteSessionHistory('default', existing.id), previewBefore);
+  assert.equal(database.readRemoteSessionHistory('default', createHash('sha256').update('remote\0codex:new').digest('hex')), null);
+});
+
+test('large project metadata gets its own heartbeat without skipping the first history record', async t => {
+  const { center, cmd, database } = fixture(t);
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'task-project-batches-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const index: Record<string, string> = {};
+  const codexProjects = Array.from({ length: 44 }, (_, i) => ({ id: `p${i}`, name: `项目${i}`, cwd: `/repo/${i}`,
+    models: Array.from({ length: 30 }, (_, j) => ({ id: `model${j}`, name: `Model ${j}`, description: 'x'.repeat(500) })) }));
+  const sessions = Array.from({ length: 2 }, (_, i) => ({ ...source, id: `s${i}`, sessionId: `native${i}`, messageCount: 1 }));
+  const remoteHistory = { catalog: async () => ({ providers: [{ id: 'codex' }], sessions }), detail: async () => ({ total: 1,
+    messages: [{ role: 'user', text: '含图片的会话', images: [{ dataUrl: 'data:image/png;base64,' + 'A'.repeat(250000), alt: '测试图片' }] }] }) };
+  const posts: Array<{ sessions: Array<{ nativeId: string }>; codexProjects?: unknown[] }> = [];
+  let failHistory = true;
+  const request = async (method: string, body?: unknown) => {
+    if (method === 'GET') return center.snapshot();
+    assert.ok(Buffer.byteLength(JSON.stringify(body)) <= 900000);
+    const post = body as typeof posts[number];
+    posts.push(post);
+    if (post.sessions.length && failHistory) { failHistory = false; throw new Error('模拟正文同步断网'); }
+    return cmd(body);
+  };
+  const options = { request, history: remoteHistory, deviceId: 'remote', name: 'Linux', outputDir: dir, includeExcerpts: true, codexProjects, sessionIndex: index };
+  await assert.rejects(syncDeviceOnce(options), /模拟正文同步断网/);
+  assert.equal(posts[0].sessions.length, 0);
+  assert.equal(posts[0].codexProjects?.length, 44);
+  assert.equal(posts[1].codexProjects, undefined);
+  assert.deepEqual(Object.keys(index), [], 'a metadata heartbeat must not acknowledge an unsent history record');
+  await syncDeviceOnce(options);
+  const stored = database.readTaskCenter('default');
+  assert.deepEqual(stored.sessions.map(session => session.nativeId).sort(), ['native0', 'native1']);
+  assert.equal(stored.devices.find(device => device.id === 'remote')?.codexProjects?.length, 44);
+  assert.equal(Object.keys(index).length, 2);
+  assert.ok(stored.sessions.every(session => database.readRemoteSessionHistory('default', session.id)?.messages[0].images?.[0].dataUrl));
+  const previousPosts = posts.length;
+  await assert.rejects(syncDeviceOnce({ ...options, codexProjects: [...codexProjects, ...codexProjects] }), /设备项目配置超过同步请求上限/);
+  assert.equal(posts.length, previousPosts, 'oversized metadata must fail before sending a request');
+});
+
+test('image previews stay outside task state and unchanged heartbeats do not rewrite them', async t => {
+  const key = randomUUID(), { database, cmd } = fixture(t, key), raw = rawDatabase(key);
+  t.after(() => raw.close());
+  const remoteHistory = { offset: 0, total: 1, sourcePartial: false, truncated: false, messages: [{ role: 'user', text: '查看截图', images: [{ dataUrl: 'data:image/png;base64,' + 'A'.repeat(250000) }] }] };
+  const sessions = Array.from({ length: 24 }, (_, i) => ({ nativeId: `image-${i}`, agent: 'claude', title: `截图 ${i}`, remoteHistory }));
+  for (const session of sessions) await cmd(heartbeat([session]));
+  const state = database.readTaskCenter('default');
+  assert.ok(Buffer.byteLength(JSON.stringify(state)) < 30000);
+  assert.equal(Number(raw.prepare("SELECT sum(octet_length(payload::text)) AS bytes FROM remote_session_history WHERE tenant_id = 'default'").get()?.bytes) > 6000000, true);
+  const revisions = () => raw.prepare("SELECT session_id, xmin::text AS revision FROM remote_session_history WHERE tenant_id = 'default' ORDER BY session_id").all();
+  const before = revisions();
+  await cmd(heartbeat());
+  await cmd({ action: 'create', title: '与图片无关的新任务' });
+  assert.deepEqual(revisions(), before, 'normal mutations must not rewrite preview rows');
+  const first = state.sessions[0];
+  assert.equal(database.readRemoteSessionHistory('other', first.id), null);
+  await assert.rejects(createTaskCenter({ database, tenantId: 'default', history }).command(heartbeat([{ ...sessions[0], remoteHistory: undefined }]), { id: 'unauthorized-owner' }), { statusCode: 403 });
+  assert.deepEqual(revisions(), before);
+  await cmd(heartbeat([{ ...sessions[0], remoteHistory: undefined }]));
+  assert.equal(database.readRemoteSessionHistory('default', first.id), null);
+  assert.equal(database.readTaskCenter('default').sessions[0].recordMode, undefined);
+  assert.equal(revisions().length, 23);
 });
 
 test('connector does not acknowledge receipt when writing the packet fails', async t => {

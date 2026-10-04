@@ -14,6 +14,7 @@ import { RemoteCodexWorker } from '../src/remoteCodexWorker.js';
 import { detachSnapshot } from '@auto-workflow/context-engine/detached-bundle';
 import { contextPrompt, freezeContext, readContext } from '../src/contextCompiler.js';
 import { permissionForRoute } from '../src/rbac.js';
+import { syncDeviceOnce } from '../src/deviceConnector.js';
 type ExecutionOptions = Parameters<typeof createCodexExecution>[0];
 type Update = Parameters<NonNullable<ExecutionOptions['runnerFactory']>>[0];
 type RunnerJob = Parameters<Update>[0];
@@ -69,6 +70,49 @@ test('remote history identifies excerpts for existing records without changing t
   const foreign = createConversations({ ...f.options, tenantId: 'other', history: { catalog: async () => ({ sessions: [] }) } });
   assert.equal(foreign.remoteDetail('remote-excerpt'), null);
   assert.equal((await foreign.historyList()).sessions.length, 0);
+  assert.equal(f.launched.length, 0);
+});
+
+test('connector history renders the same structured messages as local history and isolates preview bodies', async t => {
+  const f = await fixture(t);
+  const image = 'data:image/png;base64,aGVsbG8=';
+  await appendFile(f.file, line({ type: 'turn_context', payload: { turn_id: 'turn-1' } }) +
+    line({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '检查图片' }, { type: 'input_image', image_url: image }] } }) +
+    line({ type: 'response_item', payload: { type: 'function_call', name: 'read_file', arguments: '读取源码', call_id: 'call-1' } }) +
+    line({ type: 'response_item', payload: { type: 'function_call_output', output: '源码内容', call_id: 'call-1' } }) + line(message('**完成检查**', 'assistant')));
+  const center = createTaskCenter({ database: f.database, tenantId: 'default', history: f.history });
+  const sessionIndex: Record<string, string> = {};
+  const request = (method: string, body?: unknown) => method === 'GET' ? center.snapshot() : center.command(body, { id: 'owner' });
+  const options = { request, history: f.history, deviceId: 'remote', name: '远端', outputDir: path.join(f.root, 'packets'), includeExcerpts: true, sessionIndex };
+  await syncDeviceOnce(options);
+  const snapshot = await center.snapshot();
+  const remote = snapshot.sessions.find(session => session.deviceId === 'remote')!;
+  const local = await f.history.detail(f.source);
+  const detail = f.service.remoteDetail(remote.id)!;
+  assert.equal(detail.session.recordMode, 'synced');
+  assert.equal(detail.session.partial, false);
+  assert.deepEqual(detail.messages, local.messages.map(({ images, ...message }) => ({ ...message, images: images.map(({ dataUrl, alt }) => ({ dataUrl, alt })) })));
+  assert.equal(remote.remoteHistory, undefined, 'global snapshots exclude structured preview bodies');
+  assert.equal(detail.session.remoteHistory, undefined, 'detail session metadata excludes the unpaginated body');
+  assert.equal(f.database.readTaskCenter('default').sessions.find(session => session.id === remote.id)?.remoteHistory, undefined, 'persisted task state also excludes preview bodies');
+  assert.deepEqual(f.database.readRemoteSessionHistory('default', remote.id)?.messages, detail.messages);
+  assert.equal(remote.messageCount, local.total);
+  assert.deepEqual(remote.syncedRange, { offset: 0, total: local.total, sourcePartial: false, truncated: false });
+  const list = await f.service.historyList();
+  assert.doesNotMatch(JSON.stringify(list), /data:image/);
+  assert.deepEqual(f.service.remoteDetail(remote.id, new URLSearchParams({ offset: '2', limit: '2' }))?.messages, detail.messages.slice(2, 4));
+  await syncDeviceOnce(options);
+  assert.deepEqual(f.service.remoteDetail(remote.id)?.messages, detail.messages);
+  const foreign = createConversations({ ...f.options, tenantId: 'other', history: { catalog: async () => ({ sessions: [] }) } });
+  assert.equal(foreign.remoteDetail(remote.id), null);
+  await assert.rejects(center.command({ action: 'heartbeat', deviceId: 'remote', name: '伪造', agents: ['codex'], sessions: [] }, { id: 'other-user' }), { statusCode: 403 });
+  await syncDeviceOnce({ ...options, includeExcerpts: false });
+  assert.equal(f.database.readRemoteSessionHistory('default', remote.id), null, 'disabling body sync deletes the separate preview in the same transaction');
+  assert.equal(f.service.remoteDetail(remote.id)?.session.recordMode, 'excerpt');
+  assert.equal(f.service.remoteDetail(remote.id)?.total, 0);
+  await syncDeviceOnce(options);
+  f.database.mutateTaskCenter('default', () => f.database.setRemoteSessionHistory('default', remote.id, null));
+  assert.throws(() => f.service.remoteDetail(remote.id), { statusCode: 503 }, 'missing structured bodies must not silently degrade to legacy excerpts');
   assert.equal(f.launched.length, 0);
 });
 

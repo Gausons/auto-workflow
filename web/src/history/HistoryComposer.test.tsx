@@ -42,6 +42,27 @@ describe('HistoryComposer', () => {
     expect(writes[0]?.body.message).toBe('继续远端工作');
   });
 
+  it('removes live messages when a later connector refresh persists the same completed turn', async () => {
+    const remote = { ...session, id: 'c'.repeat(64), deviceId: 'remote', canContinue: true };
+    const execution = { id: 'remote-job', turnId: 'remote-turn', status: 'completed', prompt: '核对远端结果', output: '远端检查完成' };
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(
+      path === '/api/task-center/codex' ? { projects: [] } : { execution, executions: [execution] }
+    ), { status: 200 }))));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const syncHistory = vi.fn(async () => []);
+    const { rerender } = render(<QueryClientProvider client={client}><div id="historyLiveOutput" /><HistoryComposer session={remote} historyMessages={[]} canEdit syncHistory={syncHistory} /></QueryClientProvider>);
+
+    expect(await screen.findByText(execution.prompt)).toBeTruthy();
+    expect(screen.getByText(execution.output)).toBeTruthy();
+    await waitFor(() => expect(syncHistory).toHaveBeenCalledOnce());
+    const historyMessages = [{ role: 'user', text: execution.prompt, turnId: execution.turnId }, { role: 'assistant', text: execution.output, turnId: execution.turnId }];
+    rerender(<QueryClientProvider client={client}><div id="historyLiveOutput" /><HistoryComposer session={remote} historyMessages={historyMessages} canEdit syncHistory={syncHistory} /></QueryClientProvider>);
+
+    await waitFor(() => expect(screen.queryByText(execution.prompt)).toBeNull());
+    expect(screen.queryByText(execution.output)).toBeNull();
+    expect(syncHistory).toHaveBeenCalledOnce();
+  });
+
   it('retains the draft and requestId when an uncertain send is retried', async () => {
     const writes = setup(undefined, true);
     const user = userEvent.setup();

@@ -8,6 +8,7 @@ import type { Environment } from './issueSources/types.js';
 import { deliverRecord } from './sessionDelivery/records.js';
 import { httpError } from './rbac.js';
 import { remoteContinuationProject } from './remoteSession.js';
+import { remoteHistorySummary } from './remoteHistory.js';
 import { verifyBundle, verifySnapshot } from '@auto-workflow/context-engine';
 import { detachSnapshot, restoreDetachedSnapshot, verifyDetachedManifest, type DetachedManifest } from '@auto-workflow/context-engine/detached-bundle';
 
@@ -160,7 +161,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
       const continued = data.sessions.filter(session => session.source === 'conversation');
       const nativeKeys = new Set(continued.filter(session => session.nativeId).map(session => `${session.deviceId}:${session.agent}:${session.nativeId}`));
       const remote = data.sessions.filter(session => session.deviceId !== 'local' && session.source !== 'conversation' && !nativeKeys.has(`${session.deviceId}:${session.agent}:${session.nativeId}`));
-      const added = [...continued, ...remote].map(session => ({ ...session, recordMode: session.source === 'conversation' ? undefined : 'excerpt' as const, sessionId: session.nativeId, workspaces: session.cwd ? [session.cwd] : [], model: '', branch: '', messageCount: session.source === 'conversation' ? currentMessages(data, session.id).length : session.excerpt ? 1 : 0 }));
+      const added = [...continued, ...remote].map(session => ({ ...remoteHistorySummary(session), recordMode: session.source === 'conversation' ? undefined : session.recordMode === 'synced' ? 'synced' as const : 'excerpt' as const, sessionId: session.nativeId, workspaces: session.cwd ? [session.cwd] : [], model: session.model || '', branch: session.branch || '', messageCount: session.source === 'conversation' ? currentMessages(data, session.id).length : session.syncedRange?.total ?? (session.excerpt ? 1 : 0) }));
       const sessions = [...catalog.sessions.filter(session => !nativeKeys.has(`local:${session.agent}:${session.sessionId}`)), ...added];
       const providers = [...(catalog.providers || [])];
       for (const session of added) if (!providers.some(provider => provider.id === session.agent)) providers.push({ id: session.agent, label: session.agentLabel || session.agent, status: 'available' });
@@ -177,6 +178,11 @@ export function createConversations({ database, tenantId, history, delivery, exe
       if (!s) return null;
       const offset = Number(params.get('offset') || 0), limit = Number(params.get('limit') || 100);
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw httpError(400, '分页参数无效');
+      if (s.recordMode === 'synced') {
+        const preview = database.readRemoteSessionHistory(tenantId, s.id, offset, limit);
+        if (!preview) throw httpError(503, '远程会话正文暂不可用，请重新同步来源设备历史');
+        return { session: { ...s, sessionId: s.nativeId, canContinue: Boolean(remoteContinuationProject(data, s)), syncedRange: preview.range }, messages: preview.messages, total: preview.total, offset, limit };
+      }
       const messages = s.excerpt ? [{ role: 'assistant', text: s.excerpt, timestamp: s.updatedAt }] : [];
       return { session: { ...s, recordMode: 'excerpt' as const, sessionId: s.nativeId, canContinue: Boolean(remoteContinuationProject(data, s)), partial: true }, messages: messages.slice(offset, offset + limit), total: messages.length, offset, limit };
     },

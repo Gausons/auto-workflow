@@ -10,6 +10,7 @@ export interface HistoryImage {
 
 export interface HistoryEntry {
   role: string;
+  phase?: 'commentary' | 'final';
   text: string;
   timestamp?: string;
   turnId?: string;

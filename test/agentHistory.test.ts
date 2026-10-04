@@ -232,3 +232,13 @@ test('Codex transcript preserves turn identity across repeated messages', async 
   const detail = await f.history.detail(list.sessions[0].id);
   assert.deepEqual(detail.messages.filter(message => message.role === 'user').map(message => message.turnId), ['first-turn', 'second-turn']);
 });
+
+test('Codex keeps explicit commentary and final phases without guessing legacy message phases', async t => {
+  const f = await fixture(t);
+  await f.save(path.join(f.codexDir, 'phases.jsonl'), [
+    { type: 'session_meta', timestamp, payload: { id: 'phases', cwd: f.workspace } },
+    ...['commentary', 'final', 'unknown', undefined].map(phase => ({ type: 'response_item', timestamp, payload: { type: 'message', role: 'assistant', phase, content: [{ type: 'output_text', text: `阶段 ${phase}` }] } }))
+  ]);
+  const detail = await f.history.detail((await f.history.catalog()).sessions[0].id);
+  assert.deepEqual(detail.messages.map(message => message.phase), ['commentary', 'final', undefined, undefined]);
+});

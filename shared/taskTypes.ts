@@ -101,7 +101,9 @@ export interface Session {
   cwd: string;
   status?: string;
   excerpt?: string;
-  recordMode?: 'excerpt';
+  recordMode?: 'excerpt' | 'synced';
+  remoteHistory?: RemoteHistory;
+  syncedRange?: Omit<RemoteHistory, 'messages'>;
   partial?: boolean;
   missing?: boolean;
   managed?: boolean;
@@ -270,12 +272,21 @@ export interface GitRequest {
 
 export interface HistoryMessage {
   role: string;
+  phase?: 'commentary' | 'final';
   text?: string;
   name?: string;
   callId?: string;
   turnId?: string;
   timestamp?: string;
   images?: Array<{ dataUrl?: string; alt?: string }>;
+}
+
+export interface RemoteHistory {
+  messages: HistoryMessage[];
+  offset: number;
+  total: number;
+  sourcePartial: boolean;
+  truncated: boolean;
 }
 
 export interface Actor { id: string }

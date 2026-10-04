@@ -7,7 +7,7 @@ import { normalizeIssueState } from './issueStore.js';
 import { createIdentityStore } from './identity.js';
 import type { IssueState } from './issueStore.js';
 import type { WorkIssue } from './issueSources/types.js';
-import type { TaskCenterData } from '../shared/taskTypes.js';
+import type { HistoryMessage, RemoteHistory, TaskCenterData } from '../shared/taskTypes.js';
 import type { SessionContext } from './contextCompiler.js';
 import { packSnapshot, verifySnapshot, type ContextBundle } from '@auto-workflow/context-engine';
 import { verifyDetachedManifest, type DetachedManifest } from '@auto-workflow/context-engine/detached-bundle';
@@ -214,6 +214,23 @@ export function openDatabase(environment: Record<string, string | undefined>) {
       const row = db.prepare('SELECT payload FROM context_transfer_manifests WHERE tenant_id = ? AND execution_id = ? AND schema_version = 3')
         .get(tenantId, executionId) as { payload: string } | undefined;
       return row ? verifyDetachedManifest(JSON.parse(row.payload)) : null;
+    },
+    readRemoteSessionHistory: (tenantId: string, sessionId: string, offset = 0, limit = 200) => {
+      const row = db.prepare(`SELECT payload - 'messages' AS range,
+        jsonb_array_length(payload->'messages') AS total,
+        COALESCE((SELECT jsonb_agg(message ORDER BY position)
+          FROM jsonb_array_elements(payload->'messages') WITH ORDINALITY AS entries(message, position)
+          WHERE position > ? AND position <= ?), '[]'::jsonb) AS messages
+        FROM remote_session_history WHERE tenant_id = ? AND session_id = ?`)
+        .get(offset, offset + limit, tenantId, sessionId) as { range: Omit<RemoteHistory, 'messages'>; total: number; messages: HistoryMessage[] } | undefined;
+      return row || null;
+    },
+    // Called within mutateTaskCenter so preview bodies and their metadata commit
+    // or roll back together. Unchanged heartbeats never read or rewrite bodies.
+    setRemoteSessionHistory: (tenantId: string, sessionId: string, history: RemoteHistory | null) => {
+      if (history) db.prepare(`INSERT INTO remote_session_history (tenant_id, session_id, payload) VALUES (?, ?, ?::jsonb)
+        ON CONFLICT (tenant_id, session_id) DO UPDATE SET payload = excluded.payload`).run(tenantId, sessionId, JSON.stringify(history));
+      else db.prepare('DELETE FROM remote_session_history WHERE tenant_id = ? AND session_id = ?').run(tenantId, sessionId);
     },
     readTaskCenter: (tenantId: string) => parseTaskCenter((db.prepare('SELECT payload FROM task_centers WHERE tenant_id = ?').get(tenantId) as { payload?: string } | undefined)?.payload),
     mutateTaskCenter: <T>(tenantId: string, update: (data: TaskCenterData) => T): T => {

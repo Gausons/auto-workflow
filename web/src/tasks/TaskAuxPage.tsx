@@ -26,6 +26,7 @@ function Transcript({ messages }: { messages: HistoryMessage[] }) {
 
 export function SessionRecords({ session }: { session: Session }) {
   const local = session.deviceId === 'local' && (!['codexExecution', 'agentExecution'].includes(session.source || '') || Boolean(session.historyId));
+  const readable = local || session.recordMode === 'synced';
   const records = useInfiniteQuery({
     queryKey: ['task-center', 'session', session.id],
     initialPageParam: 0,
@@ -34,17 +35,17 @@ export function SessionRecords({ session }: { session: Session }) {
       const count = pages.reduce((sum, page) => sum + page.messages.length, 0);
       return count < lastPage.total && lastPage.messages.length ? count : undefined;
     },
-    enabled: local && !session.missing,
+    enabled: readable && !session.missing,
     staleTime: 30_000,
     retry: false
   });
   if (session.missing) return <p>原始记录暂不可用，任务关联仍保留。</p>;
-  if (!local) return <><Transcript messages={[{ role: 'assistant', text: session.excerpt || '尚未同步文本，请在目标设备查看。' }]} /><p className="tc-meta">连接器同步的片段 · 非完整历史</p></>;
+  if (!readable) return <><Transcript messages={[{ role: 'assistant', text: session.excerpt || '尚未同步文本，请在目标设备查看。' }]} /><p className="tc-meta">连接器同步的片段 · 非完整历史</p></>;
   if (records.isPending) return <p role="status">正在读取原始会话…</p>;
   if (records.isError) return <p role="alert">{errorMessage(records.error)} <button className="button secondary" type="button" onClick={() => void records.refetch()}>重试读取</button></p>;
   const messages = records.data.pages.flatMap(page => page.messages);
   const latest = records.data.pages.at(-1)!;
-  return <><Transcript messages={messages} /><p className="tc-meta">已显示 {messages.length} / {latest.total} 条记录{latest.session?.partial ? ' · 部分记录' : ''}</p>
+  return <><Transcript messages={messages} /><p className="tc-meta">已显示 {messages.length} / {latest.total} 条{local ? '' : '已同步'}记录{latest.session?.partial ? ' · 部分记录' : ''}</p>
     {records.hasNextPage && <button className="button secondary" type="button" disabled={records.isFetchingNextPage} onClick={() => void records.fetchNextPage()}>加载更多记录</button>}
   </>;
 }

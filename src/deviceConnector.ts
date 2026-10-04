@@ -7,20 +7,21 @@ import { createAgentHistory } from './agentHistory/index.js';
 import { createSessionDelivery } from './sessionDelivery/index.js';
 import { RemoteCodexWorker } from './remoteCodexWorker.js';
 import { bindDeviceConnection } from './deviceConnectionIdentity.js';
-import type { AgentProject, TaskCenterData } from '../shared/taskTypes.js';
+import { normalizeRemoteHistory, REMOTE_HISTORY_LIMIT } from './remoteHistory.js';
+import type { AgentProject, RemoteHistory, TaskCenterData } from '../shared/taskTypes.js';
 import type { Environment } from './issueSources/types.js';
 import type { HistoryEntry, HistorySession } from './agentHistory/types.js';
 
 interface History {
   catalog(): Promise<{ providers: Array<{ id: string }>; sessions: HistorySession[] }>;
-  detail?(id: string, params?: URLSearchParams): Promise<{ messages: HistoryEntry[] }>;
+  detail?(id: string, params?: URLSearchParams): Promise<{ messages: HistoryEntry[]; total?: number; session?: HistorySession }>;
 }
 type Request = (method: string, body?: unknown, endpoint?: string) => Promise<unknown>;
 interface SyncOptions {
   request: Request; history: History; deviceId: string; name: string; outputDir: string;
   includeExcerpts?: boolean; codexProjects?: AgentProject[]; resumeCodex?: boolean; sessionIndex?: Record<string, string>;
 }
-interface DeviceSession { nativeId: string; agent: string; title: string; cwd: string; status: string; createdAt: string; updatedAt: string; excerpt: string; archived: boolean }
+interface DeviceSession { nativeId: string; agent: string; agentLabel: string; title: string; cwd: string; status: string; createdAt: string; updatedAt: string; excerpt: string; archived: boolean; model: string; branch: string; remoteHistory?: RemoteHistory }
 type ErrorLike = Error & { code?: string; status?: number };
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const asError = (value: unknown): ErrorLike => value instanceof Error ? value as ErrorLike : new Error(String(value));
@@ -54,6 +55,7 @@ export function deviceConnectorDefaults(environment: Environment) {
 
 // A transport only: receiving a packet never launches a process or marks it started.
 const sessionFingerprint = (session: HistorySession, includeExcerpts: boolean) => createHash('sha256').update(JSON.stringify({
+  format: 3, messageCount: session.messageCount, partial: session.partial, model: session.model, branch: session.branch,
   nativeId: session.sessionId || session.id, agent: session.agent, title: session.title, cwd: session.cwd,
   status: session.status, createdAt: session.createdAt, updatedAt: session.updatedAt, archived: session.archived === true, includeExcerpts
 })).digest('hex');
@@ -70,17 +72,42 @@ export async function syncDeviceOnce({ request, history, deviceId, name, outputD
     const fingerprint = sessionFingerprint(s, includeExcerpts);
     if (sessionIndex?.[key] === fingerprint) continue;
     let excerpt = '';
+    let remoteHistory: RemoteHistory | undefined;
     if (includeExcerpts) {
       if (!history.detail) throw new Error('历史服务不支持读取会话详情');
-      const result = await history.detail(s.id, new URLSearchParams({ offset: String(Math.max(0, s.messageCount - 30)), limit: '30' }));
+      let offset = Math.max(0, s.messageCount - REMOTE_HISTORY_LIMIT);
+      let result = await history.detail(s.id, new URLSearchParams({ offset: String(offset), limit: String(REMOTE_HISTORY_LIMIT) }));
+      // The parser may expose fewer records than the source count after hitting
+      // its safety limit, or the file may have changed since catalog scanning.
+      if (result.total !== undefined && offset !== Math.max(0, result.total - REMOTE_HISTORY_LIMIT)) {
+        offset = Math.max(0, result.total - REMOTE_HISTORY_LIMIT);
+        result = await history.detail(s.id, new URLSearchParams({ offset: String(offset), limit: String(REMOTE_HISTORY_LIMIT) }));
+      }
+      remoteHistory = normalizeRemoteHistory({ messages: result.messages, offset, total: Math.max(result.session?.messageCount ?? result.total ?? s.messageCount, offset + result.messages.length), sourcePartial: result.session?.partial ?? s.partial, truncated: false });
       excerpt = result.messages.filter(message => ['user', 'assistant'].includes(message.role)).map(message => `${message.role}: ${message.text || ''}`).join('\n\n').slice(-23000);
     }
-    sessions.push({ key, fingerprint, value: { nativeId, agent: s.agent, title: s.title.slice(0, 120), cwd: s.cwd, status: s.status, createdAt: s.createdAt, updatedAt: s.updatedAt, excerpt, archived: s.archived === true } });
+    sessions.push({ key, fingerprint, value: { nativeId, agent: s.agent, agentLabel: s.agentLabel, title: s.title.slice(0, 120), cwd: s.cwd, status: s.status, createdAt: s.createdAt, updatedAt: s.updatedAt, excerpt, archived: s.archived === true, model: s.model, branch: s.branch, remoteHistory } });
   }
-  for (let i = 0; i < Math.max(sessions.length, 1); i += 20) {
-    const batch = sessions.slice(i, i + 20);
-    await request('POST', { action: 'heartbeat', deviceId, name, agents, capabilities: { resumeCodex, gitBranches: resumeCodex }, sessions: batch.map(item => item.value), ...(i === 0 && codexProjects !== undefined ? { codexProjects } : {}) });
+  let firstHeartbeat = true;
+  for (let i = 0; i < sessions.length || firstHeartbeat;) {
+    const batch: typeof sessions = [];
+    const body = { action: 'heartbeat', deviceId, name, agents, capabilities: { resumeCodex, gitBranches: resumeCodex }, sessions: [] as DeviceSession[], ...(firstHeartbeat && codexProjects !== undefined ? { codexProjects } : {}) };
+    if (Buffer.byteLength(JSON.stringify(body)) > 900000) throw new Error('设备项目配置超过同步请求上限');
+    do {
+      const item = sessions[i + batch.length];
+      if (!item) break;
+      body.sessions.push(item.value);
+      if (Buffer.byteLength(JSON.stringify(body)) > 900000) {
+        body.sessions.pop();
+        if (!batch.length && body.codexProjects === undefined) throw new Error('单条设备历史超过同步请求上限');
+        break;
+      }
+      batch.push(item);
+    } while (batch.length < 20);
+    await request('POST', body);
     if (sessionIndex) for (const item of batch) sessionIndex[item.key] = item.fingerprint;
+    firstHeartbeat = false;
+    i += batch.length;
   }
   if (sessionIndex) for (const key of Object.keys(sessionIndex)) if (!currentKeys.has(key)) delete sessionIndex[key];
   const snapshot = await request('GET') as TaskCenterData;

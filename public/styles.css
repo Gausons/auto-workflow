@@ -1246,7 +1246,7 @@ body[data-view="history"] .main { padding: 0; min-width: 0; }
 .history-page .button { background: white; color: #444; border: 1px solid #e4e4e4; border-radius: 8px; box-shadow: none; font-size: 12px; min-height: 32px; padding: 7px 10px; }
 .history-page .button:hover { background: #f5f5f5; }
 .history-page .button:disabled { opacity: .4; }
-#historyStatus { color: #888; font-size: 11px; line-height: 1.7; padding: 6px; }
+#historyStatus, .history-browser > p[role] { color: #888; font-size: 11px; line-height: 1.7; padding: 6px; }
 .history-list { display: grid; gap: 4px; min-width: 0; }
 .history-card { display: grid; gap: 6px; width: 100%; padding: 13px 12px; border: 0; border-radius: 9px; color: #333; background: transparent; cursor: pointer; text-align: left; min-width: 0; }
 .history-card:hover { background: #f7f7f7; }
@@ -1255,7 +1255,9 @@ body[data-view="history"] .main { padding: 0; min-width: 0; }
 .history-card > span { font-size: 11px; color: #898989; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-card:focus-visible { outline: 2px solid #555; outline-offset: 1px; }
 .history-meta { color: #858585; font-size: 12px; overflow-wrap: anywhere; }
-.history-pagination { display: flex; align-items: center; justify-content: space-between; margin: 18px 6px; font-size: 11px; color: #888; }
+.history-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 18px 6px; font-size: 11px; color: #888; }
+.history-pagination > span { flex: 0 0 auto; white-space: nowrap; }
+.history-pagination > .button { width: auto; flex: 0 0 auto; min-width: 34px; }
 .history-source-details { font-size: 11px; color: #8b8b8b; margin: 18px 6px; }
 .history-source-details summary { cursor: pointer; }
 .history-detail { min-width: 0; height: calc(100vh - 72px); overflow-y: auto; background: white; overflow-wrap: anywhere; }
@@ -1268,40 +1270,61 @@ body[data-view="history"] .main { padding: 0; min-width: 0; }
 .history-chat-header span { color: #929292; font-size: 11px; }
 .history-readonly { flex-shrink: 0; border: 1px solid #e8e8e8; border-radius: 6px; padding: 4px 8px; }
 .history-chat-content { max-width: 850px; margin: 0 auto; padding: 30px 40px 60px; }
-.history-session-info { color: #8b8b8b; font-size: 13px; padding-bottom: 16px; border-bottom: 1px solid #e9e9e9; margin-bottom: 28px; }
-.history-session-info > summary { display: flex; align-items: center; gap: 14px; cursor: pointer; list-style: none; }
+.history-session-info { color: #858585; font-size: 12px; margin-bottom: 12px; }
+.history-session-info > summary { display: flex; align-items: center; gap: 8px; width: fit-content; cursor: pointer; list-style: none; padding: 4px 0; }
 .history-session-info > summary::-webkit-details-marker, .history-work > summary::-webkit-details-marker { display: none; }
-.history-session-info > summary span { font-size: 20px; }
+.history-session-info > summary span { font-size: 17px; transition: transform .15s; }
+.history-session-info[open] > summary span { transform: rotate(90deg); }
 .history-info { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px 16px; font-size: 12px; line-height: 1.6; padding-top: 12px; }
 .history-info dd { margin: 0; color: #666; }
-.history-messages { display: grid; gap: 28px; }
-.history-message { min-width: 0; font-size: 15px; line-height: 1.85; }
-.history-message.user { display: flex; justify-content: flex-end; }
-.history-message.user > div { background: #f3f3f3; border-radius: 18px; padding: 14px 20px; max-width: 90%; white-space: pre-wrap; }
+.history-record-status { color: #858585; font-size: 12px; line-height: 1.7; margin: 0 0 24px; }
+.history-record-status > summary { width: fit-content; max-width: 100%; cursor: pointer; padding: 4px 0; }
+.history-record-status > p { max-width: 64ch; margin: 8px 0 0; }
+.history-legacy-excerpt { margin: 20px 0; color: #858585; font-size: 13px; }
+.history-legacy-excerpt > summary { cursor: pointer; width: fit-content; }
+.history-session-info > summary:focus-visible, .history-record-status > summary:focus-visible, .history-work summary:focus-visible { outline: 2px solid #3478eb; outline-offset: 4px; border-radius: 4px; }
+.history-messages { display: grid; gap: 32px; margin-top: 24px; }
+.history-message { min-width: 0; font-size: 16px; line-height: 1.8; color: #242628; }
+.history-message.user { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.history-message.user > div { background: #e8f3ff; border-radius: 22px; padding: 12px 18px; max-width: 88%; min-width: 0; white-space: pre-wrap; color: #203950; }
 .history-message.assistant { background: transparent; padding: 0; }
-.history-markdown p { margin: 0 0 16px; }
+.history-message-body, .history-markdown { min-width: 0; overflow-wrap: anywhere; }
+.history-message-time { display: block; width: fit-content; margin-top: 10px; color: #929292; font-size: 12px; font-weight: 400; line-height: 1.5; }
+.history-message.user > .history-message-time { margin-top: 0; padding-right: 3px; }
+.history-markdown p { margin: 0 0 20px; }
 .history-markdown p:last-child { margin-bottom: 0; }
 .history-markdown ul, .history-markdown ol { padding-left: 26px; margin: 12px 0 20px; }
 .history-markdown li { margin: 6px 0; }
 .history-markdown h3, .history-markdown h4, .history-markdown h5, .history-markdown h6 { margin: 20px 0 12px; font-size: 17px; line-height: 1.6; }
 .history-markdown a { color: #3c6091; text-decoration: none; }
 .history-markdown a:hover { text-decoration: underline; }
-.history-markdown code { background: #f3f3f3; border-radius: 4px; padding: 2px 5px; font-size: .9em; }
-.history-code { border: 1px solid #e7e7e7; border-radius: 10px; overflow: hidden; margin: 16px 0; }
+.history-markdown code { background: #efefef; border-radius: 6px; padding: 2px 6px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; }
+.history-markdown hr { height: 0; border: 0; border-top: 1px solid #e8e8e8; margin: 24px 0; }
+.history-table { max-width: 100%; overflow-x: auto; margin: 22px 0; }
+.history-table table { width: 100%; border-collapse: collapse; font-size: inherit; line-height: 1.7; }
+.history-table th, .history-table td { padding: 12px 16px 12px 0; text-align: left; vertical-align: top; border-bottom: 1px solid #e8e8e8; min-width: 90px; }
+.history-table th { font-weight: 600; border-bottom-color: #d9d9d9; }
+.history-table tbody tr:last-child td { border-bottom: 0; }
+.history-table .history-table-align-center { text-align: center; }
+.history-table .history-table-align-right { text-align: right; }
+.history-code { max-width: 100%; border: 1px solid #e7e7e7; border-radius: 12px; overflow: hidden; margin: 20px 0; }
 .history-code > span { display: block; font-size: 11px; color: #888; background: #f7f7f7; padding: 8px 14px; }
-.history-code pre, .history-tool pre { min-height: 0; max-height: 450px; margin: 0; border: 0; padding: 14px; border-radius: 0; background: #fafafa; font-size: 12px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.history-code pre, .history-tool pre { min-height: 0; max-height: 450px; max-width: 100%; overflow: auto; margin: 0; border: 0; padding: 14px; border-radius: 0; color: #373737; background: #fafafa; font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .history-code pre code { padding: 0; background: none; }
-.history-work { border: 1px solid #e4e4e4; border-radius: 14px; overflow: hidden; }
-.history-work > summary { display: flex; align-items: center; gap: 14px; padding: 18px; cursor: pointer; list-style: none; background: #fafafa; }
-.history-work-icon { display: grid; place-items: center; height: 40px; width: 40px; border-radius: 10px; color: #777; background: #f2f2f2; font-size: 24px; }
-.history-work strong { font-size: 14px; font-weight: 500; }
+.history-work { min-width: 0; color: #808080; }
+.history-work > summary { display: flex; align-items: center; gap: 9px; width: fit-content; max-width: 100%; padding: 4px 0; cursor: pointer; list-style: none; background: transparent; }
+.history-work-icon { display: grid; flex: 0 0 auto; place-items: center; height: 20px; width: 20px; color: #888; font-size: 17px; }
+.history-work-icon svg { display: block; width: 20px; height: 20px; }
+.history-work strong { font-size: 14px; font-weight: 400; }
 .history-work small { display: block; color: #888; margin-top: 4px; font-size: 12px; }
-.history-chevron { margin-left: auto; color: #888; font-size: 24px; transition: transform .15s; }
+.history-chevron { margin-left: 3px; color: #999; font-size: 20px; line-height: 1; transition: transform .15s; }
 .history-work[open] .history-chevron { transform: rotate(90deg); }
-.history-work-body { border-top: 1px solid #eee; }
-.history-tool { border-bottom: 1px solid #eee; }
+.history-work-body { margin: 12px 0 0 9px; padding-left: 18px; border-left: 1px solid #e6e6e6; }
+.history-work-commentary { color: #777; font-size: 14px; line-height: 1.8; margin: 16px 0; }
+.history-work-commentary:first-child { margin-top: 0; }
+.history-tool { min-width: 0; border-bottom: 1px solid #eee; }
 .history-tool:last-child { border-bottom: 0; }
-.history-tool summary { cursor: pointer; padding: 13px 18px; font-size: 12px; }
+.history-tool summary { cursor: pointer; padding: 10px 0; font-size: 12px; overflow-wrap: anywhere; }
 .history-tool summary > span { color: #aaa; margin-left: 10px; font-size: 10px; }
 .history-chat-footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; font-size: 11px; color: #a0a0a0; margin-top: 36px; }
 .history-warning { color: #9b6b28; font-size: 12px; }
@@ -1663,7 +1686,7 @@ body[data-can-manage-members="false"] [data-settings-target="members"] { display
 /* New and resumed conversations share a viewport and a docked composer. */
 .history-detail { display: flex; flex-direction: column; overflow: hidden; }
 .history-chat-header { flex: 0 0 auto; padding: 16px 28px; }
-.history-chat-scroll { flex: 1; min-height: 0; overflow-y: auto; scroll-behavior: smooth; }
+.history-chat-scroll { flex: 1; min-height: 0; overflow-y: auto; scroll-behavior: smooth; scrollbar-gutter: stable; }
 .history-chat-content { width: 100%; max-width: 900px; padding: 32px 32px 24px; }
 .history-composer { flex: 0 0 auto; width: 100%; max-width: 900px; margin: 0 auto; padding: 12px 32px 20px; border: 0; background: #fff; overflow: visible; }
 .history-composer .conversation-composer, .tc-composer.conversation-composer { display: block; border: 1px solid #e5e5e5; border-radius: 24px; padding: 16px; background: #fff; box-shadow: 0 4px 20px #00000006; }
@@ -1677,7 +1700,7 @@ body[data-can-manage-members="false"] [data-settings-target="members"] { display
 .history-composer [data-status]:empty, .history-composer [data-error]:empty, .history-composer [data-actions]:empty { display: none; }
 .history-composer [data-actions]:not(:empty) { margin-top: 8px; }
 #historyLiveOutput:not(:empty) { margin-top: 28px; }
-.history-message.user > div, .tc-create-message { background: #edf4fc; border-radius: 20px; }
+.tc-create-message { background: #e8f3ff; border-radius: 22px; }
 body[data-view="new-task"] .main { padding: 0; }
 body[data-view="new-task"] .task-center { height: 100dvh; display: flex; flex-direction: column; }
 body[data-view="new-task"] .tc-heading { flex: 0 0 auto; min-height: 72px; align-items: center; padding: 14px 28px; margin: 0; border-bottom: 1px solid #eee; }
@@ -1694,7 +1717,19 @@ body[data-view="new-task"] .tc-create { flex: 1; width: 100%; max-width: 900px; 
   body[data-view="new-task"] .task-center { height: calc(100dvh - 64px); min-height: 480px; }
 }
 @media (max-width: 600px) {
+  .history-heading { height: 56px; padding: 0 18px; }
+  .history-browser { max-height: clamp(280px, 42dvh, 360px); padding: 14px 12px; }
+  .history-filters { gap: 8px; }
+  .history-browser > p[role] { margin: 8px 0; }
+  .history-card { gap: 4px; padding: 10px 12px; }
+  .history-pagination { margin: 12px 6px; }
+  .history-source-details { margin: 12px 6px; }
   .history-chat-content { padding: 24px 16px; }
+  .history-messages { gap: 28px; }
+  .history-message { font-size: 15px; }
+  .history-message.user > div { max-width: 94%; padding: 12px 16px; }
+  .history-work-body { margin-left: 4px; padding-left: 12px; }
+  .history-table th, .history-table td { padding: 10px 12px 10px 0; min-width: 80px; }
   .history-composer { padding: 8px 12px 12px; }
   body[data-view="new-task"] .tc-create { padding: 0 12px 12px; }
   .history-compose-footer .history-meta { display: none; }

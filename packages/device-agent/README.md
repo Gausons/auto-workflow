@@ -36,7 +36,9 @@ agent-workbench-connector --env-file ./agent.env
 
 从源码版连接器迁移时，先正常停止旧进程，在配置中将 `WORKBENCH_DEVICE_DIR` 设置为旧状态目录的**绝对路径**，再启动新命令。保留该目录才能继续核对旧执行，不要同时运行两个连接器处理同一设备。显式相对状态目录仍相对于启动目录解析。
 
-其他配置沿用源码版：`WORKBENCH_DEVICE_NAME` 设置设备名，`WORKBENCH_SYNC_EXCERPTS=false` 关闭摘要同步，`ACP_*`、`CODEX_EXECUTABLE` 和 `IDE_HISTORY_*` 配置本机 Agent 及历史来源。连接器只负责连接和调度，不包含 Codex / Claude 可执行程序，也不复制用户业务仓库。
+其他配置沿用源码版：`WORKBENCH_DEVICE_NAME` 设置设备名，`WORKBENCH_SYNC_EXCERPTS=false` 关闭摘要、逐条历史记录和图片预览同步，`ACP_*`、`CODEX_EXECUTABLE` 和 `IDE_HISTORY_*` 配置本机 Agent 及历史来源。连接器只负责连接和调度，不包含 Codex / Claude 可执行程序，也不复制用户业务仓库。
+
+历史预览保留最近 30 条消息的角色、工具记录和轮次信息，使用与本地相同的会话 UI；每个会话最多同步 23,000 字符文本和 256 KiB 图片数据 URI，超限内容会明确提示。升级并重启连接器后会自动更新旧同步记录；更早的完整历史仍在来源设备查看。
 
 ## 维护者打包
 

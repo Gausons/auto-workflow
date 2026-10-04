@@ -259,7 +259,7 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     const principal = requestIdentity.getStore();
     return {
       ...(principal ? publicIdentity(principal) : {}),
-      tenant: { id: tenant.id, name: tenant.name }, storage: { driver: 'postgres', schemaVersion: 2 },
+      tenant: { id: tenant.id, name: tenant.name }, storage: { driver: 'postgres', schemaVersion: 3 },
       config: { ...state.config, workspaceManaged: Boolean(environment.CODEX_WORKSPACE_DIR) || database.listTenants().length > 1, issueSourceLabel: issueSource().label, issueSourceConfigured: issueSource().configured },
       scheduler: state.scheduler, assignmentPeople: state.assignmentPeople, storageUserKey: state.storageUserKey,
       bugs: state.bugs, metrics: buildMetrics()

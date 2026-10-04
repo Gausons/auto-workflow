@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 're
 import { createPortal } from 'react-dom';
 import { apiRequest } from '../api/client.js';
 import { pendingHistoryMessages } from './historyTimeline.js';
+import { canContinueHistory } from './historyCapabilities.js';
 import { renderMessages } from '../components/historyView.js';
 import { DismissibleDetails } from '../components/DismissibleDetails.js';
 import { historyRunConfig, runDirectoryName } from '../tasks/agentRunConfig.js';
@@ -54,13 +55,12 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
   const [responding, setResponding] = useState(false);
   const [decision, setDecision] = useState('decline');
   const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [syncedMessages, setSyncedMessages] = useState<HistoryMessage[] | null>(null);
   const [optimistic, setOptimistic] = useState<ComposerJob | null>(null);
   const restored = useRef(new Set<string>());
   const syncKey = useRef('');
   const syncing = useRef(false);
   const queryClient = useQueryClient();
-  const canSendNative = Boolean(session.managed || session.canContinue || (session.agent === 'codex' && (!session.deviceId || session.deviceId === 'local') && session.sessionId && !session.archived));
+  const canSendNative = canContinueHistory(session);
   useLayoutEffect(() => { setOutputHost(document.getElementById('historyLiveOutput')); }, [session.id]);
   const targets = useQuery({ queryKey: ['history', 'targets'], queryFn: ({ signal }) => apiRequest<Targets>('/api/task-center/codex', { signal }), enabled: canEdit, retry: false });
   const status = useQuery({ queryKey: ['history', 'continue', session.id], queryFn: ({ signal }) => apiRequest<StatusResponse>(`/api/agent-sessions/${encodeURIComponent(session.id)}/continue`, { signal }), enabled: canEdit && canSendNative, refetchInterval: canEdit && canSendNative ? 2500 : false, refetchIntervalInBackground: false, retry: false });
@@ -89,7 +89,7 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
   const branchBusy = branchDirectoryPending || branchQuery.isFetching || branchMutating;
   const branchError = branchDirectoryPending ? '' : branchActionError || (branchQuery.error ? errorMessage(branchQuery.error) : '');
   const disabled = branchMutating || picking;
-  const pending = pendingHistoryMessages(syncedMessages || historyMessages, executions);
+  const pending = pendingHistoryMessages(historyMessages, executions);
   const send = useMutation({ retry: false, mutationFn: ({ message, id }: { message: string; id: string }) => apiRequest<{ executionId: string }>(`/api/agent-sessions/${encodeURIComponent(session.id)}/continue`, { method: 'POST', body: JSON.stringify({ message, requestId: id }) }), onSuccess: (result, variables) => {
     const draft = drafts.get(session.id)!;
     if (draft.text.trim() === variables.message) { draft.text = ''; setText(''); }
@@ -108,7 +108,7 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
     const signature = JSON.stringify(status.data.executions || status.data.execution || null);
     if (signature === syncKey.current) return;
     syncKey.current = signature; syncing.current = true;
-    void syncHistory(session.id).then(messages => { if (messages) setSyncedMessages(messages); }).catch(failure => setError(errorMessage(failure))).finally(() => { syncing.current = false; });
+    void syncHistory(session.id).catch(failure => setError(errorMessage(failure))).finally(() => { syncing.current = false; });
   }, [status.data, session.id, syncHistory]);
   useEffect(() => {
     if (job?.status !== 'blocked' || restored.current.has(job.id)) return;
@@ -183,7 +183,7 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
           {project && <ModelEffortMenu project={project} model={model} effort={effort} disabled={create.isPending || send.isPending || disabled} onModelChange={setModel} onEffortChange={setEffort} />}
           <button type="button" className="button secondary conversation-new-button" disabled={!project || create.isPending || send.isPending || disabled} onClick={createSession}>带上下文新开会话 →</button></div><button type="submit" aria-label="发送消息" title="发送消息" disabled={!canSend}>↑</button></div></div><p className="conversation-new-status" role="status">{newStatus}</p>
       </form></div><p className="history-meta" role="status">{statusText}</p>{status.isError && <p role="alert">{errorMessage(status.error)}</p>}{error && <p role="alert">{error}</p>}
-      <div className="history-compose-actions">{job && <>{['queued', 'running', 'waiting'].includes(job.status) && <button type="button" disabled={control.isPending} onClick={() => control.mutate({ executionId: job.id, action: 'stop' })}>停止</button>}{job.status === 'waiting' && job.request && <button type="button" onClick={() => setResponding(true)}>处理请求</button>}{job.status === 'unknown' && <button type="button" disabled={control.isPending} onClick={() => control.mutate({ executionId: job.id, action: 'reconcile' })}>核对结果</button>}{!busy.has(job.status) && <button type="button" onClick={() => { void syncHistory(session.id).then(messages => setSyncedMessages(messages)); void queryClient.invalidateQueries({ queryKey: ['history', 'detail', session.id] }); }}>刷新原始记录</button>}{['failed', 'interrupted', 'blocked'].includes(job.status) && <><button type="button" onClick={() => updateText(job.prompt)}>重新编辑本轮消息</button><button type="button" onClick={() => void navigator.clipboard.writeText(job.prompt).catch(() => setError('无法自动复制，请使用输入框中的文本。'))}>复制本轮消息</button></>}</>}</div>
+      <div className="history-compose-actions">{job && <>{['queued', 'running', 'waiting'].includes(job.status) && <button type="button" disabled={control.isPending} onClick={() => control.mutate({ executionId: job.id, action: 'stop' })}>停止</button>}{job.status === 'waiting' && job.request && <button type="button" onClick={() => setResponding(true)}>处理请求</button>}{job.status === 'unknown' && <button type="button" disabled={control.isPending} onClick={() => control.mutate({ executionId: job.id, action: 'reconcile' })}>核对结果</button>}{!busy.has(job.status) && <button type="button" onClick={() => { void syncHistory(session.id).catch(failure => setError(errorMessage(failure))); void queryClient.invalidateQueries({ queryKey: ['history', 'detail', session.id] }); }}>刷新原始记录</button>}{['failed', 'interrupted', 'blocked'].includes(job.status) && <><button type="button" onClick={() => updateText(job.prompt)}>重新编辑本轮消息</button><button type="button" onClick={() => void navigator.clipboard.writeText(job.prompt).catch(() => setError('无法自动复制，请使用输入框中的文本。'))}>复制本轮消息</button></>}</>}</div>
     </>}
     {responding && job?.request && <div className={overlayStyles.backdrop}><div className={`tc-dialog ${overlayStyles.panel}`} role="dialog" aria-modal="true" aria-label="回复 Agent 请求"><form onSubmit={event => { event.preventDefault(); const questions = job.request?.method === 'item/tool/requestUserInput' ? job.request.params?.questions : undefined; control.mutate({ executionId: job.id, action: 'respond', ...(questions ? { answers: Object.fromEntries(questions.map(question => [question.id, answers[question.id] || ''])) } : { decision }) }); }}><h2>回复 Agent 请求</h2>{job.request.method === 'item/tool/requestUserInput' ? job.request.params?.questions?.map(question => <label key={question.id}>{question.question}{question.options?.length && <p>{question.options.map(option => `${option.label}：${option.description || ''}`).join('；')}</p>}<textarea required maxLength={12000} value={answers[question.id] || ''} onChange={event => setAnswers(current => ({ ...current, [question.id]: event.target.value }))} /></label>) : <><pre>{String(job.request.params?.command || JSON.stringify(job.request.params, null, 2))}</pre><label>本次操作<select value={decision} onChange={event => setDecision(event.target.value)}><option value="decline">拒绝</option><option value="accept">允许本次操作</option></select></label></>}{error && <p role="alert">{error}</p>}<button type="button" disabled={control.isPending} onClick={() => setResponding(false)}>取消</button><button type="submit" disabled={control.isPending}>发送回复</button></form></div></div>}
   </section></>;

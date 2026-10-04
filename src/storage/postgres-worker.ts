@@ -39,7 +39,7 @@ async function initialize() {
     await client.query(`CREATE TABLE IF NOT EXISTS "${schema}".schema_migrations (version INT PRIMARY KEY)`);
     const versions = await client.query(`SELECT MAX(version) AS version FROM "${schema}".schema_migrations`);
     const version = Number(versions.rows[0].version || 0);
-    if (version > 2) throw new Error('SCHEMA_VERSION_UNSUPPORTED');
+    if (version > 3) throw new Error('SCHEMA_VERSION_UNSUPPORTED');
     if (!version) {
       await client.query(readFileSync(new URL('../../migrations/postgres/001_initial.sql', import.meta.url), 'utf8').replaceAll('CREATE TABLE IF NOT EXISTS ', `CREATE TABLE IF NOT EXISTS "${schema}".`));
       await client.query(`INSERT INTO "${schema}".schema_migrations VALUES (1)`);
@@ -47,6 +47,10 @@ async function initialize() {
     if (version < 2) {
       await client.query(readFileSync(new URL('../../migrations/postgres/002_remove_import_receipts.sql', import.meta.url), 'utf8'));
       await client.query(`INSERT INTO "${schema}".schema_migrations VALUES (2)`);
+    }
+    if (version < 3) {
+      await client.query(readFileSync(new URL('../../migrations/postgres/003_remote_session_history.sql', import.meta.url), 'utf8'));
+      await client.query(`INSERT INTO "${schema}".schema_migrations VALUES (3)`);
     }
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; }

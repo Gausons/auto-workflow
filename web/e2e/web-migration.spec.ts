@@ -107,6 +107,51 @@ test('history continuation keeps the same requestId after an uncertain response'
   expect(writes[1]?.requestId).toBe(writes[0]?.requestId);
 });
 
+test('history uses Codex-style message layout, folded progress and Markdown tables', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1600, height: 1100 });
+  const id = 'd'.repeat(64);
+  const session = { id, sessionId: id, agent: 'codex', agentLabel: 'Codex', deviceId: 'remote', canContinue: true, title: '核对服务器部署结果', cwd: '/repo', createdAt: '2026-10-02T13:52:00Z', updatedAt: '2026-10-02T13:53:21Z', messageCount: 5, recordMode: 'synced', syncedRange: { offset: 0, total: 5, sourcePartial: false, truncated: false } };
+  const messages = [
+    { role: 'user', text: '继续', timestamp: '2026-10-02T13:52:00Z', turnId: 'turn' },
+    { role: 'assistant', phase: 'commentary', text: '我继续核对服务器版本和检查结果。', timestamp: '2026-10-02T13:52:03Z', turnId: 'turn' },
+    { role: 'tool_call', name: 'exec_command', text: '检查服务健康状态', timestamp: '2026-10-02T13:52:10Z', turnId: 'turn', callId: 'health' },
+    { role: 'tool_result', text: '健康检查通过', timestamp: '2026-10-02T13:52:15Z', turnId: 'turn', callId: 'health' },
+    { role: 'assistant', phase: 'final', text: '**升级已完成**：服务器运行新版本 `v1.2.3`，容器健康，HTTPS 返回 200。\n\n请核对以下结果：\n\n| 检查项 | 结果 |\n| --- | --- |\n| 服务版本 | `v1.2.3` |\n| 健康检查 | 已通过 |\n\n无需重复安装或重启服务。', timestamp: '2026-10-02T13:53:21Z', turnId: 'turn' }
+  ];
+  await page.route('**/api/agent-sessions?*', route => route.fulfill({ json: { offset: 0, limit: 30, total: 1, scope: 'all', providers: [{ id: 'codex', label: 'Codex', status: 'available' }], workspaces: [], sessions: [session] } }));
+  await page.route(`**/api/agent-sessions/${id}?*`, route => route.fulfill({ json: { session, messages, total: messages.length } }));
+  await page.route(`**/api/agent-sessions/${id}/continue`, route => route.fulfill({ json: { execution: null, executions: [] } }));
+  await page.route('**/api/task-center/codex', route => route.fulfill({ json: { projects: [{ id: 'ui-project', agent: 'codex', name: 'Codex', cwd: '/repo', deviceId: 'remote', deviceName: '开发机', online: true, gitBranches: true, defaultModel: 'gpt-6-astra', models: [{ id: 'gpt-6-astra', name: 'GPT-6 Astra', defaultReasoningEffort: 'medium', reasoningEfforts: [{ id: 'medium', name: '中' }] }] }] } }));
+  await page.route('**/api/task-center/git*', route => route.fulfill({ json: { status: 'completed', result: { repository: true, current: 'main', changes: 0, branches: ['main'] } } }));
+  await login(page);
+  await page.goto(`/history/${id}`);
+  await expect(page.getByText('可续聊', { exact: true })).toBeVisible();
+  await expect(page.getByRole('table')).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: '检查项' })).toBeVisible();
+  await expect(page.getByText('我继续核对服务器版本和检查结果。', { exact: true })).toBeHidden();
+  await expect(page.locator('.history-message.user time')).toHaveAttribute('datetime', '2026-10-02T13:52:00.000Z');
+  await expect(page.locator('.history-message.assistant')).toHaveCount(1);
+  const geometry = await page.locator('.history-message.user').evaluate(element => {
+    const parent = element.getBoundingClientRect();
+    const bubble = element.querySelector('.history-message-body')!.getBoundingClientRect();
+    return { rightGap: Math.abs(parent.right - bubble.right), bubbleWidth: bubble.width, parentWidth: parent.width };
+  });
+  expect(geometry.rightGap).toBeLessThan(2);
+  expect(geometry.bubbleWidth).toBeLessThan(geometry.parentWidth / 2);
+  await expect(page.getByLabel('Git 分支')).toContainText('main');
+  await page.locator('.history-chat-scroll').evaluate(element => { element.scrollTop = 0; });
+  await page.screenshot({ path: testInfo.outputPath('codex-style-desktop.png'), fullPage: true });
+  await page.locator('.history-detail').screenshot({ path: testInfo.outputPath('codex-style-conversation.png') });
+  await page.getByText('使用了 1 次工具').click();
+  await expect(page.getByText('我继续核对服务器版本和检查结果。', { exact: true })).toBeVisible();
+  await page.getByText('使用了 1 次工具').click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('.history-detail').scrollIntoViewIfNeeded();
+  await expect(page.getByRole('table')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('codex-style-mobile.png'), fullPage: true });
+});
+
 test('Agent request reply and unknown-result reconciliation never resubmit execution', async ({ page }) => {
   let status: 'waiting' | 'unknown' = 'waiting';
   const controls: Array<Record<string, unknown>> = [];
@@ -133,7 +178,13 @@ test('device setup selects remote target and browser controls a remote original 
   const headers = { Authorization: `Bearer ${connectorToken}` };
   const nativeId = 'c5d32f71-0be1-4507-a9b8-6b843fe29d20';
   const deviceId = 'browser-remote';
-  const heartbeat = await request.post('/api/task-center', { headers, data: { action: 'heartbeat', deviceId, name: '浏览器远端开发机', agents: ['codex'], capabilities: { resumeCodex: true }, codexProjects: [{ id: 'remote-project', name: '远端项目', cwd: '/remote/repo', agent: 'codex' }], sessions: [{ nativeId, agent: 'codex', title: '远端续聊回归', cwd: '/remote/repo' }] } });
+  const remoteHistory = { offset: 10, total: 14, sourcePartial: false, truncated: false, messages: [
+    { role: 'user', text: '查看远端截图', images: [{ dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', alt: '远端截图' }] },
+    { role: 'tool_call', name: 'read_file', callId: 'call', text: '读取源码' },
+    { role: 'tool_result', callId: 'call', text: '远端工具结果' },
+    { role: 'assistant', text: '**已检查远端截图**' }
+  ] };
+  const heartbeat = await request.post('/api/task-center', { headers, data: { action: 'heartbeat', deviceId, name: '浏览器远端开发机', agents: ['codex'], capabilities: { resumeCodex: true }, codexProjects: [{ id: 'remote-project', name: '远端项目', cwd: '/remote/repo', agent: 'codex' }], sessions: [{ nativeId, agent: 'codex', agentLabel: 'Codex', title: '远端续聊回归', cwd: '/remote/repo', model: 'test-model', branch: 'main', remoteHistory }] } });
   expect(heartbeat.ok()).toBeTruthy();
   await login(page);
   await page.getByRole('navigation', { name: '主导航' }).getByRole('link', { name: '设备与 Agent', exact: true }).click();
@@ -153,6 +204,17 @@ test('device setup selects remote target and browser controls a remote original 
   const { sessions } = await list.json() as { sessions: Array<{ id: string; deviceId: string }> };
   const session = sessions.find(item => item.deviceId === deviceId)!;
   await page.goto(`/history/${session.id}`);
+  await expect(page.getByText('可续聊', { exact: true })).toBeVisible();
+  await page.getByText('已同步 4 / 14 条记录', { exact: true }).click();
+  await expect(page.getByText(/已同步第 11–14 条，共 14 条记录/)).toBeVisible();
+  await expect(page.locator('.history-message.user')).toContainText('查看远端截图');
+  await expect(page.locator('.history-message.assistant strong')).toHaveText('已检查远端截图');
+  await expect(page.getByAltText('远端截图')).toBeVisible();
+  await page.getByText('使用了 1 次工具').click();
+  await page.locator('.history-tool summary').filter({ hasText: '工具结果' }).click();
+  await expect(page.getByText('远端工具结果', { exact: true })).toBeVisible();
+  await expect(page.getByText(/部分记录损坏/)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /远端续聊回归/ })).toContainText('14 条记录');
   await page.getByRole('textbox', { name: '发送消息' }).fill('继续远端测试');
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
   await expect(page.getByText(/已排队，准备继续原会话/)).toBeVisible();
