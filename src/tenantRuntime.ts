@@ -151,6 +151,8 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     if (url.pathname === '/api/conversations' && req.method === 'GET') { sendJson(res, 200, { sessions: conversations.list() }); return; }
     const inherited = /^\/api\/conversations\/([a-f0-9]{64})\/inherited$/.exec(url.pathname);
     if (inherited && req.method === 'GET') { sendJson(res, 200, conversations.inherited(inherited[1], url.searchParams)); return; }
+    const contextPreview = /^\/api\/conversations\/([a-f0-9]{64})\/context-preview$/.exec(url.pathname);
+    if (contextPreview && req.method === 'GET') { sendJson(res, 200, conversations.contextPreview(contextPreview[1], url.searchParams)); return; }
     const transferObject = /^\/api\/conversations\/([a-f0-9]{64})\/transfer\/objects\/([a-f0-9]{64})$/.exec(url.pathname);
     if (transferObject && ['GET', 'POST'].includes(req.method || '')) {
       const executionId = url.searchParams.get('executionId') || '';

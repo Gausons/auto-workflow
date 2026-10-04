@@ -86,6 +86,8 @@ export interface Session {
   sourceSessionId?: string;
   contextSourceDeviceId?: string;
   contextTransferred?: boolean;
+  contextCoverage?: ContextCoverage;
+  contextSourceTitle?: string;
   taskId?: string;
   contextId?: string;
   createRequestId?: string;
@@ -154,6 +156,13 @@ export interface RemoteContextHandoff {
   contextDigest: string;
 }
 
+/** Counts reported from the prepared context, independent of the browser preview. */
+export interface ContextCoverage {
+  records: number;
+  images: number;
+  partial: boolean;
+}
+
 export interface Execution {
   id: string;
   requestId?: string;
@@ -167,6 +176,7 @@ export interface Execution {
   contextDigest?: string;
   contextCompacted?: boolean;
   contextSourcePartial?: boolean;
+  contextCoverage?: ContextCoverage;
   contextMarkdownPath?: string;
   remoteContext?: RemoteContextHandoff;
   taskId: string;

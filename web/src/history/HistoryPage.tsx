@@ -2,12 +2,14 @@ import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-quer
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
 import { HistoryComposer } from './HistoryComposer.js';
+import { InheritedContext } from './InheritedContext.js';
 import { canContinueHistory } from './historyCapabilities.js';
 import { renderMessages } from '../components/historyView.js';
 import type { HistoryMessage, Session } from '../../../shared/taskTypes.js';
+import type { InheritedContextInfo } from '../../../shared/contextPreviewTypes.js';
 
 interface HistorySession extends Session { createdAt: string; messageCount: number }
-interface HistoryDetailResponse { session: HistorySession; messages: HistoryMessage[]; total: number; inherited?: { count: number; partial?: boolean } }
+interface HistoryDetailResponse { session: HistorySession; messages: HistoryMessage[]; total: number; inherited?: InheritedContextInfo }
 interface HistoryProvider { id: string; label: string; status: string; skipped?: number }
 interface HistoryWorkspace { path: string; count: number }
 interface HistoryListResponse {
@@ -15,7 +17,6 @@ interface HistoryListResponse {
   workspaces: HistoryWorkspace[]; sessions: HistorySession[];
 }
 interface HistoryFilters { offset: number; agent: string; query: string; workspace: string }
-interface InheritedPage { messages: HistoryMessage[]; total: number }
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 const statusLabels: Record<string, string> = { ready: '等待输入', preparing: '正在准备上下文', queued: '等待执行', launching: '正在连接', running: '正在回复', waiting: '等待处理', failed: '执行失败', completed: '本轮结束', interrupted: '已中断', error: '发生错误', unknown: '运行状态未知' };
 const sourceLabels: Record<string, string> = { available: '可读取', missing: '未找到历史目录', unconfigured: '未配置', error: '无法读取目录' };
@@ -50,16 +51,6 @@ function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) 
       return count < lastPage.total && lastPage.messages.length ? count : undefined;
     }
   });
-  const inherited = useInfiniteQuery({
-    queryKey: ['history', 'inherited', id],
-    initialPageParam: 0,
-    enabled: false,
-    queryFn: ({ pageParam, signal }) => apiRequest<InheritedPage>(`/api/conversations/${encodeURIComponent(id)}/inherited?offset=${pageParam}`, { signal }),
-    getNextPageParam: (lastPage, pages) => {
-      const count = pages.reduce((total, page) => total + page.messages.length, 0);
-      return count < lastPage.total && lastPage.messages.length ? count : undefined;
-    }
-  });
   useEffect(() => { setSynced(null); }, [detail.dataUpdatedAt]);
   const first = synced || detail.data?.pages[0];
   const session = first?.session;
@@ -82,8 +73,6 @@ function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) 
   const duration = Math.max(0, Date.parse(session.updatedAt) - Date.parse(session.createdAt));
   const durationText = Number.isFinite(duration) ? `${Math.floor(duration / 60000)} 分钟 ${Math.floor(duration / 1000) % 60} 秒` : '未知';
   const canContinue = canExecute && canContinueHistory(session);
-  const inheritedMessages = inherited.data?.pages.flatMap(page => page.messages) || [];
-  const inheritedTotal = inherited.data?.pages.at(-1)?.total ?? first.inherited?.count ?? 0;
   const range = session.syncedRange;
 
   return <div className="history-detail" aria-live="polite">
@@ -99,11 +88,7 @@ function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) 
       {session.recordMode === 'excerpt'
         ? <p className="history-meta">{first.total > 0 ? '来源连接器仍在同步旧版文本摘要。更新并重启连接器，再点击“刷新会话”，即可按消息展示。' : '尚未同步远程会话正文，请确认来源设备连接器在线且已开启摘要同步，或在来源设备查看完整会话。'}</p>
         : (session.recordMode === 'synced' ? range?.sourcePartial : session.partial) && <p className="history-warning">部分记录损坏、尚未写完或超出读取上限，当前展示部分内容。</p>}
-      {first.inherited && <details className="history-inherited"><summary>接续自原会话 · {first.inherited.count} 条上下文{first.inherited.partial ? ' · 部分记录' : ''}</summary>
-        {inheritedMessages.length > 0 && <SafeMessages messages={inheritedMessages} />}
-        {inherited.isError && <p role="alert">{errorMessage(inherited.error)}</p>}
-        {inheritedMessages.length < inheritedTotal && <button type="button" className="button secondary" disabled={inherited.isFetching} onClick={() => void (inherited.data ? inherited.fetchNextPage() : inherited.refetch())}>{inheritedMessages.length ? '加载更多继承记录' : '查看继承记录'}</button>}
-      </details>}
+      {first.inherited && <InheritedContext id={id} info={first.inherited} />}
       {session.recordMode === 'excerpt' && messages.length > 0
         ? <details className="history-legacy-excerpt"><summary>查看旧版文本摘要</summary><SafeMessages messages={messages} /></details>
         : <SafeMessages messages={messages} />}

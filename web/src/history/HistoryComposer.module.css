@@ -1,0 +1,44 @@
+.modeHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 2px 8px;
+  font-size: 13px;
+}
+
+.modeHeader .modeAction {
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted, #64748b);
+  font-size: 12px;
+}
+
+.modeHint {
+  margin: 0 2px 10px;
+  color: var(--muted, #64748b);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.currentConfig {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 0 2px 10px;
+  color: var(--muted, #64748b);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+:global(.history-composer) .createButton[type=submit] {
+  width: auto;
+  height: auto;
+  min-height: 34px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  white-space: nowrap;
+}

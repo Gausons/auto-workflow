@@ -358,7 +358,8 @@ export function recordExecution(data: TaskCenterData, job: RunnerJob) {
       const nativeSessionId = job.sessionId || job.threadId;
       if (job.conversationId) {
         const session = data.sessions.find((item) => item.id === job.conversationId);
-        if (session) Object.assign(session, { ...(nativeSessionId ? { nativeId: nativeSessionId } : {}), ...(job.contextSourcePartial !== undefined ? { partial: job.contextSourcePartial } : {}), protocol: job.protocol, status: job.status, updatedAt: job.updatedAt, excerpt: `${job.userMessage || ''}\n\n${job.output || ''}` });
+        if (session) Object.assign(session, { ...(nativeSessionId ? { nativeId: nativeSessionId } : {}), ...(job.contextSourcePartial !== undefined ? { partial: job.contextSourcePartial } : {}),
+          ...(job.contextCoverage ? { contextCoverage: job.contextCoverage } : {}), protocol: job.protocol, status: job.status, updatedAt: job.updatedAt, excerpt: `${job.userMessage || ''}\n\n${job.output || ''}` });
       }
       if (nativeSessionId && !job.historySessionId && !job.conversationId) {
         const agent = job.agent || 'codex';
@@ -624,6 +625,16 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
             if (report.contextSourcePartial !== undefined) {
               if (typeof report.contextSourcePartial !== 'boolean' || (!saved.remoteContext && !saved.contextSourceDeviceId)) throw httpError(400, '交接来源状态无效');
               patch.contextSourcePartial = report.contextSourcePartial;
+            }
+            if (report.contextCoverage !== undefined) {
+              const coverage = report.contextCoverage;
+              if (!saved.conversationId || (!saved.remoteContext && !saved.contextSourceDeviceId) || !coverage || typeof coverage !== 'object' ||
+                  !Number.isSafeInteger(coverage.records) || coverage.records < 0 || coverage.records > 1000000 ||
+                  !Number.isSafeInteger(coverage.images) || coverage.images < 0 || coverage.images > 100000 || typeof coverage.partial !== 'boolean' ||
+                  (report.contextSourcePartial !== undefined && coverage.partial !== report.contextSourcePartial)) throw httpError(400, '交接覆盖信息无效');
+              const previous = saved.contextCoverage;
+              if (previous && (previous.records !== coverage.records || previous.images !== coverage.images || previous.partial !== coverage.partial)) throw httpError(409, '已准备的交接覆盖信息不能改变');
+              patch.contextCoverage = { records: coverage.records, images: coverage.images, partial: coverage.partial };
             }
             if (JSON.stringify(report.request || null).length > 64000) throw httpError(400, '交互请求过大');
             recordExecution(data, { ...saved, ...patch, status: reportStatus, request: report.request as InteractionRequest || null, desktopOpened: Boolean(report.desktopOpened), updatedAt: timestamp() });

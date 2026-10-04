@@ -15,11 +15,18 @@ import { detachSnapshot } from '@auto-workflow/context-engine/detached-bundle';
 import { contextPrompt, freezeContext, readContext } from '../src/contextCompiler.js';
 import { permissionForRoute } from '../src/rbac.js';
 import { syncDeviceOnce } from '../src/deviceConnector.js';
+import { contextEntryText } from '../shared/contextContent.js';
 type ExecutionOptions = Parameters<typeof createCodexExecution>[0];
 type Update = Parameters<NonNullable<ExecutionOptions['runnerFactory']>>[0];
 type RunnerJob = Parameters<Update>[0];
 const line = (row: unknown) => JSON.stringify(row) + '\n';
 const message = (text: string, role = 'user') => ({ type: 'response_item', payload: { type: 'message', role, content: [{ type: 'input_text', text }] } });
+async function linkedContext(markdownPath: string, exported = false) {
+  const guide = await readFile(markdownPath, 'utf8');
+  const filename = /\]\((full-[a-f0-9-]+-v2\.md)\)/.exec(guide)?.[1];
+  assert.ok(filename, 'reading guide links to complete evidence');
+  return readFile(path.join(path.dirname(markdownPath), exported ? filename.replace(/^full-/, 'export-') : filename), 'utf8');
+}
 async function fixture(t: TestContext) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'conversation-'));
   const records = path.join(root, 'records'); await mkdir(records);
@@ -130,10 +137,35 @@ test('new conversation is ready without executing historical requests; first mes
   assert.doesNotMatch(f.launched[0].prompt, /保持原接口兼容|TOOL_RESULT_/);
   assert.ok(f.launched[0].contextMarkdownPath);
   const handoff = await readFile(f.launched[0].contextMarkdownPath, 'utf8');
-  const evidence = await readFile(path.join(f.root, 'context', `evidence-${f.launched[0].contextId}.json`), 'utf8');
-  assert.match(handoff, /# 会话交接/); assert.match(handoff, /工具结果/); assert.ok(handoff.includes(long)); assert.ok(evidence.includes(long));
+  const evidence = await readFile(path.join(f.root, 'context', `evidence-${f.launched[0].contextId}-source.json`), 'utf8');
+  assert.match(handoff, /# 会话交接/); assert.match(handoff, /工具结果/); assert.ok(handoff.length <= 24000);
+  assert.ok((await linkedContext(f.launched[0].contextMarkdownPath)).includes(long)); assert.ok(evidence.includes(long));
   assert.doesNotMatch(f.launched[0].prompt, /hidden-system|secret-for-context-test/);
   assert.equal(f.service.detail(created.sessionId).messages[0].text, '按刚才的方案继续');
+});
+
+test('context preview decodes multimodal records without changing the connector snapshot or tenant boundary', async t => {
+  const f = await fixture(t);
+  const image = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
+  await appendFile(f.file, line({ type: 'response_item', payload: { type: 'message', role: 'user', content: [
+    { type: 'input_text', text: '查看这张截图' }, { type: 'input_image', image_url: image }
+  ] } }));
+  const created = await f.service.create(f.source, { requestId: randomUUID(), targetAgent: 'claude' });
+  const wire = f.service.inherited(created.sessionId);
+  const detail = f.service.detail(created.sessionId);
+  const preview = f.service.contextPreview(created.sessionId);
+  assert.equal(detail.inherited.availability, 'ready');
+  assert.equal(detail.inherited.sourceSessionId, f.source);
+  assert.ok(detail.inherited.sourceTitle);
+  assert.equal(preview.messages.find(entry => entry.text === '查看这张截图')?.images?.[0]?.dataUrl, image);
+  assert.ok(preview.messages.every(entry => !entry.text?.includes('base64,') && !entry.text?.includes('input_text')));
+  assert.deepEqual(f.service.inherited(created.sessionId), wire, 'preview does not mutate frozen transport records');
+  assert.match(JSON.stringify(wire), /input_image|data:image/);
+  assert.equal(f.service.contextPreview(created.sessionId, new URLSearchParams({ offset: '1000' })).messages.length, 0);
+  for (const offset of ['-1', '1.5', 'NaN']) assert.throws(() => f.service.contextPreview(created.sessionId, new URLSearchParams({ offset })), { statusCode: 400 });
+  const foreign = createConversations({ ...f.options, tenantId: 'other' });
+  assert.throws(() => foreign.contextPreview(created.sessionId), { statusCode: 404 });
+  assert.equal(f.launched.length, 0);
 });
 
 test('create and send are idempotent, reject reused keys, and reuse the native session on subsequent turns', async t => {
@@ -210,15 +242,16 @@ test('frozen context survives new service instances and source edits; tenant can
   assert.equal(f.database.readSessionContext('other', f.service.detail(created.sessionId).session.contextId), null);
 });
 
-test('single Markdown handoff keeps full source records without prompt compaction', async t => {
+test('bounded reading guide retains full source records in linked evidence', async t => {
   const f = await fixture(t);
   const entries = Array.from({ length: 30 }, (_, i) => ({ role: 'assistant', text: `record-${i} ` + 'x'.repeat(500), source: f.source }));
   const snapshot = freezeContext(entries, [f.source]);
   const result = await contextPrompt(snapshot, '继续', path.join(f.root, 'context'), 3000);
-  assert.equal(result.compacted, false); assert.match(result.prompt, /Markdown 交接文件/); assert.doesNotMatch(result.prompt, /record-29/);
+  assert.equal(result.compacted, true); assert.match(result.prompt, /Markdown 交接文件/); assert.doesNotMatch(result.prompt, /record-29/);
   const handoff = await readFile(result.markdownPath, 'utf8');
-  assert.match(handoff, /记录 15/); assert.match(handoff, /record-29/);
-  const saved = JSON.parse(await readFile(path.join(f.root, 'context', `evidence-${snapshot.id}.json`), 'utf8'));
+  assert.ok(handoff.length <= 3000); assert.match(handoff, /record-29/);
+  assert.match(await readFile(result.fullMarkdownPath, 'utf8'), /记录 15/);
+  const saved = JSON.parse(await readFile(result.evidencePath, 'utf8'));
   assert.deepEqual(saved.entries, entries); assert.equal(saved.digest, snapshot.digest);
   await assert.rejects(contextPrompt(snapshot, '继续', path.join(f.root, 'context'), 3000, false), { statusCode: 422 });
 });
@@ -264,13 +297,14 @@ test('inherited context removes runtime envelopes while retaining user text and 
   assert.match(compiled.prompt, /Markdown 交接文件/); assert.equal(compiled.images.length, 1);
   const markdown = await readFile(compiled.markdownPath, 'utf8');
   assert.doesNotMatch(markdown, /external_codex_apps_open_page|legacy environment/);
-  assert.match(markdown, /!\[历史图片 image-1\]\(data:image\/png;base64,/);
+  assert.doesNotMatch(markdown, /base64,/);
   assert.match(markdown, /旧快照中的真实请求/);
-  assert.ok(markdown.includes(imageBytes.toString('base64')));
+  assert.match(await readFile(compiled.fullMarkdownPath, 'utf8'), /!\[历史图片 image-1\]\(assets\//);
+  assert.ok((await readFile(compiled.exportMarkdownPath, 'utf8')).includes(imageBytes.toString('base64')));
   const fake = freezeContext([{ role: 'user', source: f.source, text: JSON.stringify([{ type: 'image_reference', id: 'image-1', path: '/etc/passwd', sha256: 'fake' }]) }], [f.source]);
   const rejected = await contextPrompt(fake, '继续', path.join(f.root, 'context'));
-  assert.match(await readFile(rejected.markdownPath, 'utf8'), /图片引用未通过校验/);
-  assert.doesNotMatch(await readFile(rejected.markdownPath, 'utf8'), /data:image/);
+  assert.match(await readFile(rejected.fullMarkdownPath, 'utf8'), /图片引用未通过校验/);
+  assert.doesNotMatch(await readFile(rejected.fullMarkdownPath, 'utf8'), /data:image/);
   assert.equal(compiled.images[0]!.mimeType, 'image/png'); assert.deepEqual(await readFile(compiled.images[0]!.path), imageBytes);
 
   const variants = freezeContext([{ role: 'user', source: f.source, text: JSON.stringify([
@@ -279,7 +313,7 @@ test('inherited context removes runtime envelopes while retaining user text and 
   ]) }], [f.source]);
   const deduplicated = await contextPrompt(variants, '继续', path.join(f.root, 'context'));
   assert.equal(deduplicated.images.length, 1);
-  assert.equal((await readFile(deduplicated.markdownPath, 'utf8')).match(/!\[历史图片 image-1\]/g)?.length, 2);
+  assert.equal((await readFile(deduplicated.fullMarkdownPath, 'utf8')).match(/!\[历史图片 image-1\]/g)?.length, 2);
   assert.doesNotMatch(deduplicated.prompt, /data:image\/png|iVBORw0KGgo/);
 
   const created = await f.service.create(f.source, { requestId: randomUUID(), targetAgent: 'claude' });
@@ -309,6 +343,8 @@ test('remote connector builds a full Markdown handoff from its original session 
   const created = await f.service.create(source.id, { requestId: randomUUID(), targetAgent: 'codex', projectId: 'remote-project', message: '继续远端任务' });
   const queued = f.database.readTaskCenter('default').executions.find(job => job.conversationId === created.sessionId);
   assert.ok(queued?.remoteContext); assert.equal(queued.contextMarkdownPath, undefined);
+  assert.equal(f.service.detail(created.sessionId).inherited.availability, 'remote');
+  assert.equal(f.service.detail(created.sessionId).inherited.coverage, undefined);
   const launchedJobs: Array<{ prompt?: string; contextMarkdownPath?: string; promptImages?: Array<{ path: string }> }> = [];
   const worker = new RemoteCodexWorker({ deviceId: 'remote', workspace: f.root, directory: path.join(f.root, 'remote-journal'),
     contextSource: { catalog: () => remoteHistory.catalog(), delivery },
@@ -327,13 +363,23 @@ test('remote connector builds a full Markdown handoff from its original session 
   assert.ok(launched?.contextMarkdownPath);
   assert.match(launched.prompt || '', /Markdown 交接文件/); assert.doesNotMatch(launched.prompt || '', /远端完整原文/);
   const markdown = await readFile(launched.contextMarkdownPath, 'utf8');
-  assert.match(markdown, /远端完整原文|远端答复/); assert.match(markdown, /data:image\/png;base64,/);
-  assert.ok(markdown.includes(imageBytes.toString('base64')));
+  assert.match(markdown, /远端完整原文|远端答复/); assert.doesNotMatch(markdown, /data:image\/png;base64,/);
+  assert.ok((await linkedContext(launched.contextMarkdownPath, true)).includes(imageBytes.toString('base64')));
   assert.equal(launched.promptImages?.length, 1);
   assert.deepEqual(await readFile(launched.promptImages![0]!.path), imageBytes);
   await worker.sync();
   assert.equal(f.database.readTaskCenter('default').executions.find(job => job.conversationId === created.sessionId)?.status, 'completed');
   assert.equal(f.service.detail(created.sessionId).session.partial, false);
+  const inherited = f.service.detail(created.sessionId).inherited;
+  assert.equal(inherited.availability, 'remote');
+  assert.equal(inherited.partial, true, 'server preview remains only a placeholder');
+  assert.equal(inherited.count, 1);
+  assert.deepEqual(inherited.coverage, { records: 2, images: 1, partial: false });
+  const report = { status: 'completed', contextCoverage: inherited.coverage };
+  await f.execution.action({ action: 'report', executionId: queued.id, report }, owner);
+  await assert.rejects(f.execution.action({ action: 'report', executionId: queued.id, report }, { id: 'other-owner' }), { statusCode: 403 });
+  await assert.rejects(f.execution.action({ action: 'report', executionId: queued.id, report: { ...report, contextCoverage: { records: -1, images: 0, partial: false } } }, owner), { statusCode: 400 });
+  await assert.rejects(f.execution.action({ action: 'report', executionId: queued.id, report: { ...report, contextCoverage: { records: 99, images: 1, partial: false } } }, owner), { statusCode: 409 });
   await appendFile(remoteFile, line(message('冻结后新增内容')));
   const switched = await f.service.create(created.sessionId, { requestId: randomUUID(), targetAgent: 'codex', projectId: 'remote-project', message: '切换后继续' });
   await worker.sync();
@@ -440,7 +486,8 @@ test('cross-device A to B waits for the source packet and runs in B selected dir
   assert.throws(() => f.service.transfer(created.sessionId, queued.id, 'upload', actorA, { deviceId: 'A', context: changed }), { statusCode: 409 });
   assert.match(launched[0]!.prompt, /Markdown 交接文件/);
   const markdown = await readFile(launched[0]!.contextMarkdownPath!, 'utf8');
-  assert.match(markdown, /A 的完整需求/); assert.ok(markdown.includes(bytes.toString('base64')));
+  assert.match(markdown, /A 的完整需求/); assert.doesNotMatch(markdown, /base64,/);
+  assert.ok((await linkedContext(launched[0]!.contextMarkdownPath!, true)).includes(bytes.toString('base64')));
   assert.deepEqual(await readFile(launched[0]!.promptImages![0]!.path), bytes);
   await workerA.sync(); await workerB.sync(); assert.equal(launched.length, 1);
   assert.equal(f.database.readTaskCenter('default').executions.find(job => job.id === queued.id)?.status, 'completed');
@@ -561,6 +608,8 @@ test('new routes explicitly separate execution and read permissions', () => {
   const id = 'a'.repeat(64);
   assert.equal(permissionForRoute('POST', `/api/sessions/${id}/continue-as-new`), 'work.execute');
   assert.equal(permissionForRoute('GET', `/api/conversations/${id}/inherited`), 'read');
+  assert.equal(permissionForRoute('GET', `/api/conversations/${id}/context-preview`), 'read');
+  assert.equal(permissionForRoute('POST', `/api/conversations/${id}/context-preview`), null);
   assert.equal(permissionForRoute('GET', `/api/conversations/${id}/transfer`), 'work.execute');
   assert.equal(permissionForRoute('POST', `/api/conversations/${id}/transfer`), 'work.execute');
   assert.equal(permissionForRoute('GET', `/api/conversations/${id}/transfer/objects/${id}`), 'work.execute');
@@ -593,7 +642,7 @@ test('mixed Codex logs retain event-only turns and deduplicate only mirrored occ
     line({ type: 'event_msg', payload: { type: 'agent_message', message: 'event-only reply' } }));
   const result = await readContext(f.delivery, f.source);
   assert.equal(result.entries.filter(e => e.text.includes('保持原接口兼容')).length, 2);
-  assert.ok(result.entries.some(e => e.text === 'event-only reply'));
+  assert.ok(result.entries.some(e => contextEntryText(e) === 'event-only reply'));
 });
 
 test('history listing merges, filters and paginates managed conversations without duplicate native sessions', async t => {

@@ -4,6 +4,8 @@ import { taskContent } from '../shared/taskContent.js';
 import type { AgentProject, Execution, HistoryMessage, RemoteContextHandoff, Session, TaskCenterData } from '../shared/taskTypes.js';
 import { cleanContextEntries, contextPrompt, freezeContext, readContext, type ContextDelivery, type ContextEntry, type SessionContext } from './contextCompiler.js';
 import type { SummaryResult } from './contextModelSummary.js';
+import { normalizedContextPreview } from './contextPreview.js';
+import type { InheritedContextInfo } from '../shared/contextPreviewTypes.js';
 import type { Environment } from './issueSources/types.js';
 import { deliverRecord } from './sessionDelivery/records.js';
 import { httpError } from './rbac.js';
@@ -128,9 +130,9 @@ export function createConversations({ database, tenantId, history, delivery, exe
       if (!prior) throw httpError(409, '继承上下文不可用');
       const entries: ContextEntry[] = [...prior.entries];
       for (const job of jobsFor(data, id)) {
-        entries.push({ role: 'user', text: String(clean({ text: job.userMessage })?.text || ''), source: id, timestamp: job.createdAt });
+        entries.push({ role: 'user', text: JSON.stringify([{ type: 'text', text: String(clean({ text: job.userMessage })?.text || '') }]), source: id, timestamp: job.createdAt, turnId: job.id });
         for (const event of job.contextEvents || []) entries.push({ role: 'tool_result', text: JSON.stringify(clean(event)), source: id });
-        if (job.output) entries.push({ role: 'assistant', text: String(clean({ text: job.output })?.text || ''), source: id, timestamp: job.updatedAt });
+        if (job.output) entries.push({ role: 'assistant', text: JSON.stringify([{ type: 'text', text: String(clean({ text: job.output })?.text || '') }]), source: id, timestamp: job.updatedAt, turnId: job.id });
       }
       return { session: own, entries, sources: [...prior.sources, id], partial: prior.partial, aliases: [id] };
     }
@@ -193,8 +195,26 @@ export function createConversations({ database, tenantId, history, delivery, exe
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw httpError(400, '分页参数无效');
       const messages = currentMessages(data, id), context = database.readSessionContext(tenantId, session.contextId);
       const inheritedCount = context ? cleanContextEntries(context.entries).length : 0;
+      const inherited: InheritedContextInfo & { digest?: string } = {
+        sourceSessionId: session.sourceSessionId,
+        sourceTitle: session.contextSourceTitle || data.sessions.find(item => item.id === session.sourceSessionId)?.title || session.title,
+        count: inheritedCount,
+        partial: context?.partial || false,
+        digest: context?.digest,
+        availability: session.status === 'preparing' ? 'pending' : !session.contextTransferred && (session.contextSourceDeviceId || session.deviceId) !== 'local' ? 'remote' : 'ready',
+        ...(session.contextCoverage ? { coverage: session.contextCoverage } : {})
+      };
       return { session: { ...session, managed: true, sessionId: session.nativeId }, messages: messages.slice(offset, offset + limit), total: messages.length, offset, limit,
-        inherited: { sourceSessionId: session.sourceSessionId, count: inheritedCount, partial: session.deviceId !== 'local' ? session.partial || false : context?.partial || false, digest: context?.digest } };
+        inherited };
+    },
+    contextPreview(id: string, params = new URLSearchParams()) {
+      const session = managed(id);
+      if (!session) throw httpError(404, '会话不存在');
+      const context = database.readSessionContext(tenantId, session.contextId);
+      if (!context) throw httpError(409, '继承上下文不可用');
+      const offset = Number(params.get('offset') || 0);
+      if (!Number.isSafeInteger(offset) || offset < 0) throw httpError(400, '分页参数无效');
+      return normalizedContextPreview(cleanContextEntries(context.entries), offset);
     },
     inherited(id: string, params = new URLSearchParams()) {
       const session = managed(id);
@@ -373,7 +393,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
         if (!task) throw httpError(409, '会话关联任务不存在');
         database.saveSessionContext(tenantId, snapshot);
         const sessionId = createHash('sha256').update(randomUUID()).digest('hex');
-        data.sessions.push({ id: sessionId, source: 'conversation', managed: true, taskId: task.id, sourceSessionId: id, contextSourceDeviceId, contextId: snapshot.id, createRequestId: requestId, createFingerprint: fingerprint,
+        data.sessions.push({ id: sessionId, source: 'conversation', managed: true, taskId: task.id, sourceSessionId: id, contextSourceTitle: origin.session.title, contextSourceDeviceId, contextId: snapshot.id, createRequestId: requestId, createFingerprint: fingerprint,
           agent: targetAgent, agentLabel: targetAgent === 'codex' ? 'Codex' : targetAgent === 'claude' ? 'Claude Code' : targetAgent, model: model || undefined, reasoningEffort: reasoningEffort || undefined,
           deviceId, projectId: project.id, directoryRequestId: directoryRequestId || undefined, appServerProjectId: project.appServerProjectId, protocol: project.protocol || 'legacy', cwd, nativeId: null,
           title: origin.session.title, status: waiting ? 'preparing' : 'ready', pendingMessage: message, pendingRequestId: requestId, partial: snapshot.partial, createdAt: now(), updatedAt: now(), excerpt: '' });
@@ -418,6 +438,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
         const j: Execution = { id: randomUUID(), requestId, conversationId: id, sourceSessionId: s.sourceSessionId, contextSourceDeviceId: s.contextSourceDeviceId, contextId: s.contextId, contextDigest: snapshot.digest,
           contextCompacted: compiled.compacted, taskId: task.id, contextVersion: task.contextVersion, userMessage: message, prompt: compiled.prompt,
           ...(s.deviceId === 'local' && compiled.markdownPath ? { contextMarkdownPath: compiled.markdownPath } : {}),
+          ...(s.deviceId === 'local' && compiled.markdownPath ? { contextCoverage: { records: cleanContextEntries(snapshot.entries).length, images: compiled.images.length, partial: snapshot.partial } } : {}),
           ...(remote ? { remoteContext: { ...remote, contextDigest: snapshot.digest } } : {}),
           ...(compiled.images.length ? { promptImages: compiled.images } : {}),
           agent: s.agent, agentLabel: s.agentLabel, deviceId: s.deviceId, cwd: s.cwd, projectId: s.projectId, directoryRequestId: s.directoryRequestId, appServerProjectId: s.appServerProjectId, protocol: s.protocol, model: s.model || null, reasoningEffort: s.reasoningEffort || null,
@@ -445,6 +466,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
               const saved = data.executions.find(item => item.id === job.id);
               if (!saved || saved.status !== 'queued') return null;
               Object.assign(saved, { prompt: compiled.prompt, promptImages: compiled.images, contextMarkdownPath: compiled.markdownPath, contextSourcePartial: transferred.partial,
+                contextCoverage: { records: cleanContextEntries(transferred.entries).length, images: compiled.images.length, partial: transferred.partial },
                 status: 'launching', message: '交接包已送达，正在启动本机 Agent', updatedAt: now() });
               return structuredClone(saved);
             });

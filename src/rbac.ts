@@ -17,7 +17,7 @@ export function permissionsFor(role: unknown): string[] {
 
 export function permissionForRoute(method: string | undefined, pathname: string): string | null {
   if (/^\/api\/sessions\/[a-f0-9]{64}\/continue-as-new$/.test(pathname) && method === 'POST') return 'work.execute';
-  if ((pathname === '/api/conversations' || /^\/api\/conversations\/[a-f0-9]{64}\/inherited$/.test(pathname)) && method === 'GET') return 'read';
+  if ((pathname === '/api/conversations' || /^\/api\/conversations\/[a-f0-9]{64}\/(?:inherited|context-preview)$/.test(pathname)) && method === 'GET') return 'read';
   if (/^\/api\/conversations\/[a-f0-9]{64}\/transfer$/.test(pathname) && ['GET', 'POST'].includes(method || '')) return 'work.execute';
   if (/^\/api\/conversations\/[a-f0-9]{64}\/transfer\/objects\/[a-f0-9]{64}$/.test(pathname) && ['GET', 'POST'].includes(method || '')) return 'work.execute';
   if (/^\/api\/agent-sessions\/[a-f0-9]{64}\/continue$/.test(pathname) && ['GET', 'POST'].includes(method || '')) return method === 'POST' ? 'work.execute' : 'read';

@@ -30,22 +30,42 @@ export function sessionDeliverySource(delivery: SessionDelivery, sanitizeUser: (
         if (!event.record || event.kind === 'omitted') continue;
         const row = object(event.record), p = object(row.payload);
         if (typeof p.turn_id === 'string') turnId = p.turn_id;
-        const add = (role: ContextEvent['role'], value: unknown, target = entries) => {
-          const content = role === 'user' ? sanitizeUser(value) : value;
+        const add = (role: ContextEvent['role'], value: unknown, target = entries, metadata: Partial<Pick<ContextEvent, 'name' | 'callId' | 'phase'>> = {}) => {
+          const clean = role === 'user' ? sanitizeUser(value) : value;
+          // Text messages are wrapped once so literal JSON cannot become protocol on a later handoff.
+          const content = ['user', 'assistant'].includes(role) && typeof clean === 'string' ? [{ type: 'text', text: clean }] : clean;
+          if (typeof clean === 'string' && !clean.trim()) return;
           if (typeof content === 'string' ? !content.trim() : Array.isArray(content) && !content.length) return;
           target.push({ role, text: stringify(content), source: id, line: event.sourceLine,
-            ...(typeof row.timestamp === 'string' ? { timestamp: row.timestamp } : {}), turnId });
+            ...(typeof row.timestamp === 'string' ? { timestamp: row.timestamp } : {}), turnId, ...metadata });
         };
         if (event.agent === 'codex') {
           if (row.type === 'response_item') {
-            if (p.type === 'message' && ['user', 'assistant'].includes(String(p.role))) add(p.role as 'user' | 'assistant', p.content);
-            if (typeof p.type === 'string' && ['function_call', 'custom_tool_call'].includes(p.type)) add('tool_call', p);
-            if (typeof p.type === 'string' && ['function_call_output', 'custom_tool_call_output'].includes(p.type)) add('tool_result', p);
+            if (p.type === 'message' && ['user', 'assistant'].includes(String(p.role))) add(p.role as 'user' | 'assistant', p.content, entries, p.phase === 'commentary' || p.phase === 'final' ? { phase: p.phase } : {});
+            const metadata = { ...(typeof p.name === 'string' ? { name: p.name } : {}), ...(typeof p.call_id === 'string' ? { callId: p.call_id } : {}) };
+            if (typeof p.type === 'string' && ['function_call', 'custom_tool_call'].includes(p.type)) add('tool_call', p, entries, metadata);
+            if (typeof p.type === 'string' && ['function_call_output', 'custom_tool_call_output'].includes(p.type)) add('tool_result', p, entries, metadata);
           } else if (row.type === 'event_msg' && typeof p.type === 'string' && ['user_message', 'agent_message'].includes(p.type)) {
             add(p.type === 'user_message' ? 'user' : 'assistant', p.message, fallback);
           }
         } else if (event.agent === 'claude' && typeof row.type === 'string' && ['user', 'assistant'].includes(row.type)) {
-          add(row.type as 'user' | 'assistant', object(row.message).content ?? row.message);
+          const content = object(row.message).content;
+          if (typeof content === 'string') add(row.type, content);
+          else if (Array.isArray(content)) {
+            let visible: unknown[] = [];
+            const flush = () => { if (visible.length) add(row.type as 'user' | 'assistant', visible); visible = []; };
+            for (const value of content) {
+              const block = object(value);
+              if (block.type === 'tool_use' || block.type === 'tool_result') {
+                flush();
+                const callId = block.type === 'tool_use' ? block.id : block.tool_use_id;
+                add(block.type === 'tool_use' ? 'tool_call' : 'tool_result', block, entries, {
+                  ...(typeof block.name === 'string' ? { name: block.name } : {}), ...(typeof callId === 'string' ? { callId } : {})
+                });
+              } else if (!['thinking', 'redacted_thinking', 'reasoning'].includes(String(block.type))) visible.push(value);
+            }
+            flush();
+          }
         }
       }
       cursor = page.nextCursor ?? null;

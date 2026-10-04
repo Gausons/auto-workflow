@@ -138,7 +138,8 @@ test('history uses Codex-style message layout, folded progress and Markdown tabl
   });
   expect(geometry.rightGap).toBeLessThan(2);
   expect(geometry.bubbleWidth).toBeLessThan(geometry.parentWidth / 2);
-  await expect(page.getByLabel('Git 分支')).toContainText('main');
+  await expect(page.getByLabel('当前会话配置')).toContainText('Codex');
+  await expect(page.getByRole('combobox', { name: '执行位置' })).toHaveCount(0);
   await page.locator('.history-chat-scroll').evaluate(element => { element.scrollTop = 0; });
   await page.screenshot({ path: testInfo.outputPath('codex-style-desktop.png'), fullPage: true });
   await page.locator('.history-detail').screenshot({ path: testInfo.outputPath('codex-style-conversation.png') });
@@ -150,6 +151,67 @@ test('history uses Codex-style message layout, folded progress and Markdown tabl
   await expect(page.getByRole('table')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('codex-style-mobile.png'), fullPage: true });
+});
+
+test('inherited context opens a bounded detail drawer and new-session shortcuts use selected configuration', async ({ page }, testInfo) => {
+  const id = 'e'.repeat(64), source = 'f'.repeat(64), next = '1'.repeat(64);
+  const session = { id, managed: true, source: 'conversation', agent: 'codex', agentLabel: 'Codex', deviceId: 'local', title: '上下文交接回归', cwd: '/repo', model: 'model-original', status: 'ready', createdAt: '2026-10-05T00:00:00Z', updatedAt: '2026-10-05T00:00:00Z', messageCount: 0 };
+  const inherited = { count: 2, sourceSessionId: source, sourceTitle: '原始排查', availability: 'ready', digest: 'fixture' };
+  let previewReads = 0;
+  const writes: Array<Record<string, unknown>> = [];
+  const ordinarySends: string[] = [];
+  await page.route('**/api/agent-sessions?*', route => route.fulfill({ json: { offset: 0, limit: 30, total: 1, providers: [{ id: 'codex', label: 'Codex', status: 'available' }], workspaces: [], sessions: [session] } }));
+  for (const sessionId of [id, next]) {
+    await page.route(`**/api/agent-sessions/${sessionId}?*`, route => route.fulfill({ json: { session: { ...session, id: sessionId }, inherited, messages: [], total: 0 } }));
+    await page.route(`**/api/agent-sessions/${sessionId}/continue`, route => {
+      if (route.request().method() === 'POST') ordinarySends.push(route.request().postData() || '');
+      return route.fulfill({ json: { execution: null, executions: [] } });
+    });
+  }
+  await page.route(`**/api/conversations/${id}/context-preview?*`, route => {
+    previewReads++;
+    return route.fulfill({ json: { messages: [
+      { record: 1, source, role: 'user', text: '请检查图片 <script>不执行</script>', images: [{ dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', alt: '历史截图' }] },
+      { record: 2, source, role: 'assistant', text: '**仍需验证**' }
+    ], total: 2, offset: 0, nextOffset: null, stats: { users: 1, assistants: 1, tools: 0, references: 0, images: 1, unavailableImages: 0, truncatedMessages: 0, unsupportedBlocks: 0 }, excerpts: [{ record: 1, source, role: 'user', text: '请检查图片' }] } });
+  });
+  await page.route('**/api/task-center/codex', route => route.fulfill({ json: { projects: [{ id: 'project', name: 'Codex', agent: 'codex', deviceId: 'local', deviceName: '本机', cwd: '/repo', online: true, defaultModel: 'model-original', models: [{ id: 'model-original', name: '原模型' }, { id: 'model-new', name: '新模型' }] }] } }));
+  await page.route('**/api/task-center/git*', route => route.fulfill({ json: { repository: true, current: 'main', changes: 0, branches: ['main'] } }));
+  await page.route(`**/api/sessions/${id}/continue-as-new`, route => { writes.push(route.request().postDataJSON()); return route.fulfill({ json: { sessionId: next } }); });
+  await login(page); await page.goto(`/history/${id}`);
+  await expect(page.getByRole('button', { name: /接续自 原始排查/ })).toHaveAttribute('aria-expanded', 'false');
+  expect(previewReads).toBe(0);
+  await page.screenshot({ path: testInfo.outputPath('inherited-context-collapsed.png'), fullPage: true });
+  await page.getByRole('button', { name: /接续自 原始排查/ }).click();
+  await expect(page.getByText('请检查图片', { exact: true })).toBeVisible();
+  expect(previewReads).toBe(1);
+  await page.screenshot({ path: testInfo.outputPath('inherited-context-overview.png'), fullPage: true });
+  await page.getByRole('button', { name: '查看上下文明细' }).click();
+  const drawer = page.getByRole('dialog', { name: '继承上下文明细' });
+  await expect(drawer.getByRole('img', { name: '历史截图' })).toBeVisible();
+  await expect(drawer.locator('strong')).toHaveText('仍需验证');
+  await expect(drawer).not.toContainText('base64,');
+  await page.screenshot({ path: testInfo.outputPath('inherited-context-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(drawer.getByRole('button', { name: '关闭明细' })).toBeVisible();
+  expect((await drawer.getByRole('heading', { name: '继承上下文明细' }).boundingBox())!.height).toBeLessThan(50);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('inherited-context-mobile.png'), fullPage: true });
+  await drawer.getByRole('button', { name: '关闭明细' }).click();
+  await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveCount(0);
+  await page.getByRole('textbox', { name: '发送消息', exact: true }).fill('按最新结果继续');
+  await page.getByRole('button', { name: /带上下文新开会话/ }).click();
+  await page.getByLabel('模型与思考强度').click();
+  await page.getByRole('combobox', { name: '模型', exact: true }).selectOption('model-new');
+  await page.getByLabel('模型与思考强度').click();
+  await expect(page.getByRole('button', { name: '创建并发送', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('inherited-context-new-session.png'), fullPage: true });
+  await page.getByRole('textbox', { name: '新会话首条消息（可选）' }).press('Control+Enter');
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0]).toMatchObject({ targetAgent: 'codex', projectId: 'project', deviceId: 'local', cwd: '/repo', model: 'model-new', message: '按最新结果继续' });
+  expect(ordinarySends).toHaveLength(0);
+  await expect(page).toHaveURL(new RegExp(`/history/${next}$`));
 });
 
 test('Agent request reply and unknown-result reconciliation never resubmit execution', async ({ page }) => {

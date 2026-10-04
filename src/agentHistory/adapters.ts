@@ -20,7 +20,7 @@ function cleanPageContext(value: string): string {
   }
 }
 // Remove only known context envelopes; keep actual user text outside them.
-export function cleanUserContext(value: unknown) {
+export function cleanUserContext(value: unknown, options: { preserveAttachments?: boolean } = {}) {
   let result = cleanPageContext(text(value));
   for (const tag of ['recommended_plugins', 'environment_context', 'permissions instructions', 'skills_instructions', 'app-context']) {
     result = result.replace(new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, 'g'), '');
@@ -30,7 +30,12 @@ export function cleanUserContext(value: unknown) {
   }
   result = cleanPageContext(result);
   const attachments = result.match(/^\s*# Files mentioned by the user:\s*[\s\S]*?^## My request:\s*\n/m);
-  if (attachments?.index === 0) result = result.slice(attachments[0].length);
+  if (attachments?.index === 0) {
+    if (options.preserveAttachments) {
+      if (!attachments[0].includes('[附件仅保留名称与路径，普通文件未复制；图片是否可用以图片记录为准。]')) result = result.replace(/^## My request:\s*\n/m, '[附件仅保留名称与路径，普通文件未复制；图片是否可用以图片记录为准。]\n\n## My request:\n');
+    }
+    else result = result.slice(attachments[0].length);
+  }
   result = result
     .replace(/^\s*<image name=\[Image #\d+\] path="[^"\r\n]+">\s*$/gm, '')
     .replace(/^\s*<\/image>\s*$/gm, '');

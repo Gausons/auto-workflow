@@ -8,6 +8,9 @@ export interface ContextEvent {
   line?: number;
   timestamp?: string;
   turnId?: string;
+  name?: string;
+  callId?: string;
+  phase?: 'commentary' | 'final';
 }
 export interface CaptureResult {
   events: ContextEvent[];
@@ -50,6 +53,9 @@ export function verifySnapshot(value: unknown): ContextSnapshot {
     if (!entry || !roles.has(String(entry.role)) || typeof entry.text !== 'string' || typeof entry.source !== 'string' || entry.source.length > 4096 ||
         (entry.line !== undefined && (!Number.isSafeInteger(entry.line) || (entry.line as number) < 0)) ||
         (entry.turnId !== undefined && typeof entry.turnId !== 'string') ||
+        (entry.name !== undefined && typeof entry.name !== 'string') ||
+        (entry.callId !== undefined && typeof entry.callId !== 'string') ||
+        (entry.phase !== undefined && !['commentary', 'final'].includes(String(entry.phase))) ||
         (entry.timestamp !== undefined && typeof entry.timestamp !== 'string')) throw bad('交接快照记录格式无效');
   }
   if (row.sources.some(item => typeof item !== 'string' || item.length > 4096) ||

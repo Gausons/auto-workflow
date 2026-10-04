@@ -51,6 +51,16 @@ test('authenticated HTTP and real ACP subprocess support new conversation, two t
   assert.equal((await req(route, 'POST', input, viewer)).status, 403);
   const created = await req(route, 'POST', input, token); assert.equal(created.status, 202, JSON.stringify(created.data));
   const id = created.data.sessionId; assert.ok(id);
+  const previewRoute = `/api/conversations/${id}/context-preview`;
+  assert.equal((await req(previewRoute)).status, 401);
+  const preview = await req(previewRoute, 'GET', undefined, viewer);
+  assert.equal(preview.status, 200);
+  assert.match(JSON.stringify(preview.data), /保持原接口兼容/);
+  assert.doesNotMatch(JSON.stringify(preview.data), /input_text/);
+  assert.equal((await req(previewRoute + '?offset=-1', 'GET', undefined, token)).status, 400);
+  assert.equal((await req(previewRoute, 'POST', {}, token)).status, 404);
+  const isolated = await fetch(base + previewRoute, { headers: { Authorization: `Bearer ${token}`, 'X-Tenant-Id': 'other-team' } });
+  assert.equal(isolated.status, 403);
   const messageRoute = `/api/agent-sessions/${id}/continue`;
   assert.equal((await req(messageRoute, 'GET', undefined, token)).data.execution, null);
   async function send(message: string) {

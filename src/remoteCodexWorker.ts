@@ -8,7 +8,7 @@ import { contextPrompt, freezeContext, readContext, type ContextDelivery, type C
 import { verifyBundle, verifySnapshot } from '@auto-workflow/context-engine';
 import { detachSnapshot, restoreDetachedSnapshot, verifyDetachedManifest } from '@auto-workflow/context-engine/detached-bundle';
 import { loadOrFreezeCapture } from '@auto-workflow/context-engine/capture-journal';
-import type { AgentProject, ExecutionControl, PromptImageReference, RemoteContextHandoff, TaskCenterData } from '../shared/taskTypes.js';
+import type { AgentProject, ContextCoverage, ExecutionControl, PromptImageReference, RemoteContextHandoff, TaskCenterData } from '../shared/taskTypes.js';
 
 interface RemoteJob {
   id: string; status?: string; deviceId?: string; projectId?: string; cwd?: string; agent?: string;
@@ -21,6 +21,7 @@ interface RemoteJob {
   contextTransferError?: string;
   directoryRequestId?: string;
   prompt?: string; contextMarkdownPath?: string; promptImages?: PromptImageReference[]; contextSourcePartial?: boolean;
+  contextCoverage?: ContextCoverage;
 }
 type Request = (method: string, body?: unknown, endpoint?: string) => unknown;
 interface RemoteRunner {
@@ -159,7 +160,8 @@ export class RemoteCodexWorker {
     } else if (job.remoteContext) snapshot = await this.sourceSnapshot(job);
     else return job;
     const compiled = await contextPrompt(snapshot, job.userMessage, path.join(this.directory, 'context'));
-    return { ...job, prompt: compiled.prompt, promptImages: compiled.images, contextMarkdownPath: compiled.markdownPath, contextSourcePartial: snapshot.partial };
+    return { ...job, prompt: compiled.prompt, promptImages: compiled.images, contextMarkdownPath: compiled.markdownPath, contextSourcePartial: snapshot.partial,
+      contextCoverage: { records: snapshot.entries.length, images: compiled.images.length, partial: snapshot.partial } };
   }
   async flush() {
     await this.queue; if (this.storageError) throw this.storageError;
