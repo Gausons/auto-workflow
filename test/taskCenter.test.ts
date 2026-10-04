@@ -179,12 +179,21 @@ test('task-center mutations advance sync version and notify subscribers', async 
   assert.equal((await center.snapshot()).syncVersion, 1);
 });
 
-test('connector sync is incremental and the server normalizes oversized excerpts', async t => {
+test('connector upgrades old history fingerprints then resumes incremental sync and normalizes oversized excerpts', async t => {
   const { center, cmd } = fixture(t);
-  const index: Record<string, string> = {};
+  const session = { ...source, id: 'remote-history', sessionId: 'remote-native' };
+  // Existing format-3 state must refresh unchanged catalog metadata when the
+  // updated parser removes context envelopes within an otherwise intact message.
+  const oldFingerprint = createHash('sha256').update(JSON.stringify({
+    format: 3, messageCount: session.messageCount, partial: session.partial, model: session.model, branch: session.branch,
+    nativeId: session.sessionId, agent: session.agent, title: session.title, cwd: session.cwd,
+    status: session.status, createdAt: session.createdAt, updatedAt: session.updatedAt, archived: session.archived === true, includeExcerpts: true
+  })).digest('hex');
+  const key = `${session.agent}\0${session.sessionId}`;
+  const index: Record<string, string> = { [key]: oldFingerprint };
   let detailCalls = 0;
   const remoteHistory = {
-    catalog: async () => ({ providers: [{ id: 'codex' }], sessions: [{ ...source, id: 'remote-history', sessionId: 'remote-native' }] }),
+    catalog: async () => ({ providers: [{ id: 'codex' }], sessions: [session] }),
     detail: async () => { detailCalls++; return { messages: [{ role: 'assistant', text: 'x'.repeat(25000), images: [] }] }; }
   };
   const requests: Array<{ method: string; body?: unknown }> = [];
@@ -195,7 +204,10 @@ test('connector sync is incremental and the server normalizes oversized excerpts
   const dir = await mkdtemp(path.join(os.tmpdir(), 'task-incremental-sync-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   await syncDeviceOnce({ request, history: remoteHistory, deviceId: 'remote', name: 'Linux', outputDir: dir, includeExcerpts: true, sessionIndex: index });
+  assert.notEqual(index[key], oldFingerprint, 'a parser format upgrade must invalidate an existing unchanged session');
+  const upgradedFingerprint = index[key];
   await syncDeviceOnce({ request, history: remoteHistory, deviceId: 'remote', name: 'Linux', outputDir: dir, includeExcerpts: true, sessionIndex: index });
+  assert.equal(index[key], upgradedFingerprint);
   const posts = requests.filter(item => item.method === 'POST').map(item => item.body as { sessions: Array<{ excerpt: string }> });
   assert.equal(posts[0].sessions[0].excerpt.length, 23000);
   assert.equal(posts[1].sessions.length, 0);

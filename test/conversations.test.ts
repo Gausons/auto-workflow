@@ -233,15 +233,18 @@ test('delivery reads all pages and avoids duplicate Codex event messages', async
 test('inherited context removes runtime envelopes while retaining user text and images', async t => {
   const f = await fixture(t), imageBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
   const image = `data:image/png;base64,${imageBytes.toString('base64')}`;
+  const pageContext = '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>';
   await appendFile(f.file,
     line({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '<recommended_plugins>internal plugin catalog</recommended_plugins><environment_context>private runtime context</environment_context>' }] } }) +
+    line(message(pageContext)) +
+    line({ type: 'event_msg', payload: { type: 'user_message', message: pageContext } }) +
     line({ type: 'response_item', payload: { type: 'message', role: 'user', content: [
-      { type: 'input_text', text: '<skills_instructions>internal skills</skills_instructions>保留真实请求' },
+      { type: 'input_text', text: `${pageContext}\n<skills_instructions>internal skills</skills_instructions>保留真实请求` },
       { type: 'input_image', image_url: image }
     ] } })
   );
   const result = await readContext(f.delivery, f.source), json = JSON.stringify(result.entries);
-  assert.doesNotMatch(json, /recommended_plugins|environment_context|skills_instructions|internal plugin catalog|private runtime context|internal skills/);
+  assert.doesNotMatch(json, /external_codex_apps_open_page|recommended_plugins|environment_context|skills_instructions|internal plugin catalog|private runtime context|internal skills/);
   assert.match(json, /保留真实请求/); assert.match(json, /data:image\/png/);
   assert.equal(result.entries.length, 3);
 
@@ -249,11 +252,18 @@ test('inherited context removes runtime envelopes while retaining user text and 
     { type: 'input_text', text: '<recommended_plugins>legacy catalog</recommended_plugins>旧快照中的真实请求' },
     { type: 'input_image', image_url: image }
   ]) }], [f.source]);
-  const compiled = await contextPrompt({ ...legacy, entries: [{ ...legacy.entries[0]!, text: legacy.entries[0]!.text.replace('旧快照中的真实请求', '<environment_context>legacy environment</environment_context>旧快照中的真实请求') }] }, '继续', path.join(f.root, 'context'));
-  assert.doesNotMatch(compiled.prompt, /recommended_plugins|environment_context|legacy catalog|legacy environment/);
+  const compiled = await contextPrompt({ ...legacy, entries: [
+    { role: 'user', source: f.source, text: pageContext },
+    { ...legacy.entries[0]!, text: JSON.stringify([
+      { type: 'input_text', text: `${pageContext}\n<environment_context>legacy environment</environment_context>旧快照中的真实请求` },
+      { type: 'input_image', image_url: image }
+    ]) }
+  ] }, '继续', path.join(f.root, 'context'));
+  assert.doesNotMatch(compiled.prompt, /external_codex_apps_open_page|recommended_plugins|environment_context|legacy catalog|legacy environment/);
   assert.doesNotMatch(compiled.prompt, /旧快照中的真实请求|data:image\/png/);
   assert.match(compiled.prompt, /Markdown 交接文件/); assert.equal(compiled.images.length, 1);
   const markdown = await readFile(compiled.markdownPath, 'utf8');
+  assert.doesNotMatch(markdown, /external_codex_apps_open_page|legacy environment/);
   assert.match(markdown, /!\[历史图片 image-1\]\(data:image\/png;base64,/);
   assert.match(markdown, /旧快照中的真实请求/);
   assert.ok(markdown.includes(imageBytes.toString('base64')));

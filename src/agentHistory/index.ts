@@ -52,7 +52,7 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
       sessionId: '', title: '', cwd: '', workspaces: [], model: '', branch: '', status: 'unknown', archived: file.split(path.sep).includes('archived_sessions'),
       createdAt: '', updatedAt: '', messageCount: 0, partial: info.size > MAX_BYTES };
     const entries: HistoryEntry[] = [], fallback: HistoryEntry[] = [];
-    let count = 0, fallbackCount = 0, firstPrompt = '', fallbackPrompt = '', malformed = 0, conversationCount = 0;
+    let count = 0, fallbackCount = 0, firstPrompt = '', malformed = 0, conversationCount = 0;
     let turnId: string | undefined;
     const checkedCwds = new Map<string, string | null>();
     const stream = createReadStream(file, { encoding: 'utf8', start: 0, end: MAX_BYTES - 1 });
@@ -88,14 +88,13 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
         for (const item of decoded.entries || []) {
           if (!item.text && !item.images?.length) continue;
           if (turnId) item.turnId = turnId;
+          if (item.role === 'user') firstPrompt ||= item.text || (item.images?.length ? '图片会话' : '');
           if (decoded.fallback) {
             fallbackCount++;
-            if (item.role === 'user') fallbackPrompt ||= item.text || (item.images?.length ? '图片会话' : '');
             if (detail && fallback.length < MAX_ENTRIES) fallback.push(item);
           } else {
             count++;
             if (['user', 'assistant'].includes(item.role)) conversationCount++;
-            if (item.role === 'user') firstPrompt ||= item.text || (item.images?.length ? '图片会话' : '');
             if (detail && entries.length < MAX_ENTRIES) entries.push(item);
           }
         }
@@ -105,7 +104,7 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
     if (!session.cwd && !session.sessionId && !count && !fallbackCount) return null;
     // Codex emits both response_item and event_msg copies of the conversation.
     session.messageCount = count + (conversationCount ? 0 : fallbackCount);
-    session.title ||= (fallbackPrompt || firstPrompt).replace(/\s+/g, ' ').slice(0, 120) || '未命名会话';
+    session.title ||= firstPrompt.replace(/\s+/g, ' ').slice(0, 120) || '未命名会话';
     session.updatedAt ||= info.mtime.toISOString();
     session.createdAt ||= session.updatedAt;
     session.partial ||= malformed > 0 || session.messageCount > MAX_ENTRIES;

@@ -6,15 +6,29 @@ import type { DecodedHistoryRow, HistoryAdapter, HistoryEntry, HistoryImage, Jso
 const record = (value: unknown): JsonObject => value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : {};
 const optionalText = (value: unknown): string | undefined => typeof value === 'string' ? value : undefined;
 const text = (value: unknown): string => typeof value === 'string' ? value : JSON.stringify(value ?? '') ?? '';
+// The desktop adds this as a separate user message or a leading context block.
+// Recognize its payload rather than stripping literal examples inside prose/code.
+function cleanPageContext(value: string): string {
+  let result = value;
+  for (;;) {
+    const envelope = /^\s*<external_codex_apps_open_page>([\s\S]*?)<\/external_codex_apps_open_page>/.exec(result);
+    if (!envelope) return result;
+    let payload: JsonObject;
+    try { payload = record(JSON.parse(envelope[1])); } catch { return result; }
+    if (Object.keys(payload).length !== 1 || !(payload.page_id === null || typeof payload.page_id === 'string')) return result;
+    result = result.slice(envelope[0].length).trimStart();
+  }
+}
 // Remove only known context envelopes; keep actual user text outside them.
 export function cleanUserContext(value: unknown) {
-  let result = text(value);
+  let result = cleanPageContext(text(value));
   for (const tag of ['recommended_plugins', 'environment_context', 'permissions instructions', 'skills_instructions', 'app-context']) {
     result = result.replace(new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, 'g'), '');
   }
   if (/^# AGENTS\.md instructions for [^\n]+\n/.test(result.trim()) && /<INSTRUCTIONS>[\s\S]*<\/INSTRUCTIONS>/.test(result)) {
     result = result.replace(/^\s*# AGENTS\.md instructions for [^\n]+\n\s*<INSTRUCTIONS>[\s\S]*?<\/INSTRUCTIONS>/, '');
   }
+  result = cleanPageContext(result);
   const attachments = result.match(/^\s*# Files mentioned by the user:\s*[\s\S]*?^## My request:\s*\n/m);
   if (attachments?.index === 0) result = result.slice(attachments[0].length);
   result = result
@@ -54,7 +68,7 @@ export const codexHistoryAdapter: HistoryAdapter = {
     if (row.type === 'session_meta') return { id: p.id, cwd: p.cwd, createdAt: p.timestamp || timestamp, branch: record(p.git).branch };
     if (row.type === 'turn_context') return { cwd: p.cwd, model: p.model };
     if (row.type === 'event_msg') {
-      if (p.type === 'thread_name_updated') return { title: p.thread_name };
+      if (p.type === 'thread_name_updated') return { title: typeof p.thread_name === 'string' ? cleanPageContext(p.thread_name) : p.thread_name };
       if (p.type === 'task_started') return { status: 'unknown' };
       if (p.type === 'task_complete') return { status: 'completed' };
       if (p.type === 'turn_aborted') return { status: 'interrupted' };

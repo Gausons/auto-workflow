@@ -55,7 +55,7 @@ export function deviceConnectorDefaults(environment: Environment) {
 
 // A transport only: receiving a packet never launches a process or marks it started.
 const sessionFingerprint = (session: HistorySession, includeExcerpts: boolean) => createHash('sha256').update(JSON.stringify({
-  format: 3, messageCount: session.messageCount, partial: session.partial, model: session.model, branch: session.branch,
+  format: 4, messageCount: session.messageCount, partial: session.partial, model: session.model, branch: session.branch,
   nativeId: session.sessionId || session.id, agent: session.agent, title: session.title, cwd: session.cwd,
   status: session.status, createdAt: session.createdAt, updatedAt: session.updatedAt, archived: session.archived === true, includeExcerpts
 })).digest('hex');

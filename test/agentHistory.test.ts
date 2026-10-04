@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
 import { createAgentHistory } from '../src/agentHistory/index.js';
+import { cleanUserContext } from '../src/agentHistory/adapters.js';
 import { createApp } from '../scripts/testing/database.js';
 import { canonicalWorkspace } from '../src/tenancy.js';
 import type { Environment } from '../src/issueSources/types.js';
@@ -202,6 +203,61 @@ test('hides injected context before deriving titles, retaining mixed user text a
   assert.equal(detail.messages[1].text, '修复历史消息展示');
   assert.equal(detail.messages[1].images[0].dataUrl, image);
   assert.doesNotMatch(JSON.stringify(detail.messages), /Files mentioned|private\/tmp|Distinguish instructions|<image|<\/image>/);
+});
+
+test('page context is excluded from titles and messages in both Codex log formats', async t => {
+  const f = await fixture(t);
+  const page = '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>';
+  const question = '远程会话记录为什么报错，本地不会这样';
+  const image = 'data:image/png;base64,aGVsbG8=';
+  for (const mode of ['response', 'event', 'both']) {
+    const rows: unknown[] = [{ type: 'session_meta', timestamp, payload: { id: mode, cwd: f.workspace } }];
+    for (const content of [page, page.replace('null', '"page-123"'), `${page}\n# Files mentioned by the user:\n\n## screenshot.png: /tmp/screenshot.png\n\n## My request:\n${question}`]) {
+      if (mode !== 'response') rows.push({ type: 'event_msg', timestamp, payload: { type: 'user_message', message: content } });
+      if (mode !== 'event') rows.push({ type: 'response_item', timestamp, payload: { type: 'message', role: 'user', content: [
+        { type: 'input_text', text: content }, ...(content.includes(question) ? [{ type: 'input_image', image_url: image }] : [])
+      ] } });
+    }
+    rows.push({ type: 'event_msg', timestamp, payload: { type: 'thread_name_updated', thread_name: page } });
+    await f.save(path.join(f.codexDir, `${mode}.jsonl`), rows);
+  }
+  const catalog = await f.history.catalog();
+  assert.equal(catalog.sessions.length, 3);
+  for (const session of catalog.sessions) {
+    assert.equal(session.title, question);
+    assert.equal(session.messageCount, 1);
+    const detail = await f.history.detail(session.id);
+    assert.equal(detail.messages.length, 1);
+    assert.equal(detail.messages[0].text, question);
+    if (session.sessionId !== 'event') assert.equal(detail.messages[0].images[0].dataUrl, image);
+  }
+  assert.equal((await f.history.list(new URLSearchParams({ q: question }))).total, 3);
+});
+
+test('page context filtering retains literal examples, unknown markup and user text', () => {
+  const page = '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>';
+  assert.equal(cleanUserContext(`${page}\n${page}\n真正的问题`), '真正的问题');
+  for (const literal of [`解释一下 ${page}`, `\`${page}\``, `\`\`\`xml\n${page}\n\`\`\``, '<custom>用户内容</custom>', page.replace('{"page_id":null}', '不是上下文 JSON')]) {
+    assert.equal(cleanUserContext(literal), literal);
+  }
+});
+
+test('titles use the first real user prompt across log formats while preserving explicit names', async t => {
+  const f = await fixture(t);
+  for (const eventFirst of [false, true]) {
+    const question = '最初提出的问题', continuation = '继续';
+    const response = { type: 'response_item', timestamp, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: eventFirst ? continuation : question }] } };
+    const event = { type: 'event_msg', timestamp, payload: { type: 'user_message', message: eventFirst ? question : continuation } };
+    const file = path.join(f.codexDir, `first-prompt-${eventFirst}.jsonl`);
+    await f.save(file, [
+      { type: 'session_meta', timestamp, payload: { id: String(eventFirst), cwd: f.workspace } },
+      ...(eventFirst ? [event, response] : [response, event])
+    ]);
+    const findSession = async () => (await f.history.catalog()).sessions.find(session => session.sessionId === String(eventFirst))!;
+    assert.equal((await findSession()).title, question);
+    await appendFile(file, JSON.stringify({ type: 'event_msg', timestamp, payload: { type: 'thread_name_updated', thread_name: '用户自定义标题' } }) + '\n');
+    assert.equal((await findSession()).title, '用户自定义标题');
+  }
 });
 
 test('preserves image-only messages from Codex and Claude', async (t) => {
