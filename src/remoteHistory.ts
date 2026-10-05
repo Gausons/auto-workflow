@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import type { HistoryMessage, RemoteHistory, Session } from '../shared/taskTypes.js';
 import { httpError } from './rbac.js';
 
@@ -6,8 +7,8 @@ const TEXT_LIMIT = 23000;
 const IMAGE_BUDGET = 256 * 1024;
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 
-// Used on both ends of the connector: preserve message boundaries and allow only
-// embedded raster previews. Oversize content remains visible as an explicit gap.
+// Prepare source records on the connector. Oversize or unavailable content
+// remains visible as an explicit gap in the bounded preview.
 export function normalizeRemoteHistory(value: unknown): RemoteHistory {
   const input = object(value);
   if (!Array.isArray(input.messages) || input.messages.length > REMOTE_HISTORY_LIMIT ||
@@ -60,6 +61,13 @@ export function normalizeRemoteHistory(value: unknown): RemoteHistory {
     messages.unshift(message);
   }
   return { messages, offset: Number(input.offset), total: Number(input.total), sourcePartial: input.sourcePartial, truncated };
+}
+
+// The server accepts the current wire format without repairing uploaded data.
+export function validateRemoteHistory(value: unknown): RemoteHistory {
+  const history = normalizeRemoteHistory(value);
+  if (!isDeepStrictEqual(history, value)) throw httpError(400, '远程历史预览不符合当前同步格式');
+  return history;
 }
 
 // Large preview bodies belong only in the paginated detail response, never in

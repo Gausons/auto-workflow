@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { taskContent, taskTitle } from '../shared/taskContent.js';
 import { hostname } from 'node:os';
 import { httpError } from './rbac.js';
-import { normalizeRemoteHistory, remoteHistorySummary } from './remoteHistory.js';
+import { validateRemoteHistory, remoteHistorySummary } from './remoteHistory.js';
 import type { Actor, AgentProject, Device, Handoff, HandoffMode, HandoffStatus, RemoteHistory, Session, Task, TaskCenterData, TaskContext, TaskStatus } from '../shared/taskTypes.js';
 
 const statuses: TaskStatus[] = ['waiting', 'error', 'running', 'ready', 'review', 'completed'];
@@ -183,14 +183,11 @@ export function createTaskCenter({ database, tenantId, history }: { database: Ta
             const id = sessionKey(device.id, `${agent}:${nativeId}`);
             const createdAt = typeof s.createdAt === 'string' && Number.isFinite(Date.parse(s.createdAt)) ? new Date(s.createdAt).toISOString() : undefined;
             const updatedAt = typeof s.updatedAt === 'string' && Number.isFinite(Date.parse(s.updatedAt)) ? new Date(s.updatedAt).toISOString() : now();
-            const remoteHistory = s.remoteHistory === undefined ? undefined : normalizeRemoteHistory(s.remoteHistory);
+            const remoteHistory = s.remoteHistory === undefined ? undefined : validateRemoteHistory(s.remoteHistory);
             const item: Session = { id, nativeId, deviceId: device.id, agent, agentLabel: text(s.agentLabel ?? agent, 120), title: required(s.title, 120), cwd: text(s.cwd ?? '', 2000), createdAt,
               model: text(s.model ?? '', 500), branch: text(s.branch ?? '', 500), remoteHistory,
               status: text(s.status ?? 'unknown', 80), archived: s.archived === true, updatedAt,
-              // Connectors may differ slightly in character/byte counting. Bound the
-              // accepted input, then normalize it server-side so one legacy record
-              // cannot reject an otherwise valid heartbeat batch.
-              excerpt: text(s.excerpt ?? '', 240000).slice(-23000), partial: true };
+              excerpt: text(s.excerpt ?? '', 23000), partial: true };
             database.setRemoteSessionHistory(tenantId, id, remoteHistory ?? null);
             const summary = remoteHistorySummary(item);
             const old = data.sessions.findIndex(session => session.id === id);

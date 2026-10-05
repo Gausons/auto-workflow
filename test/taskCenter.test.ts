@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { openDatabase, rawDatabase } from '../scripts/testing/database.js';
 import { createTaskCenter } from '../src/taskCenter.js';
+import { normalizeRemoteHistory } from '../src/remoteHistory.js';
 import { syncDeviceOnce } from '../scripts/device-sync.js';
 import { createApp } from '../scripts/testing/database.js';
 import type { Actor, Task, TaskCenterData } from '../shared/taskTypes.js';
@@ -141,6 +142,14 @@ test('HTTP auth, viewer write rejection, and task UI assets', async t => {
   const viewer = (await req('/api/auth/login', 'POST', { tenantId: 'default', username: 'viewer', password })).data;
   assert.equal((await req('/api/task-center', 'GET', null, viewer.token)).data.tasks?.length, 1);
   assert.equal((await req('/api/task-center', 'POST', { action: 'create', title: 'forbidden' }, viewer.token)).status, 403);
+  const invalidPreview = heartbeat([{ nativeId: 'invalid', agent: 'claude', title: '非法预览', remoteHistory: {
+    offset: 0, total: 1, sourcePartial: false, truncated: false, messages: [{ role: 'user', text: '\ud800' }]
+  } }]);
+  assert.equal((await req('/api/task-center', 'POST', invalidPreview)).status, 401);
+  assert.equal((await req('/api/task-center', 'POST', invalidPreview, viewer.token)).status, 403);
+  const rejected = await req('/api/task-center', 'POST', invalidPreview, owner.token);
+  assert.equal(rejected.status, 400);
+  assert.deepEqual(rejected.data, { error: 'request_failed', message: '远程历史预览不符合当前同步格式' });
   const continuation = '/api/agent-sessions/' + 'a'.repeat(64) + '/continue';
   assert.equal((await req(continuation, 'POST', { message: 'test' })).status, 401);
   assert.equal((await req(continuation, 'POST', { message: 'test' }, viewer.token)).status, 403);
@@ -179,18 +188,11 @@ test('task-center mutations advance sync version and notify subscribers', async 
   assert.equal((await center.snapshot()).syncVersion, 1);
 });
 
-test('connector upgrades old history fingerprints then resumes incremental sync and normalizes oversized excerpts', async t => {
+test('connector skips unchanged history, refreshes changed records and bounds excerpts before upload', async t => {
   const { center, cmd } = fixture(t);
   const session = { ...source, id: 'remote-history', sessionId: 'remote-native' };
-  // Existing format-3 state must refresh unchanged catalog metadata when the
-  // updated parser removes context envelopes within an otherwise intact message.
-  const oldFingerprint = createHash('sha256').update(JSON.stringify({
-    format: 3, messageCount: session.messageCount, partial: session.partial, model: session.model, branch: session.branch,
-    nativeId: session.sessionId, agent: session.agent, title: session.title, cwd: session.cwd,
-    status: session.status, createdAt: session.createdAt, updatedAt: session.updatedAt, archived: session.archived === true, includeExcerpts: true
-  })).digest('hex');
   const key = `${session.agent}\0${session.sessionId}`;
-  const index: Record<string, string> = { [key]: oldFingerprint };
+  const index: Record<string, string> = {};
   let detailCalls = 0;
   const remoteHistory = {
     catalog: async () => ({ providers: [{ id: 'codex' }], sessions: [session] }),
@@ -204,15 +206,19 @@ test('connector upgrades old history fingerprints then resumes incremental sync 
   const dir = await mkdtemp(path.join(os.tmpdir(), 'task-incremental-sync-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   await syncDeviceOnce({ request, history: remoteHistory, deviceId: 'remote', name: 'Linux', outputDir: dir, includeExcerpts: true, sessionIndex: index });
-  assert.notEqual(index[key], oldFingerprint, 'a parser format upgrade must invalidate an existing unchanged session');
-  const upgradedFingerprint = index[key];
+  assert.match(index[key], /^[a-f0-9]{64}$/);
+  const fingerprint = index[key];
   await syncDeviceOnce({ request, history: remoteHistory, deviceId: 'remote', name: 'Linux', outputDir: dir, includeExcerpts: true, sessionIndex: index });
-  assert.equal(index[key], upgradedFingerprint);
+  assert.equal(index[key], fingerprint);
   const posts = requests.filter(item => item.method === 'POST').map(item => item.body as { sessions: Array<{ excerpt: string }> });
   assert.equal(posts[0].sessions[0].excerpt.length, 23000);
   assert.equal(posts[1].sessions.length, 0);
   assert.equal(detailCalls, 1);
   assert.equal((await center.snapshot()).sessions.find(item => item.deviceId === 'remote')?.excerpt?.length, 23000);
+  session.updatedAt = new Date(Date.parse(session.updatedAt) + 1000).toISOString();
+  await syncDeviceOnce({ request, history: remoteHistory, deviceId: 'remote', name: 'Linux', outputDir: dir, includeExcerpts: true, sessionIndex: index });
+  assert.notEqual(index[key], fingerprint);
+  assert.equal(detailCalls, 2);
 });
 
 test('structured history batches stay below the HTTP byte limit and retry only unacknowledged batches', async t => {
@@ -250,28 +256,35 @@ test('structured history batches stay below the HTTP byte limit and retry only u
   assert.equal(database.readRemoteSessionHistory('default', createHash('sha256').update('remote\0codex:new').digest('hex')), null);
 });
 
-test('heartbeat stores Unicode previews in JSONB and accepts legacy malformed strings without losing the batch', async t => {
+test('heartbeat stores connector-normalized Unicode previews and rejects malformed batches atomically', async t => {
   const { database, center, cmd } = fixture(t);
   const notice = '\n[内容超过同步上限，已截断]';
-  const sessions = [
+  const inputs = [
     { nativeId: 'emoji', agent: 'claude', title: '截断边界', remoteHistory: { offset: 0, total: 1, sourcePartial: false, truncated: false,
       messages: [{ role: 'assistant', text: 'a'.repeat(23000 - notice.length - 1) + '😀tail'.repeat(10) }] } },
-    { nativeId: 'legacy', agent: 'claude', title: '旧连接器预览', remoteHistory: { offset: 0, total: 1, sourcePartial: false, truncated: false,
-      messages: [{ role: 'tool_result', text: '中文😀\u0000\ud800x\udc00', callId: 'call\u0000', images: [{ alt: '旧图片\ud800' }] }] } }
+    { nativeId: 'source', agent: 'claude', title: '来源含异常字符', remoteHistory: { offset: 0, total: 1, sourcePartial: false, truncated: false,
+      messages: [{ role: 'tool_result', text: '中文😀\u0000\ud800x\udc00', callId: 'call\u0000', images: [{ alt: '图片\ud800' }] }] } }
   ];
+  const sessions = inputs.map(session => ({ ...session, remoteHistory: normalizeRemoteHistory(session.remoteHistory) }));
   for (let attempt = 0; attempt < 2; attempt++) await cmd(heartbeat(sessions));
   const state = database.readTaskCenter('default');
   assert.equal(state.sessions.length, 2);
-  const [emoji, legacy] = state.sessions;
+  const [emoji, source] = state.sessions;
   assert.equal(database.readRemoteSessionHistory('default', emoji.id)?.messages[0].text, 'a'.repeat(23000 - notice.length - 1) + notice);
-  assert.deepEqual(database.readRemoteSessionHistory('default', legacy.id)?.messages[0], {
-    role: 'tool_result', text: '中文😀\uFFFD\uFFFDx\uFFFD', callId: 'call\uFFFD', images: [{ alt: '旧图片\uFFFD' }]
+  assert.deepEqual(database.readRemoteSessionHistory('default', source.id)?.messages[0], {
+    role: 'tool_result', text: '中文😀\uFFFD\uFFFDx\uFFFD', callId: 'call\uFFFD', images: [{ alt: '图片\uFFFD' }]
   });
   assert.ok(state.sessions.every(session => session.syncedRange?.truncated && session.partial));
-  assert.equal(database.readRemoteSessionHistory('other', legacy.id), null);
-  const before = database.readRemoteSessionHistory('default', legacy.id);
+  assert.equal(database.readRemoteSessionHistory('other', source.id), null);
+  const before = database.readRemoteSessionHistory('default', source.id);
+  for (const invalid of [...inputs, { ...sessions[0], excerpt: 'x'.repeat(23001) }]) {
+    // A valid deletion before the invalid record must roll back with the batch.
+    await assert.rejects(cmd(heartbeat([{ ...sessions[1], remoteHistory: undefined }, invalid])), { statusCode: 400 });
+    assert.deepEqual(database.readTaskCenter('default'), state);
+    assert.deepEqual(database.readRemoteSessionHistory('default', source.id), before);
+  }
   await assert.rejects(center.command(heartbeat(sessions), { id: 'someone-else' }), { statusCode: 403 });
-  assert.deepEqual(database.readRemoteSessionHistory('default', legacy.id), before);
+  assert.deepEqual(database.readRemoteSessionHistory('default', source.id), before);
 });
 
 test('large project metadata gets its own heartbeat without skipping the first history record', async t => {
@@ -314,7 +327,7 @@ test('large project metadata gets its own heartbeat without skipping the first h
 test('image previews stay outside task state and unchanged heartbeats do not rewrite them', async t => {
   const key = randomUUID(), { database, cmd } = fixture(t, key), raw = rawDatabase(key);
   t.after(() => raw.close());
-  const remoteHistory = { offset: 0, total: 1, sourcePartial: false, truncated: false, messages: [{ role: 'user', text: '查看截图', images: [{ dataUrl: 'data:image/png;base64,' + 'A'.repeat(250000) }] }] };
+  const remoteHistory = { offset: 0, total: 1, sourcePartial: false, truncated: false, messages: [{ role: 'user', text: '查看截图', images: [{ dataUrl: 'data:image/png;base64,' + 'A'.repeat(250000), alt: '截图' }] }] };
   const sessions = Array.from({ length: 24 }, (_, i) => ({ nativeId: `image-${i}`, agent: 'claude', title: `截图 ${i}`, remoteHistory }));
   for (const session of sessions) await cmd(heartbeat([session]));
   const state = database.readTaskCenter('default');

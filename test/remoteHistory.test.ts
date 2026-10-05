@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeRemoteHistory } from '../src/remoteHistory.js';
+import { normalizeRemoteHistory, validateRemoteHistory } from '../src/remoteHistory.js';
 
 const image = 'data:image/png;base64,aGVsbG8=';
 test('remote history preserves roles, identities and raster previews while bounding text and image payloads', () => {
@@ -21,7 +21,23 @@ test('remote history preserves roles, identities and raster previews while bound
   assert.ok(normalized.messages[3].images?.every(image => !image.dataUrl && image.alt?.includes('未同步')));
   assert.ok(normalized.messages.reduce((sum, message) => sum + (message.text?.length || 0), 0) <= 23000);
   assert.equal(normalized.truncated, true);
-  assert.deepEqual(normalizeRemoteHistory(normalized), normalized, 'normalizing again at the server must preserve the connector payload');
+  assert.deepEqual(validateRemoteHistory(normalized), normalized, 'the server must accept the connector payload unchanged');
+});
+
+test('server validates current previews without repairing Unicode, truncating content or dropping invalid fields', () => {
+  const input = { offset: 0, total: 1, sourcePartial: false, truncated: false, messages: [{ role: 'user', text: '中文😀\\u0000' }] };
+  assert.deepEqual(validateRemoteHistory(input), input);
+  assert.deepEqual(validateRemoteHistory({ ...input, messages: [{ text: input.messages[0].text, role: 'user' }] }), input);
+  for (const row of [
+    { text: '\u0000' }, { text: '\ud800' }, { text: '\udc00' }, { text: 'x'.repeat(23001) },
+    { callId: 'call\u0000' }, { turnId: '\ud800' }, { timestamp: '\u0000' }, { name: '\udc00' },
+    { images: [{ alt: 'x'.repeat(501) }] }, { images: [{ alt: '\ud800' }] },
+    { images: [{ dataUrl: 'https://example.com/image.png', alt: '截图' }] },
+    { images: [{ dataUrl: 'data:image/png;base64,' + 'A'.repeat(300000), alt: '截图' }] },
+    { phase: 'final' }, { extra: 'unsupported' }
+  ]) {
+    assert.throws(() => validateRemoteHistory({ ...input, messages: [{ ...input.messages[0], ...row }] }), { statusCode: 400 });
+  }
 });
 
 test('remote history rejects invalid roles, ranges and oversized record arrays', () => {
