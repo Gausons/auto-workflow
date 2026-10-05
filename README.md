@@ -485,7 +485,7 @@ git push origin agent-v0.3.1
 
 #### 工作台网站部署
 
-main 的检查通过后自动发布到 `https://autoworkflow.top`；PR 不读取生产凭据、不推送镜像，也不发布。手动发布在 Actions 页面选择该工作流的 Run workflow，并选择 main。已被新提交替代的旧版本会跳过发布。CI 使用多阶段 Dockerfile 构建镜像，验证容器页面、静态资源、认证边界和重启，然后将同一个已验证镜像以 `ghcr.io/gausons/auto-workflow:<commit SHA>` 推送到 GHCR。新版服务器部署助手声明 `registry-v1` 能力后，生产机直接按不可变 digest 拉取该镜像；升级过渡期若服务器仍是旧助手，工作流会使用同一次构建导出的压缩镜像。生产公网健康检查通过后，同一镜像摘要才会提升为 `latest`；正式部署和问题核对仍应使用 commit SHA 或 digest，不依赖可变的 `latest`。`.dockerignore` 使用允许列表，环境文件、数据库和会话数据不进入镜像。
+main 的检查通过后自动发布到 `https://autoworkflow.top`；PR 不读取生产凭据、不推送镜像，也不发布。手动发布在 Actions 页面选择该工作流的 Run workflow，并选择 main。已被新提交替代的旧版本会跳过发布。CI 使用多阶段 Dockerfile 构建镜像，验证容器页面、静态资源、认证边界和重启，然后将同一个已验证镜像以 `ghcr.io/gausons/auto-workflow:<commit SHA>` 推送到 GHCR。新版服务器部署助手声明 `registry-v1` 能力后，生产机直接按不可变 digest 拉取该镜像；升级过渡期若服务器仍是旧助手，工作流会使用同一次构建导出的压缩镜像。生产容器健康检查通过后，同一镜像摘要会提升为 `latest`。域名备案期间默认跳过公网 HTTPS 检查；备案完成后将 `production` Environment 的 `DEPLOY_VERIFY_PUBLIC_HTTPS` 设为 `true`，恢复公网检查并要求其通过后才提升标签；正式部署和问题核对仍应使用 commit SHA 或 digest，不依赖可变的 `latest`。`.dockerignore` 使用允许列表，环境文件、数据库和会话数据不进入镜像。
 
 GHCR 使用工作流内置的 `GITHUB_TOKEN` 和最小 `packages: write` 权限，不需要新增长期 Registry 密钥。首次推送会创建 GitHub Package，仓库管理员需在 Package settings 中将 `auto-workflow` 设置为 Public，之后开源用户可直接拉取；若尚未公开，不影响当前 SSH 生产发布：
 
@@ -502,6 +502,7 @@ GitHub 的 `production` Environment 只允许 main 分支，包含以下配置�
 | Secret | `DEPLOY_KNOWN_HOSTS` | 通过可信 SSH 连接获取并固定的服务器主机公钥 |
 | Variable | `DEPLOY_HOST` | 生产服务器地址 |
 | Variable | `DEPLOY_USER` | 受限账号 `workflow-deploy` |
+| Variable | `DEPLOY_VERIFY_PUBLIC_HTTPS` | 仅为 `true` 时启用公网 HTTPS 检查；备案期间不设置或设为 `false`，备案完成后设为 `true` |
 
 生产 SSH 密钥只允许执行只读的 `capabilities` 探测，以及 `deploy <commit SHA> [sha256:<digest>]`，不能开启交互 shell 或端口转发。服务器上的 `/usr/local/bin/auto-workflow-ci-ssh` 和 `/usr/local/sbin/auto-workflow-deploy` 分别来自 `scripts/deploy/ssh-entrypoint.sh` 与 `scripts/deploy/release.sh`，归 root 所有；修改这些脚本后需由管理员检查并重新安装，普通镜像发布不会自动替换它们。部署账号不加入 docker 组。安装本版本的两个脚本并将 GHCR Package 设为 Public 后，下一次发布会自动切换到 registry 模式；确认服务器已连续成功使用该模式后，才可以另行删除过渡期的 Artifact 导出与旧命令兼容逻辑。
 
@@ -513,7 +514,7 @@ install -o root -g root -m 0755 scripts/deploy/release.sh /usr/local/sbin/auto-w
 install -o root -g root -m 0755 scripts/deploy/ssh-entrypoint.sh /usr/local/bin/auto-workflow-ci-ssh
 ```
 
-发布持有服务器文件锁，registry 模式先拉取精确 digest，过渡模式则载入传输的镜像；两种模式都会验证版本标签、运行平台及导入能力，再停旧容器、备份数据库和配置，启动新容器。首次迁移时停止旧 `auto-workflow.service`，容器验证成功后禁用该服务的开机启动。后续由 Docker 的 `unless-stopped` 策略负责开机启动和进程退出重启。健康检查失败时恢复旧容器或首次迁移前的 systemd 服务；数据库不会自动回退，以免覆盖数据或重复执行 Agent 指令。若数据库迁移与旧代码不兼容，需要停服并核对备份后人工恢复。公网 HTTPS 检查失败只报告失败，不自动回滚已启动的容器，也不会移动 GHCR 的 `latest` 标签。
+发布持有服务器文件锁，registry 模式先拉取精确 digest，过渡模式则载入传输的镜像；两种模式都会验证版本标签、运行平台及导入能力，再停旧容器、备份数据库和配置，启动新容器。首次迁移时停止旧 `auto-workflow.service`，容器验证成功后禁用该服务的开机启动。后续由 Docker 的 `unless-stopped` 策略负责开机启动和进程退出重启。健康检查失败时恢复旧容器或首次迁移前的 systemd 服务；数据库不会自动回退，以免覆盖数据或重复执行 Agent 指令。若数据库迁移与旧代码不兼容，需要停服并核对备份后人工恢复。启用公网 HTTPS 检查后，检查失败只报告失败，不自动回滚已启动的容器，也不会移动 GHCR 的 `latest` 标签。
 
 备份保存在 `/opt/auto-workflow/backups/`，包含 PostgreSQL 的 `postgres.dump` 一致性转储、环境配置和运行目录；含敏感数据，仅 root 可读，不上传 GitHub。`PREVIOUS_IMAGE`（首次迁移时为 `PREVIOUS_RELEASE`）记录前一版本，`/opt/auto-workflow/DOCKER_IMAGE` 记录当前版本。旧容器停止并关闭自动重启，保留供回退；当前不自动清理旧镜像、容器和备份，需定期检查磁盘。
 

@@ -14,6 +14,7 @@ test('CI publishes verified images, negotiates registry deployment and promotes 
   const publicCheck = workflow.indexOf('Verify public HTTPS');
   const promotion = workflow.indexOf('Promote deployed image to latest');
   assert.ok(publicCheck >= 0 && promotion > publicCheck);
+  assert.match(workflow.slice(publicCheck, workflow.indexOf('\n      - name:', publicCheck)), /if: steps\.revision\.outputs\.current == 'true' && vars\.DEPLOY_VERIFY_PUBLIC_HTTPS == 'true'/);
   assert.match(workflow.slice(promotion), /needs\.checks\.outputs\.verified_image/);
   assert.match(workflow.slice(promotion), /docker buildx imagetools create --tag "\$REGISTRY_IMAGE:latest" "\$VERIFIED_IMAGE"/);
   assert.match(workflow, /capability=.*capabilities[\s\S]*registry-v1/);
