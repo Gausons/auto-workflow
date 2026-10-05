@@ -1,11 +1,10 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
 import { HistoryComposer } from './HistoryComposer.js';
 import { InheritedContext } from './InheritedContext.js';
-import { HistoryImages } from './HistoryImages.js';
+import { HistoryTranscript } from './HistoryTranscript.js';
 import { canContinueHistory } from './historyCapabilities.js';
-import { renderMessages } from '../components/historyView.js';
 import type { HistoryMessage, Session } from '../../../shared/taskTypes.js';
 import type { InheritedContextInfo } from '../../../shared/contextPreviewTypes.js';
 
@@ -25,21 +24,6 @@ const statusLabel = (value: unknown) => statusLabels[String(value)] || '运行�
 const time = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('zh-CN') : '时间未知';
 const directoryName = (value: string | undefined) => value?.split('/').filter(Boolean).at(-1) || '未知工作区';
 const currentRoute = () => ({ active: /^\/history(?:\/|$)/.test(location.pathname) || /^#history(?:\/|$)/.test(location.hash), id: /^\/history\/([a-f0-9]{64})$/.exec(location.pathname)?.[1] || /^#history\/([a-f0-9]{64})$/.exec(location.hash)?.[1] || null });
-
-function SafeMessages({ messages }: { messages: HistoryMessage[] }) {
-  const element = useRef<HTMLDivElement>(null);
-  const rendered = useRef<string | null>(null);
-  useLayoutEffect(() => {
-    const node = element.current;
-    if (!node) return;
-    const scroll = node.closest<HTMLElement>('.history-chat-scroll');
-    const follow = scroll && scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 100;
-    const html = renderMessages(messages);
-    if (rendered.current !== html) { node.innerHTML = html; rendered.current = html; }
-    if (follow && scroll) scroll.scrollTop = scroll.scrollHeight;
-  }, [messages]);
-  return <div className="history-messages" data-history-transcript ref={element} />;
-}
 
 function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) {
   const [synced, setSynced] = useState<HistoryDetailResponse | null>(null);
@@ -90,10 +74,9 @@ function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) 
         ? <p className="history-meta">{first.total > 0 ? '来源连接器仍在同步旧版文本摘要。更新并重启连接器，再点击“刷新会话”，即可按消息展示。' : '尚未同步远程会话正文，请确认来源设备连接器在线且已开启摘要同步，或在来源设备查看完整会话。'}</p>
         : (session.recordMode === 'synced' ? range?.sourcePartial : session.partial) && <p className="history-warning">部分记录损坏、尚未写完或超出读取上限，当前展示部分内容。</p>}
       {first.inherited && <InheritedContext id={id} info={first.inherited} />}
-      {Boolean(session.syncedImageCount) && <HistoryImages sessionId={id} count={session.syncedImageCount!} />}
       {session.recordMode === 'excerpt' && messages.length > 0
-        ? <details className="history-legacy-excerpt"><summary>查看旧版文本摘要</summary><SafeMessages messages={messages} /></details>
-        : <SafeMessages messages={messages} />}
+        ? <details className="history-legacy-excerpt"><summary>查看旧版文本摘要</summary><HistoryTranscript session={session} messages={messages} /></details>
+        : <HistoryTranscript session={session} messages={messages} />}
       <div className="history-chat-footer"><span>{session.recordMode === 'excerpt' ? (first.total > 0 ? '已显示同步摘要 · 非完整历史' : '暂无同步摘要') : `已显示 ${messages.length} / ${synced?.total ?? first.total} 条${session.recordMode === 'synced' ? '已同步' : ''}记录`}</span>{!synced && detail.hasNextPage && <button className="button secondary" type="button" disabled={detail.isFetchingNextPage} onClick={() => void detail.fetchNextPage()}>加载更多记录</button>}</div>
       <div id="historyLiveOutput" />
     </div></div>

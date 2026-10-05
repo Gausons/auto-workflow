@@ -1248,6 +1248,11 @@ body[data-view="history"] .main { padding: 0; min-width: 0; }
 .history-page .button:disabled { opacity: .4; }
 #historyStatus, .history-browser > p[role] { color: #888; font-size: 11px; line-height: 1.7; padding: 6px; }
 .history-list { display: grid; gap: 4px; min-width: 0; }
+@media (min-width: 761px) {
+  .history-browser { display: flex; flex-direction: column; overflow: hidden; }
+  .history-browser > :not(.history-list) { flex-shrink: 0; }
+  .history-list { align-content: start; min-height: 80px; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
+}
 .history-card { display: grid; gap: 6px; width: 100%; padding: 13px 12px; border: 0; border-radius: 9px; color: #333; background: transparent; cursor: pointer; text-align: left; min-width: 0; }
 .history-card:hover { background: #f7f7f7; }
 .history-card[aria-pressed="true"] { background: #efefef; }

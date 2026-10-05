@@ -88,7 +88,7 @@ export function renderImages(images: HistoryImage[] = []) {
     return valid ? `<figure><img src="${escape(image.dataUrl)}" alt="${escape(image.alt || '会话图片')}" loading="lazy" decoding="async"><figcaption>会话图片</figcaption></figure>` : `<p class="history-image-unavailable">${escape(image.alt || '图片无法预览')}</p>`;
   }).join('')}</div>`;
 }
-export function renderMessages(messages: HistoryMessage[]) {
+export function renderMessages(messages: HistoryMessage[], images = (message: HistoryMessage) => renderImages(message.images)) {
   let html = '', work: HistoryMessage[] = [];
   function flushWork() {
     if (!work.length) return;
@@ -97,8 +97,8 @@ export function renderMessages(messages: HistoryMessage[]) {
     html += `<details class="history-work"><summary><span class="history-work-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="m7 8 4 4-4 4m6 0h4"/></svg></span><strong>${label}</strong><span class="history-chevron" aria-hidden="true">›</span></summary><div class="history-work-body">`;
     for (const m of work) {
       html += m.role === 'assistant'
-        ? `<div class="history-work-commentary history-markdown">${renderMarkdown(m.text)}${renderImages(m.images)}${renderMessageTime(m.timestamp)}</div>`
-        : `<details class="history-tool"><summary>${escape(m.role === 'tool_call' ? m.name || '工具调用' : '工具结果')}<span>${escape(m.callId || '')}</span></summary>${renderMessageTime(m.timestamp)}<pre>${escape(m.text)}</pre>${renderImages(m.images)}</details>`;
+        ? `<div class="history-work-commentary history-markdown">${renderMarkdown(m.text)}${images(m)}${renderMessageTime(m.timestamp)}</div>`
+        : `<details class="history-tool"><summary>${escape(m.role === 'tool_call' ? m.name || '工具调用' : '工具结果')}<span>${escape(m.callId || '')}</span></summary>${renderMessageTime(m.timestamp)}<pre>${escape(m.text)}</pre>${images(m)}</details>`;
     }
     html += '</div></details>'; work = [];
   }
@@ -110,7 +110,7 @@ export function renderMessages(messages: HistoryMessage[]) {
       continue;
     }
     flushWork();
-    html += m.role === 'user' ? `<article class="history-message user"><span class="history-sr-only">用户</span><div class="history-message-body">${escape(m.text)}${renderImages(m.images)}</div>${renderMessageTime(m.timestamp)}</article>` : `<article class="history-message assistant"><span class="history-sr-only">助手</span><div class="history-message-body history-markdown">${renderMarkdown(m.text)}${renderImages(m.images)}</div>${renderMessageTime(m.timestamp)}</article>`;
+    html += m.role === 'user' ? `<article class="history-message user"><span class="history-sr-only">用户</span><div class="history-message-body">${escape(m.text)}${images(m)}</div>${renderMessageTime(m.timestamp)}</article>` : `<article class="history-message assistant"><span class="history-sr-only">助手</span><div class="history-message-body history-markdown">${renderMarkdown(m.text)}${images(m)}</div>${renderMessageTime(m.timestamp)}</article>`;
   }
   flushWork();
   return html || '<p class="history-meta">此会话暂无可显示的对话。</p>';

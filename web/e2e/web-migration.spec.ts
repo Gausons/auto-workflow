@@ -16,33 +16,38 @@ async function login(page: import('@playwright/test').Page) {
   await expect(page.getByRole('heading', { name: '任务中心', exact: true })).toBeVisible();
 }
 
-test('new remote images remain viewable outside the latest 30 records and load only when selected', async ({ page, request }) => {
+test('remote images appear directly outside and inside the preview window and load near the viewport', async ({ page, request }) => {
   const { token } = await (await request.post('/api/auth/login', { data: { username: 'owner', password } })).json() as { token: string };
   const headers = { Authorization: `Bearer ${token}` }, deviceId = 'image-browser-source', nativeId = 'image-browser-session';
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
   const dataUrl = `data:image/png;base64,${Buffer.concat([png, Buffer.alloc(300000)]).toString('base64')}`;
   const image = prepareSessionImage(1, 0, '这张截图来自会话开头', { dataUrl, alt: '完整原始截图' });
+  const inlineImage = prepareSessionImage(115, 0, '最近的截图', { dataUrl, alt: '消息中的截图' });
   const remoteHistory = { offset: 85, total: 115, sourcePartial: false, truncated: false,
-    messages: Array.from({ length: 30 }, (_, i) => ({ role: 'assistant', text: `最近记录 ${86 + i}` })) };
+    messages: [...Array.from({ length: 29 }, (_, i) => ({ role: 'assistant', text: `最近记录 ${86 + i}` })), { role: 'user', text: '最近的截图', images: [{ external: true, alt: '图片单独同步' }] }] };
   expect((await request.post('/api/task-center', { headers, data: { action: 'heartbeat', deviceId, name: '图片浏览器设备', agents: ['codex'],
     sessions: [{ nativeId, agent: 'codex', title: '新增图片查看回归', remoteHistory }] } })).ok()).toBeTruthy();
   expect((await request.post('/api/task-center/history-images', { headers, data: { deviceId, nativeId, agent: 'codex', image } })).ok()).toBeTruthy();
+  expect((await request.post('/api/task-center/history-images', { headers, data: { deviceId, nativeId, agent: 'codex', image: inlineImage } })).ok()).toBeTruthy();
   const { sessions } = await (await request.get('/api/agent-sessions', { headers })).json() as { sessions: Array<{ id: string; deviceId: string }> };
   const id = sessions.find(session => session.deviceId === deviceId)!.id;
   await login(page);
   const reads: string[] = [];
-  page.on('request', req => { if (req.url().includes(`/images/${image.id}`)) reads.push(req.url()); });
+  page.on('request', req => { if (/\/images\/[a-f0-9]{64}$/.test(req.url())) reads.push(req.url()); });
   await page.goto(`/history/${id}`);
   await expect(page.getByText('已同步 30 / 115 条记录', { exact: true })).toBeVisible();
-  await page.getByText('会话图片（1）', { exact: true }).click();
   await expect(page.getByText('这张截图来自会话开头')).toBeVisible();
-  expect(reads).toHaveLength(0);
-  await page.getByRole('button', { name: '第 1 条记录 · 图片 1' }).click();
   const preview = page.getByAltText('完整原始截图');
   await expect(preview).toBeVisible();
   await expect.poll(() => preview.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true);
   expect(reads).toHaveLength(1);
   await expect(page.getByRole('link', { name: '下载原图' })).toHaveAttribute('href', dataUrl);
+  await expect(page.getByText('以下图片来自更早的记录，完整正文未同步。')).toBeVisible();
+  await page.locator('.history-message.user').filter({ hasText: '最近的截图' }).scrollIntoViewIfNeeded();
+  const inlinePreview = page.locator('.history-message.user').getByAltText('消息中的截图');
+  await expect(inlinePreview).toBeVisible();
+  await expect.poll(() => inlinePreview.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true);
+  expect(reads).toHaveLength(2);
 });
 
 test('login, normal URLs, old hash links and deep refresh', async ({ page }) => {
@@ -111,6 +116,23 @@ test('viewer cannot create or execute tasks', async ({ page, request }) => {
   await page.goto('/tasks/new');
   await expect(page.getByText('当前账号没有创建任务权限。')).toBeVisible();
   await expect(page.getByRole('button', { name: '创建并发送任务' })).toBeDisabled();
+});
+
+test('history list scrolls independently while search and filters stay visible', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  const sessions = Array.from({ length: 30 }, (_, index) => ({ id: index.toString(16).padStart(64, '0'), agent: 'codex', agentLabel: 'Codex', deviceId: 'remote', title: `历史会话 ${index + 1}`, cwd: '/repo', status: 'completed', createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-05T00:00:00Z', messageCount: 95, recordMode: 'synced', partial: true }));
+  await page.route('**/api/agent-sessions?*', route => route.fulfill({ json: { offset: 0, limit: 30, total: 30, scope: 'all', providers: [{ id: 'codex', label: 'Codex', status: 'available' }], workspaces: [], sessions } }));
+  await login(page); await page.goto('/history');
+  const search = page.getByRole('textbox', { name: '搜索会话' });
+  await expect(search).toBeVisible();
+  const before = await search.boundingBox();
+  await page.getByRole('button', { name: /^历史会话 30 / }).scrollIntoViewIfNeeded();
+  await expect(search).toBeInViewport();
+  await expect(page.getByRole('combobox', { name: '工作区', exact: true })).toBeInViewport();
+  expect((await search.boundingBox())?.y).toBe(before?.y);
+  expect(await page.locator('.history-list').evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+  expect(await page.getByRole('complementary', { name: '历史会话列表' }).evaluate(element => element.scrollTop)).toBe(0);
+  await page.screenshot({ path: testInfo.outputPath('history-fixed-filters.png') });
 });
 
 test('history continuation keeps the same requestId after an uncertain response', async ({ page }) => {
