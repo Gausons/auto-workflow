@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { prepareSessionImage } from '../../src/historyImages.js';
 
 const password = 'Test-Web-E2E-Password-2026';
 
@@ -14,6 +15,35 @@ async function login(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await expect(page.getByRole('heading', { name: '任务中心', exact: true })).toBeVisible();
 }
+
+test('new remote images remain viewable outside the latest 30 records and load only when selected', async ({ page, request }) => {
+  const { token } = await (await request.post('/api/auth/login', { data: { username: 'owner', password } })).json() as { token: string };
+  const headers = { Authorization: `Bearer ${token}` }, deviceId = 'image-browser-source', nativeId = 'image-browser-session';
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+  const dataUrl = `data:image/png;base64,${Buffer.concat([png, Buffer.alloc(300000)]).toString('base64')}`;
+  const image = prepareSessionImage(1, 0, '这张截图来自会话开头', { dataUrl, alt: '完整原始截图' });
+  const remoteHistory = { offset: 85, total: 115, sourcePartial: false, truncated: false,
+    messages: Array.from({ length: 30 }, (_, i) => ({ role: 'assistant', text: `最近记录 ${86 + i}` })) };
+  expect((await request.post('/api/task-center', { headers, data: { action: 'heartbeat', deviceId, name: '图片浏览器设备', agents: ['codex'],
+    sessions: [{ nativeId, agent: 'codex', title: '新增图片查看回归', remoteHistory }] } })).ok()).toBeTruthy();
+  expect((await request.post('/api/task-center/history-images', { headers, data: { deviceId, nativeId, agent: 'codex', image } })).ok()).toBeTruthy();
+  const { sessions } = await (await request.get('/api/agent-sessions', { headers })).json() as { sessions: Array<{ id: string; deviceId: string }> };
+  const id = sessions.find(session => session.deviceId === deviceId)!.id;
+  await login(page);
+  const reads: string[] = [];
+  page.on('request', req => { if (req.url().includes(`/images/${image.id}`)) reads.push(req.url()); });
+  await page.goto(`/history/${id}`);
+  await expect(page.getByText('已同步 30 / 115 条记录', { exact: true })).toBeVisible();
+  await page.getByText('会话图片（1）', { exact: true }).click();
+  await expect(page.getByText('这张截图来自会话开头')).toBeVisible();
+  expect(reads).toHaveLength(0);
+  await page.getByRole('button', { name: '第 1 条记录 · 图片 1' }).click();
+  const preview = page.getByAltText('完整原始截图');
+  await expect(preview).toBeVisible();
+  await expect.poll(() => preview.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true);
+  expect(reads).toHaveLength(1);
+  await expect(page.getByRole('link', { name: '下载原图' })).toHaveAttribute('href', dataUrl);
+});
 
 test('login, normal URLs, old hash links and deep refresh', async ({ page }) => {
   await login(page);

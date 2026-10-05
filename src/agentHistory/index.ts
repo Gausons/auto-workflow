@@ -9,6 +9,7 @@ import { httpError } from '../rbac.js';
 import type { Environment } from '../issueSources/types.js';
 import { defaultHistoryAdapters } from './adapters.js';
 import type { HistoryAdapter, HistoryEntry, HistorySession, JsonObject } from './types.js';
+import { prepareSessionImage } from '../historyImages.js';
 
 interface AgentHistoryOptions {
   environment?: Environment;
@@ -170,6 +171,18 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
     };
     return { offset: number('offset', 0, 1000000), limit: number('limit', defaultLimit, 200) };
   }
+  async function readSession(id: string) {
+    if (!/^[a-f0-9]{64}$/.test(id)) throw httpError(404, '会话不存在');
+    const result = await index(), source = result.files.get(id);
+    if (!source || scope() !== result.allowed) throw httpError(404, '会话不存在');
+    let session;
+    try {
+      if (await realpath(source.file) !== source.file) throw new Error('source changed');
+      session = await parse(source.file, source.adapter, result.allowed, await stat(source.file), true);
+    } catch { throw httpError(404, '会话已移除或无法读取'); }
+    if (!session || scope() !== result.allowed) throw httpError(404, '会话不存在');
+    return session;
+  }
   return {
     async catalog() {
       const result = await index();
@@ -204,17 +217,14 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
     },
     async detail(id: string, params = new URLSearchParams()) {
       const { offset, limit } = pagination(params, 100);
-      if (!/^[a-f0-9]{64}$/.test(id)) throw httpError(404, '会话不存在');
-      const result = await index(), source = result.files.get(id);
-      if (!source || scope() !== result.allowed) throw httpError(404, '会话不存在');
-      let session;
-      try {
-        if (await realpath(source.file) !== source.file) throw new Error('source changed');
-        session = await parse(source.file, source.adapter, result.allowed, await stat(source.file), true);
-      } catch { throw httpError(404, '会话已移除或无法读取'); }
-      if (!session || scope() !== result.allowed) throw httpError(404, '会话不存在');
+      const session = await readSession(id);
       const { messages = [], ...summary } = session;
       return { session: summary, messages: messages.slice(offset, offset + limit), total: messages.length, offset, limit };
+    },
+    async images(id: string) {
+      const session = await readSession(id);
+      return (session.messages || []).flatMap((message, record) => message.images.map((image, index) =>
+        prepareSessionImage(record + 1, index, message.text, image, message.timestamp)));
     }
   };
 }

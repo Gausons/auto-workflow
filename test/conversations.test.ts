@@ -10,6 +10,7 @@ import { createSessionDelivery } from '../src/sessionDelivery/index.js';
 import { createConversations } from '../src/conversations.js';
 import { createCodexExecution } from '../src/codexExecution.js';
 import { createTaskCenter } from '../src/taskCenter.js';
+import { createHistoryImages } from '../src/historyImages.js';
 import { RemoteCodexWorker } from '../src/remoteCodexWorker.js';
 import { detachSnapshot } from '@auto-workflow/context-engine/detached-bundle';
 import { contextPrompt, freezeContext, readContext } from '../src/contextCompiler.js';
@@ -89,7 +90,14 @@ test('connector history renders the same structured messages as local history an
     line({ type: 'response_item', payload: { type: 'function_call_output', output: '源码内容', call_id: 'call-1' } }) + line(message('**完成检查**', 'assistant')));
   const center = createTaskCenter({ database: f.database, tenantId: 'default', history: f.history });
   const sessionIndex: Record<string, string> = {};
-  const request = (method: string, body?: unknown) => method === 'GET' ? center.snapshot() : center.command(body, { id: 'owner' });
+  const images = createHistoryImages(f.database, 'default');
+  const request = async (method: string, body?: unknown, endpoint?: string) => {
+    if (endpoint?.startsWith('/api/agent-sessions/')) {
+      const url = new URL(endpoint, 'http://test'); return images.list(url.pathname.split('/')[3], url.searchParams);
+    }
+    if (endpoint === '/api/task-center/history-images') return images.upload(body as Record<string, unknown>, { id: 'owner' });
+    return method === 'GET' ? center.snapshot() : center.command(body, { id: 'owner' });
+  };
   const options = { request, history: f.history, deviceId: 'remote', name: '远端', outputDir: path.join(f.root, 'packets'), includeExcerpts: true, sessionIndex };
   await syncDeviceOnce(options);
   const snapshot = await center.snapshot();
@@ -98,7 +106,10 @@ test('connector history renders the same structured messages as local history an
   const detail = f.service.remoteDetail(remote.id)!;
   assert.equal(detail.session.recordMode, 'synced');
   assert.equal(detail.session.partial, false);
-  assert.deepEqual(detail.messages, local.messages.map(({ images, ...message }) => ({ ...message, images: images.map(({ dataUrl, alt }) => ({ dataUrl, alt })) })));
+  assert.deepEqual(detail.messages, local.messages.map(({ images, ...message }) => ({ ...message, images: images.map(() => ({ external: true, alt: '图片单独同步，可在「会话图片」中查看。' })) })));
+  const stored = images.list(remote.id, new URLSearchParams());
+  assert.equal(stored.total, 1);
+  assert.equal(images.read(remote.id, stored.images[0].id).dataUrl, image);
   assert.equal(remote.remoteHistory, undefined, 'global snapshots exclude structured preview bodies');
   assert.equal(detail.session.remoteHistory, undefined, 'detail session metadata excludes the unpaginated body');
   assert.equal(f.database.readTaskCenter('default').sessions.find(session => session.id === remote.id)?.remoteHistory, undefined, 'persisted task state also excludes preview bodies');

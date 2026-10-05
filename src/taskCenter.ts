@@ -191,6 +191,7 @@ export function createTaskCenter({ database, tenantId, history }: { database: Ta
             database.setRemoteSessionHistory(tenantId, id, remoteHistory ?? null);
             const summary = remoteHistorySummary(item);
             const old = data.sessions.findIndex(session => session.id === id);
+            if (remoteHistory && old >= 0) summary.syncedImageCount = data.sessions[old].syncedImageCount;
             if (old < 0) data.sessions.push(summary); else data.sessions[old] = summary;
           }
           return { deviceId: id };

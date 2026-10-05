@@ -3,6 +3,13 @@ import assert from 'node:assert/strict';
 import { normalizeRemoteHistory, validateRemoteHistory } from '../src/remoteHistory.js';
 
 const image = 'data:image/png;base64,aGVsbG8=';
+test('separately stored images do not consume the inline preview budget or mark previews truncated', () => {
+  const input = { offset: 0, total: 1, sourcePartial: false, truncated: false, messages: [
+    { role: 'user', text: '查看图片', images: [{ external: true as const, alt: '图片单独同步，可在「会话图片」中查看。' }] }
+  ] };
+  assert.deepEqual(normalizeRemoteHistory(input), input);
+  assert.deepEqual(validateRemoteHistory(input), input);
+});
 test('remote history preserves roles, identities and raster previews while bounding text and image payloads', () => {
   const normalized = normalizeRemoteHistory({ offset: 10, total: 14, sourcePartial: false, truncated: false, messages: [
     { role: 'user', text: '查看图片', timestamp: '2026-10-02T00:00:00Z', turnId: 'turn', images: [{ dataUrl: image, alt: '截图' }] },

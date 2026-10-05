@@ -106,6 +106,7 @@ export interface Session {
   recordMode?: 'excerpt' | 'synced';
   remoteHistory?: RemoteHistory;
   syncedRange?: Omit<RemoteHistory, 'messages'>;
+  syncedImageCount?: number;
   partial?: boolean;
   missing?: boolean;
   managed?: boolean;
@@ -288,7 +289,7 @@ export interface HistoryMessage {
   callId?: string;
   turnId?: string;
   timestamp?: string;
-  images?: Array<{ dataUrl?: string; alt?: string }>;
+  images?: Array<{ dataUrl?: string; alt?: string; external?: true }>;
 }
 
 export interface RemoteHistory {

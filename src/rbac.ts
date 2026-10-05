@@ -25,6 +25,8 @@ export function permissionForRoute(method: string | undefined, pathname: string)
   if (pathname === '/api/task-center/updates' && method === 'GET') return 'read';
   if (pathname === '/api/task-center/git' && ['GET', 'POST'].includes(method || '')) return 'work.execute';
   if (pathname === '/api/task-center/git-action' && method === 'POST') return 'work.execute';
+  if (pathname === '/api/task-center/history-images' && method === 'POST') return 'work.execute';
+  if (/^\/api\/agent-sessions\/[a-f0-9]{64}\/images(?:\/[a-f0-9]{64})?$/.test(pathname) && method === 'GET') return 'read';
   if (pathname === '/api/task-center/directory-picker' && ['GET', 'POST'].includes(method || '')) return 'work.execute';
   if (['/api/task-center/execute', '/api/task-center/execution-action', '/api/task-center/directory-action'].includes(pathname) && method === 'POST') return 'work.execute';
   if (pathname === '/api/task-center' && ['GET', 'POST'].includes(method || '')) return method === 'GET' ? 'read' : 'work.execute';

@@ -82,7 +82,10 @@ export const codexHistoryAdapter: HistoryAdapter = {
     if (row.type !== 'response_item') return {};
     if (p.type === 'message' && typeof p.role === 'string' && ['user', 'assistant'].includes(p.role)) return { entries: [{ ...messageEntry(p.role, p.content, timestamp), ...(p.role === 'assistant' && (p.phase === 'commentary' || p.phase === 'final') ? { phase: p.phase } : {}) }] };
     if (typeof p.type === 'string' && ['function_call', 'custom_tool_call'].includes(p.type)) return { entries: [entry('tool_call', p.arguments ?? p.input, timestamp, { name: optionalText(p.name), callId: optionalText(p.call_id) })] };
-    if (typeof p.type === 'string' && ['function_call_output', 'custom_tool_call_output'].includes(p.type)) return { entries: [entry('tool_result', p.output, timestamp, { callId: optionalText(p.call_id) })] };
+    if (typeof p.type === 'string' && ['function_call_output', 'custom_tool_call_output'].includes(p.type)) {
+      const images = imageAttachments(p.output);
+      return { entries: [entry('tool_result', images.length ? blocksText(p.output) : p.output, timestamp, { callId: optionalText(p.call_id), images })] };
+    }
     return {};
   }
 };
@@ -106,7 +109,7 @@ export const claudeHistoryAdapter: HistoryAdapter = {
     for (const value of content) {
       const block = record(value);
       if (block.type === 'tool_use') result.entries.push(entry('tool_call', block.input, row.timestamp, { name: optionalText(block.name), callId: optionalText(block.id) }));
-      else if (block.type === 'tool_result') result.entries.push(entry('tool_result', blocksText(block.content), row.timestamp, { callId: optionalText(block.tool_use_id) }));
+      else if (block.type === 'tool_result') result.entries.push(entry('tool_result', blocksText(block.content), row.timestamp, { callId: optionalText(block.tool_use_id), images: imageAttachments(block.content) }));
       else if (typeof block.type === 'string' && ['text', 'image'].includes(block.type)) result.entries.push(messageEntry(row.type, [block], row.timestamp));
     }
     return result;

@@ -5,13 +5,26 @@ import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
 import { createAgentHistory } from '../src/agentHistory/index.js';
-import { cleanUserContext } from '../src/agentHistory/adapters.js';
+import { cleanUserContext, codexHistoryAdapter, claudeHistoryAdapter } from '../src/agentHistory/adapters.js';
 import { createApp } from '../scripts/testing/database.js';
 import { canonicalWorkspace } from '../src/tenancy.js';
 import type { Environment } from '../src/issueSources/types.js';
 import type { HistoryAdapter, JsonObject } from '../src/agentHistory/types.js';
 
 const timestamp = '2026-09-08T01:00:00Z';
+test('tool image blocks are extracted without embedding Base64 in visible text', () => {
+  const image = 'data:image/png;base64,aGVsbG8=';
+  const codex = codexHistoryAdapter.decode({ type: 'response_item', timestamp, payload: { type: 'function_call_output', call_id: 'tool',
+    output: [{ type: 'input_text', text: '工具截图' }, { type: 'input_image', image_url: image }] } });
+  assert.equal(codex.entries?.[0].text, '工具截图');
+  assert.equal(codex.entries?.[0].images[0].dataUrl, image);
+  const claude = claudeHistoryAdapter.decode({ type: 'user', timestamp, message: { content: [{ type: 'tool_result', tool_use_id: 'tool',
+    content: [{ type: 'text', text: '工具截图' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' } }] }] } });
+  assert.equal(claude.entries?.[0].images[0].dataUrl, image);
+  assert.equal(claude.entries?.[0].text, '工具截图');
+  const legacy = codexHistoryAdapter.decode({ type: 'response_item', payload: { type: 'function_call_output', output: [{ result: '工具结果' }] } });
+  assert.equal(legacy.entries?.[0].text, '[{"result":"工具结果"}]');
+});
 const codex = (cwd: string | undefined, id = 'same-id') => [
   { type: 'session_meta', timestamp, payload: { id, cwd, timestamp, git: { branch: 'main' } } },
   { type: 'event_msg', timestamp, payload: { type: 'user_message', message: '修复登录' } },

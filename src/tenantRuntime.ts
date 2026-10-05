@@ -10,6 +10,7 @@ import { createAgentHistory } from './agentHistory/index.js';
 import { createTaskCenter } from './taskCenter.js';
 import { createCodexExecution } from './codexExecution.js';
 import { createRemoteGit } from './remoteGit.js';
+import { createHistoryImages } from './historyImages.js';
 import { createConversations } from './conversations.js';
 import { createContextModelSummarizer } from './contextModelSummary.js';
 import { applyAssignmentBusinessRules, buildAssignmentJsonSchema, buildAssignmentSystemPrompt, buildAssignmentUserPayload, isAssignmentCandidate, normalizeAssignmentPeople, normalizeAssignmentRecommendation } from './assignmentEngine.js';
@@ -190,6 +191,13 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     if (url.pathname === '/api/task-center/execution-action') { sendJson(res, 200, await codexExecution.action(await readJson(req, 8_000_000), requestIdentity.getStore()!.user)); return; }
     if (url.pathname === '/api/task-center') {
       sendJson(res, 200, req.method === 'GET' ? await taskCenter.snapshot() : await taskCenter.command(await readJson(req), requestIdentity.getStore()!.user)); return;
+    }
+    if (req.method === 'POST' && url.pathname === '/api/task-center/history-images') {
+      sendJson(res, 200, historyImages.upload(await readJson(req, 17_000_000), requestIdentity.getStore()!.user)); return;
+    }
+    const historyImage = /^\/api\/agent-sessions\/([a-f0-9]{64})\/images(?:\/([a-f0-9]{64}))?$/.exec(url.pathname);
+    if (req.method === 'GET' && historyImage) {
+      sendJson(res, 200, historyImage[2] ? historyImages.read(historyImage[1], historyImage[2]) : historyImages.list(historyImage[1], url.searchParams)); return;
     }
     if (req.method === 'GET' && url.pathname === '/api/sessions') { sendJson(res, 200, await sessionDelivery.list(url.searchParams)); return; }
     const delivery = /^\/api\/sessions\/([a-f0-9]{64})(?:\/(events|records))?$/.exec(url.pathname);
@@ -667,6 +675,7 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
   const taskCenter = createTaskCenter({ database, tenantId: tenant.id, history: agentHistory });
   const codexExecution = createCodexExecution({ database, attachmentRoot: path.join(rootDir, '.workflow-data', 'attachments', createHash('sha256').update(tenant.id).digest('hex')), tenantId: tenant.id, workspace: () => state.config.codexWorkspaceDir, history: agentHistory, environment });
   const remoteGit = createRemoteGit(database, tenant.id);
+  const historyImages = createHistoryImages(database, tenant.id);
   const summarize = parseBooleanConfig(undefined, environment.ENABLE_CONTEXT_SUMMARY, Boolean(environment.OPENAI_API_KEY))
     ? createContextModelSummarizer({ apiKey: environment.OPENAI_API_KEY, baseUrl: state.config.openaiBaseUrl, model: environment.CONTEXT_SUMMARY_MODEL || state.config.aiAssignmentModel, timeoutMs: state.config.openaiTimeoutMs })
     : undefined;

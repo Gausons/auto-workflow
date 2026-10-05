@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
 import { HistoryComposer } from './HistoryComposer.js';
 import { InheritedContext } from './InheritedContext.js';
+import { HistoryImages } from './HistoryImages.js';
 import { canContinueHistory } from './historyCapabilities.js';
 import { renderMessages } from '../components/historyView.js';
 import type { HistoryMessage, Session } from '../../../shared/taskTypes.js';
@@ -89,6 +90,7 @@ function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) 
         ? <p className="history-meta">{first.total > 0 ? '来源连接器仍在同步旧版文本摘要。更新并重启连接器，再点击“刷新会话”，即可按消息展示。' : '尚未同步远程会话正文，请确认来源设备连接器在线且已开启摘要同步，或在来源设备查看完整会话。'}</p>
         : (session.recordMode === 'synced' ? range?.sourcePartial : session.partial) && <p className="history-warning">部分记录损坏、尚未写完或超出读取上限，当前展示部分内容。</p>}
       {first.inherited && <InheritedContext id={id} info={first.inherited} />}
+      {Boolean(session.syncedImageCount) && <HistoryImages sessionId={id} count={session.syncedImageCount!} />}
       {session.recordMode === 'excerpt' && messages.length > 0
         ? <details className="history-legacy-excerpt"><summary>查看旧版文本摘要</summary><SafeMessages messages={messages} /></details>
         : <SafeMessages messages={messages} />}

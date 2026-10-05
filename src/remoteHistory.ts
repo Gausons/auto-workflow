@@ -51,6 +51,7 @@ export function normalizeRemoteHistory(value: unknown): RemoteHistory {
     if (Array.isArray(row.images)) message.images = row.images.map(value => {
       const image = object(value);
       const alt = typeof image.alt === 'string' ? previewText(image.alt, 500) : '会话图片';
+      if (image.external === true && image.dataUrl === undefined) return { external: true as const, alt };
       if (typeof image.dataUrl === 'string' && image.dataUrl.length <= imageBudget && /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=\r\n]+$/.test(image.dataUrl)) {
         imageBudget -= image.dataUrl.length;
         return { dataUrl: image.dataUrl, alt };

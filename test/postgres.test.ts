@@ -17,15 +17,17 @@ test('PostgreSQL initializes new schemas, upgrades version 1, preserves data and
   const raw = rawDatabase(key);
   raw.prepare('CREATE TABLE import_receipts (digest TEXT PRIMARY KEY)').run();
   raw.prepare('DROP TABLE remote_session_history').run();
+  raw.prepare('DROP TABLE remote_session_images').run();
   raw.prepare('DELETE FROM schema_migrations WHERE version >= 2').run();
   raw.close();
   const upgraded = openDatabase(key);
   assert.equal(upgraded.getTenant('default')?.id, 'default');
   upgraded.close();
   const check = rawDatabase(key);
-  assert.equal(Number(check.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()?.version), 3);
+  assert.equal(Number(check.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()?.version), 4);
   assert.equal(check.prepare("SELECT to_regclass(current_schema() || '.import_receipts') AS table_name").get()?.table_name, null);
   assert.equal(Number(check.prepare('SELECT count(*) AS count FROM remote_session_history').get()?.count), 0);
+  assert.equal(Number(check.prepare('SELECT count(*) AS count FROM remote_session_images').get()?.count), 0);
   check.prepare('INSERT INTO schema_migrations VALUES (999)').run();
   assert.throws(() => openDatabase(key), /PostgreSQL/);
   check.prepare('DELETE FROM schema_migrations WHERE version = 999').run();
@@ -48,7 +50,8 @@ test('version 3 extracts inline previews once while preserving legacy excerpts, 
   db.close();
   const raw = rawDatabase(key);
   raw.prepare('DROP TABLE remote_session_history').run();
-  raw.prepare('DELETE FROM schema_migrations WHERE version = 3').run();
+  raw.prepare('DROP TABLE remote_session_images').run();
+  raw.prepare('DELETE FROM schema_migrations WHERE version >= 3').run();
   raw.close();
   const upgraded = openDatabase(key);
   const after = upgraded.readTaskCenter('default');
@@ -68,6 +71,21 @@ test('version 3 extracts inline previews once while preserving legacy excerpts, 
   assert.deepEqual(reopened.readTaskCenter('default'), after);
   assert.equal(reopened.readRemoteSessionHistory('default', 'shared-id')?.total, 2);
   reopened.close();
+});
+
+test('version 4 creates independent image storage without backfilling existing previews', () => {
+  const key = randomUUID(), db = openDatabase(key);
+  db.createTenant({ id: 'default', token: 'a'.repeat(43) });
+  const history = { offset: 0, total: 1, sourcePartial: false, truncated: false, messages: [{ role: 'user', text: '', images: [{ dataUrl: 'data:image/png;base64,aGVsbG8=' }] }] };
+  db.mutateTaskCenter('default', () => db.setRemoteSessionHistory('default', 'old', history));
+  db.close();
+  const raw = rawDatabase(key);
+  raw.prepare('DROP TABLE remote_session_images').run();
+  raw.prepare('DELETE FROM schema_migrations WHERE version = 4').run(); raw.close();
+  const upgraded = openDatabase(key);
+  assert.equal(upgraded.listRemoteSessionImages('default', 'old').total, 0);
+  assert.deepEqual(upgraded.readRemoteSessionHistory('default', 'old')?.messages, history.messages);
+  upgraded.close();
 });
 
 test('PostgreSQL serializes competing processes and recovers from a terminated connection without retries', async () => {

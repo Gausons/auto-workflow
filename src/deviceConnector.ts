@@ -11,10 +11,12 @@ import { normalizeRemoteHistory, REMOTE_HISTORY_LIMIT } from './remoteHistory.js
 import type { AgentProject, RemoteHistory, TaskCenterData } from '../shared/taskTypes.js';
 import type { Environment } from './issueSources/types.js';
 import type { HistoryEntry, HistorySession } from './agentHistory/types.js';
+import type { SessionImage } from '../shared/historyImageTypes.js';
 
 interface History {
   catalog(): Promise<{ providers: Array<{ id: string }>; sessions: HistorySession[] }>;
   detail?(id: string, params?: URLSearchParams): Promise<{ messages: HistoryEntry[]; total?: number; session?: HistorySession }>;
+  images?(id: string): Promise<SessionImage[]>;
 }
 type Request = (method: string, body?: unknown, endpoint?: string) => Promise<unknown>;
 interface SyncOptions {
@@ -63,7 +65,7 @@ const sessionFingerprint = (session: HistorySession, includeExcerpts: boolean) =
 export async function syncDeviceOnce({ request, history, deviceId, name, outputDir, includeExcerpts = false, codexProjects, resumeCodex = false, sessionIndex }: SyncOptions) {
   const catalog = await history.catalog();
   const agents = catalog.providers.map(provider => provider.id);
-  const sessions: Array<{ value: DeviceSession; key: string; fingerprint: string }> = [];
+  const sessions: Array<{ value: DeviceSession; key: string; fingerprint: string; historyId: string }> = [];
   const currentKeys = new Set<string>();
   for (const s of catalog.sessions) {
     const nativeId = s.sessionId || s.id;
@@ -83,10 +85,12 @@ export async function syncDeviceOnce({ request, history, deviceId, name, outputD
         offset = Math.max(0, result.total - REMOTE_HISTORY_LIMIT);
         result = await history.detail(s.id, new URLSearchParams({ offset: String(offset), limit: String(REMOTE_HISTORY_LIMIT) }));
       }
-      remoteHistory = normalizeRemoteHistory({ messages: result.messages, offset, total: Math.max(result.session?.messageCount ?? result.total ?? s.messageCount, offset + result.messages.length), sourcePartial: result.session?.partial ?? s.partial, truncated: false });
+      const messages = history.images ? result.messages.map(message => ({ ...message, images: message.images.map(image => image.dataUrl
+        ? { external: true, alt: '图片单独同步，可在「会话图片」中查看。' } : image) })) : result.messages;
+      remoteHistory = normalizeRemoteHistory({ messages, offset, total: Math.max(result.session?.messageCount ?? result.total ?? s.messageCount, offset + result.messages.length), sourcePartial: result.session?.partial ?? s.partial, truncated: false });
       excerpt = result.messages.filter(message => ['user', 'assistant'].includes(message.role)).map(message => `${message.role}: ${message.text || ''}`).join('\n\n').slice(-23000);
     }
-    sessions.push({ key, fingerprint, value: { nativeId, agent: s.agent, agentLabel: s.agentLabel, title: s.title.slice(0, 120), cwd: s.cwd, status: s.status, createdAt: s.createdAt, updatedAt: s.updatedAt, excerpt, archived: s.archived === true, model: s.model, branch: s.branch, remoteHistory } });
+    sessions.push({ key, fingerprint, historyId: s.id, value: { nativeId, agent: s.agent, agentLabel: s.agentLabel, title: s.title.slice(0, 120), cwd: s.cwd, status: s.status, createdAt: s.createdAt, updatedAt: s.updatedAt, excerpt, archived: s.archived === true, model: s.model, branch: s.branch, remoteHistory } });
   }
   let firstHeartbeat = true;
   for (let i = 0; i < sessions.length || firstHeartbeat;) {
@@ -105,7 +109,28 @@ export async function syncDeviceOnce({ request, history, deviceId, name, outputD
       batch.push(item);
     } while (batch.length < 20);
     await request('POST', body);
-    if (sessionIndex) for (const item of batch) sessionIndex[item.key] = item.fingerprint;
+    for (const item of batch) {
+      if (includeExcerpts && history.images) {
+        // Do not bump the preview fingerprint format or backfill unchanged
+        // sessions. Images from changed sessions outlive the 30-record window.
+        const sessionId = createHash('sha256').update(`${deviceId}\0${item.value.agent}:${item.value.nativeId}`).digest('hex');
+        const images = await history.images(item.historyId);
+        const saved = new Set<string>();
+        let offset = 0;
+        while (images.length) {
+          const page = await request('GET', undefined, `/api/agent-sessions/${sessionId}/images?offset=${offset}&limit=50`) as { images: Array<{ id: string }>; total: number };
+          for (const image of page.images) saved.add(image.id);
+          offset += page.images.length;
+          if (offset >= page.total || !page.images.length) break;
+        }
+        for (const image of images) {
+          if (!saved.has(image.id)) await request('POST', { deviceId, nativeId: item.value.nativeId, agent: item.value.agent, image }, '/api/task-center/history-images');
+        }
+      }
+      // Only acknowledge after all image writes succeed. Retrying a partial
+      // upload lists the saved objects and sends only the missing images.
+      if (sessionIndex) sessionIndex[item.key] = item.fingerprint;
+    }
     firstHeartbeat = false;
     i += batch.length;
   }
