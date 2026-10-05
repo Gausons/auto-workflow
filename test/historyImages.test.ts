@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, appendFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -113,6 +113,64 @@ test('connector uploads images before the preview window and retries only missin
   assert.deepEqual(uploads, [1, 82, 82]);
   await syncDeviceOnce({ ...options, includeExcerpts: false });
   assert.equal(db.listRemoteSessionImages('default', session.id).total, 0);
+});
+
+test('connector separates forks, selects the newest duplicate source and defers images appended after the heartbeat', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'history-image-forks-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = path.join(root, 'sessions'); await mkdir(source);
+  const imageUrl = 'data:image/png;base64,aGVsbG8=';
+  const meta = (id: string) => ({ type: 'session_meta', timestamp: '2026-10-05T00:00:00Z', payload: { id, cwd: root } });
+  const message = (text: string, withImage = false) => ({ type: 'response_item', timestamp: '2026-10-05T00:00:00Z', payload: {
+    type: 'message', role: 'user', content: [{ type: 'input_text', text }, ...(withImage ? [{ type: 'input_image', image_url: imageUrl }] : [])]
+  } });
+  const parentFile = path.join(source, 'parent.jsonl');
+  await writeFile(parentFile, [meta('parent'), message('第一条'), message('父会话图片', true)].map(row => JSON.stringify(row)).join('\n') + '\n');
+  await writeFile(path.join(source, 'child.jsonl'), [meta('child'), meta('parent'), message('子会话图片', true)].map(row => JSON.stringify(row)).join('\n') + '\n');
+  await writeFile(path.join(source, 'older-parent.jsonl'), [meta('parent'), message('旧记录')].map(row => JSON.stringify({ ...row, timestamp: '2026-10-04T00:00:00Z' })).join('\n') + '\n');
+  const history = createAgentHistory({ environment: { IDE_HISTORY_CODEX_DIR: source, IDE_HISTORY_CLAUDE_DIR: path.join(root, 'absent') } });
+  const db = openDatabase(); t.after(() => db.close()); db.createTenant({ id: 'default', token: 'x'.repeat(40) });
+  const center = createTaskCenter({ database: db, tenantId: 'default', history: emptyHistory });
+  const service = createHistoryImages(db, 'default');
+  const uploads: Array<{ nativeId: string; record: number }> = [];
+  const heartbeats: string[][] = [];
+  let append = true;
+  const request = async (method: string, body?: unknown, endpoint?: string) => {
+    if (endpoint?.startsWith('/api/agent-sessions/')) {
+      const url = new URL(endpoint, 'http://test'); return service.list(url.pathname.split('/')[3], url.searchParams);
+    }
+    if (endpoint === '/api/task-center/history-images') {
+      const input = body as typeof upload;
+      uploads.push({ nativeId: input.nativeId, record: input.image.record });
+      return service.upload(input, actor);
+    }
+    if (method === 'GET') return center.snapshot();
+    heartbeats.push((body as typeof heartbeat).sessions.map(session => session.nativeId));
+    const result = await center.command(body, actor);
+    if (append) { append = false; await appendFile(parentFile, JSON.stringify(message('同步期间新增的图片', true)) + '\n'); }
+    return result;
+  };
+  const index: Record<string, string> = {};
+  const options = { request, history, deviceId: 'source', name: '来源', outputDir: path.join(root, 'inbox'), includeExcerpts: true, sessionIndex: index };
+  await syncDeviceOnce(options);
+  assert.deepEqual(heartbeats[0].slice().sort(), ['child', 'parent']);
+  const sessions = db.readTaskCenter('default').sessions;
+  assert.deepEqual(sessions.map(session => session.nativeId).sort(), ['child', 'parent']);
+  const parent = sessions.find(session => session.nativeId === 'parent')!;
+  const child = sessions.find(session => session.nativeId === 'child')!;
+  assert.equal(parent.syncedRange?.total, 2);
+  assert.equal(child.syncedRange?.total, 1);
+  assert.deepEqual(service.list(parent.id, new URLSearchParams()).images.map(image => image.record), [2]);
+  assert.deepEqual(service.list(child.id, new URLSearchParams()).images.map(image => image.record), [1]);
+  assert.deepEqual(Object.keys(index).sort(), ['codex\0child', 'codex\0parent']);
+  await syncDeviceOnce(options);
+  assert.equal(db.readTaskCenter('default').sessions.find(session => session.id === parent.id)?.syncedRange?.total, 3);
+  assert.deepEqual(service.list(parent.id, new URLSearchParams()).images.map(image => image.record), [2, 3]);
+  assert.deepEqual(uploads.filter(upload => upload.nativeId === 'parent').map(upload => upload.record), [2, 3]);
+  const before = uploads.length;
+  await syncDeviceOnce(options);
+  assert.equal(uploads.length, before, 'unchanged records must not repeat image uploads');
+  assert.deepEqual(heartbeats.at(-1), [], 'older duplicate files must not replace an unchanged latest source');
 });
 
 test('image HTTP routes enforce authentication and read/write roles, and read full-size images outside the preview', async t => {

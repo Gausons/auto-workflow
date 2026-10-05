@@ -96,9 +96,12 @@ export const claudeHistoryAdapter: HistoryAdapter = {
     return env.IDE_HISTORY_CLAUDE_DIR ? [env.IDE_HISTORY_CLAUDE_DIR] : tenantId === 'default' ? [path.join(env.CLAUDE_CONFIG_DIR || path.join(env.HOME || os.homedir(), '.claude'), 'projects')] : [];
   },
   decode(row: JsonObject): DecodedHistoryRow {
-    // Sub-agent files are indexed independently by their own file identity.
+    // Subagent rows reuse the parent's sessionId. Include agentId so the
+    // connector does not overwrite the parent or another subagent's history.
     const message = record(row.message);
-    const result: DecodedHistoryRow = { id: row.sessionId, cwd: row.cwd, branch: row.gitBranch, model: message.model };
+    const id = row.isSidechain === true && typeof row.sessionId === 'string' && typeof row.agentId === 'string' && row.agentId
+      ? `${row.sessionId}:agent:${row.agentId}` : row.sessionId;
+    const result: DecodedHistoryRow = { id, cwd: row.cwd, branch: row.gitBranch, model: message.model };
     if (row.type === 'custom-title') result.title = row.customTitle;
     if (row.type === 'summary') result.title = row.summary;
     if (typeof row.type !== 'string' || !['user', 'assistant'].includes(row.type)) return result;

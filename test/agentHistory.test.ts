@@ -72,6 +72,32 @@ test('normalizes both agents, deduplicates Codex events, filters and paginates',
   await assert.rejects(f.history.list(new URLSearchParams({ limit: 'NaN' })), { statusCode: 400 });
 });
 
+test('Codex forks retain their own identity and creation time before inherited parent headers', async t => {
+  const f = await fixture(t);
+  const createdAt = '2026-10-05T00:00:00Z';
+  await f.save(path.join(f.codexDir, 'parent.jsonl'), codex(f.workspace, 'parent'));
+  await f.save(path.join(f.codexDir, 'child.jsonl'), [
+    { type: 'session_meta', timestamp: createdAt, payload: { id: 'child', forked_from_id: 'parent', cwd: f.workspace, timestamp: createdAt } },
+    ...codex(f.workspace, 'parent')
+  ]);
+  const catalog = await f.history.catalog();
+  assert.deepEqual(catalog.sessions.map(session => session.sessionId).sort(), ['child', 'parent']);
+  const child = catalog.sessions.find(session => session.sessionId === 'child')!;
+  assert.equal(child.createdAt, new Date(createdAt).toISOString());
+  assert.equal((await f.history.detail(child.id)).session.sessionId, 'child');
+  assert.equal((await f.history.resolveSource(child.id)).session.sessionId, 'child');
+});
+
+test('Claude subagents have distinct source identities within their parent session', async t => {
+  const f = await fixture(t);
+  const row = { type: 'user', timestamp, sessionId: 'parent', cwd: f.workspace, message: { content: '消息' } };
+  await f.save(path.join(f.claudeDir, 'parent.jsonl'), [row]);
+  for (const agentId of ['one', 'two']) await f.save(path.join(f.claudeDir, 'parent', 'subagents', `agent-${agentId}.jsonl`), [{ ...row, agentId, isSidechain: true }]);
+  const catalog = await f.history.catalog();
+  assert.deepEqual(catalog.sessions.map(session => session.sessionId).sort(), ['parent', 'parent:agent:one', 'parent:agent:two']);
+  for (const session of catalog.sessions) assert.equal((await f.history.detail(session.id)).session.sessionId, session.sessionId);
+});
+
 test('optional workspace scope isolates symlinks, missing metadata, changed cwd and direct IDs', async (t) => {
   const f = await fixture(t);
   f.environment.IDE_HISTORY_SCOPE = 'workspace';

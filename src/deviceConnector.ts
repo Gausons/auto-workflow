@@ -67,9 +67,12 @@ export async function syncDeviceOnce({ request, history, deviceId, name, outputD
   const agents = catalog.providers.map(provider => provider.id);
   const sessions: Array<{ value: DeviceSession; key: string; fingerprint: string; historyId: string }> = [];
   const currentKeys = new Set<string>();
-  for (const s of catalog.sessions) {
+  // A native session can have multiple rollout files. Use the newest source
+  // consistently for both the preview and images, including unchanged sessions.
+  for (const s of [...catalog.sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id))) {
     const nativeId = s.sessionId || s.id;
     const key = `${s.agent}\0${nativeId}`;
+    if (currentKeys.has(key)) continue;
     currentKeys.add(key);
     const fingerprint = sessionFingerprint(s, includeExcerpts);
     if (sessionIndex?.[key] === fingerprint) continue;
@@ -124,6 +127,9 @@ export async function syncDeviceOnce({ request, history, deviceId, name, outputD
           if (offset >= page.total || !page.images.length) break;
         }
         for (const image of images) {
+          // The source can grow after its heartbeat. Publish those new records
+          // on the next sync before uploading their images; keep this boundary.
+          if (image.record > item.value.remoteHistory!.total) continue;
           if (!saved.has(image.id)) await request('POST', { deviceId, nativeId: item.value.nativeId, agent: item.value.agent, image }, '/api/task-center/history-images');
         }
       }

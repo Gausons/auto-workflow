@@ -55,6 +55,7 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
     const entries: HistoryEntry[] = [], fallback: HistoryEntry[] = [];
     let count = 0, fallbackCount = 0, firstPrompt = '', malformed = 0, conversationCount = 0;
     let turnId: string | undefined;
+    let sourceCreatedAt: string | null = null;
     const checkedCwds = new Map<string, string | null>();
     const stream = createReadStream(file, { encoding: 'utf8', start: 0, end: MAX_BYTES - 1 });
     const lines = createInterface({ input: stream, crlfDelay: Infinity });
@@ -81,11 +82,12 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
           const value = decoded[key];
           if (typeof value === 'string' && value) session[key] = value.slice(0, 500);
         }
-        if (decoded.id) session.sessionId = String(decoded.id).slice(0, 250);
+        // Forked Codex logs start with their own header, followed by inherited
+        // parent headers. Those must not replace the identity of this file.
+        if (decoded.id && !session.sessionId) session.sessionId = String(decoded.id).slice(0, 250);
         const timestamp = date(row.timestamp);
         if (timestamp) { session.createdAt ||= timestamp; session.updatedAt = timestamp; }
-        const createdAt = date(decoded.createdAt);
-        if (createdAt) session.createdAt = createdAt;
+        sourceCreatedAt ||= date(decoded.createdAt);
         for (const item of decoded.entries || []) {
           if (!item.text && !item.images?.length) continue;
           if (turnId) item.turnId = turnId;
@@ -107,7 +109,7 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
     session.messageCount = count + (conversationCount ? 0 : fallbackCount);
     session.title ||= firstPrompt.replace(/\s+/g, ' ').slice(0, 120) || '未命名会话';
     session.updatedAt ||= info.mtime.toISOString();
-    session.createdAt ||= session.updatedAt;
+    session.createdAt = sourceCreatedAt || session.createdAt || session.updatedAt;
     session.partial ||= malformed > 0 || session.messageCount > MAX_ENTRIES;
     const messages = conversationCount ? entries : [...entries, ...fallback].sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || ''))).slice(0, MAX_ENTRIES);
     return { ...session, ...(detail ? { messages } : {}) };
