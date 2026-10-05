@@ -266,6 +266,45 @@ test('inherited context opens a bounded detail drawer and new-session shortcuts 
   await expect(page).toHaveURL(new RegExp(`/history/${next}$`));
 });
 
+test('creating from remote history confirms the directory before submitting and opening the new session', async ({ page }) => {
+  const id = '2'.repeat(64), next = '3'.repeat(64);
+  const directoryRequestId = '11111111-1111-4111-8111-111111111111';
+  const session = { id, agent: 'codex', deviceId: 'remote', title: '远端上下文创建', cwd: '/remote/history-repo', status: 'completed', updatedAt: '2026-10-05T00:00:00Z', messageCount: 0 };
+  const writes: Array<Record<string, unknown>> = [];
+  let pickerRequests = 0, confirmed = false;
+  await page.route('**/api/agent-sessions?*', route => route.fulfill({ json: { offset: 0, limit: 30, total: 1, providers: [], workspaces: [], sessions: [session] } }));
+  for (const sessionId of [id, next]) {
+    await page.route(`**/api/agent-sessions/${sessionId}?*`, route => route.fulfill({ json: { session: { ...session, id: sessionId }, messages: [], total: 0 } }));
+  }
+  await page.route('**/api/task-center/codex', route => route.fulfill({ json: { projects: [{ id: 'remote-project', name: 'Codex', agent: 'codex', deviceId: 'remote', deviceName: '开发机', cwd: '/remote/default', online: true }] } }));
+  await page.route('**/api/task-center/git*', route => route.fulfill({ json: { repository: false } }));
+  await page.route('**/api/task-center/directory-picker*', route => {
+    if (route.request().method() === 'POST') {
+      pickerRequests++;
+      expect(route.request().postDataJSON()).toEqual({ deviceId: 'remote', projectId: 'remote-project' });
+      return route.fulfill({ json: { status: 'pending', requestId: directoryRequestId } });
+    }
+    return route.fulfill({ json: { status: confirmed ? 'completed' : 'selecting', requestId: directoryRequestId, ...(confirmed ? { cwd: '/remote/confirmed-repo' } : {}) } });
+  });
+  await page.route(`**/api/sessions/${id}/continue-as-new`, route => {
+    writes.push(route.request().postDataJSON());
+    return route.fulfill({ json: { sessionId: next } });
+  });
+  await login(page); await page.goto(`/history/${id}`);
+  await page.getByRole('button', { name: /带上下文新开会话/ }).click();
+  await expect(page.getByLabel('工作目录：/remote/history-repo')).toBeVisible();
+  await page.getByRole('textbox', { name: '新会话首条消息（可选）' }).fill('hi');
+  await page.getByRole('button', { name: '创建并发送' }).click();
+  await expect(page.getByText(/请在目标设备选择并确认工作目录/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '创建并发送' })).toBeDisabled();
+  expect(writes).toHaveLength(0);
+  confirmed = true;
+  await expect(page).toHaveURL(new RegExp(`/history/${next}$`));
+  expect(pickerRequests).toBe(1);
+  expect(writes).toHaveLength(1);
+  expect(writes[0]).toMatchObject({ deviceId: 'remote', projectId: 'remote-project', cwd: '/remote/confirmed-repo', directoryRequestId, message: 'hi' });
+});
+
 test('Agent request reply and unknown-result reconciliation never resubmit execution', async ({ page }) => {
   let status: 'waiting' | 'unknown' = 'waiting';
   const controls: Array<Record<string, unknown>> = [];

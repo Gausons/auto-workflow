@@ -10,7 +10,7 @@ const session = { id, sessionId: id, agent: 'codex', deviceId: 'local', title: '
 const projects = [{ id: 'project-1', deviceId: 'local', deviceName: '本机', name: 'Codex', agent: 'codex', cwd: '/repo', online: true, defaultModel: 'gpt-6-luna', models: [{ id: 'gpt-6-luna', name: 'GPT-6-Luna', defaultReasoningEffort: 'medium', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'medium', name: '中' }, { id: 'high', name: '高' }] }, { id: 'gpt-6-sol', name: 'GPT-6-Sol', defaultReasoningEffort: 'medium', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'medium', name: '中' }, { id: 'high', name: '高' }] }] }];
 let nextSession = 0;
 
-function setup(status: unknown = { execution: null, executions: [] }, failSend = false, projects: unknown[] = [], selectedSession: Session = session, options: { canEdit?: boolean; failCreate?: boolean } = {}) {
+function setup(status: unknown = { execution: null, executions: [] }, failSend = false, projects: unknown[] = [], selectedSession: Session = session, options: { canEdit?: boolean; failCreate?: boolean; pickDirectory?: () => Promise<Response> } = {}) {
   if (selectedSession === session) selectedSession = { ...session, id: (++nextSession).toString(16).padStart(64, '0') };
   const writes: Array<{ path: string; body: Record<string, unknown> }> = [];
   let failures = failSend ? 1 : 0;
@@ -18,6 +18,7 @@ function setup(status: unknown = { execution: null, executions: [] }, failSend =
   const fetchMock = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
     if (init?.method === 'POST') {
       writes.push({ path, body: JSON.parse(String(init.body)) });
+      if (path === '/api/task-center/directory-picker') return options.pickDirectory?.() || Promise.resolve(Response.json({ status: 'completed', cwd: '/remote/chosen', requestId: '11111111-1111-4111-8111-111111111111' }));
       if (path.endsWith('/continue') && failures-- > 0) return Promise.resolve(new Response(JSON.stringify({ message: '网络暂不可用' }), { status: 503 }));
       if (path.endsWith('/continue-as-new') && createFailures-- > 0) return Promise.resolve(new Response(JSON.stringify({ message: '创建结果暂不可用' }), { status: 503 }));
       const result = path === '/api/task-center/git' ? { repository: true, current: 'main', changes: 0, branches: ['main'] } : path.endsWith('/continue-as-new') ? { sessionId: 'created-session' } : path.endsWith('/continue') ? { executionId: 'job-1' } : {};
@@ -42,6 +43,7 @@ function switchableCreation(respond: () => Promise<Response>) {
     if (url.endsWith('/continue-as-new')) { writes.push(JSON.parse(String(init?.body))); return respond(); }
     if (url === '/api/task-center/codex') return Promise.resolve(Response.json({ projects: targets }));
     if (url === '/api/task-center/git') return Promise.resolve(Response.json({ repository: true, current: 'main', changes: 0, branches: ['main'] }));
+    if (url === '/api/task-center/directory-picker') return Promise.resolve(Response.json({ status: 'completed', cwd: '/remote/chosen', requestId: '11111111-1111-4111-8111-111111111111' }));
     return Promise.resolve(Response.json({ execution: null, executions: [] }));
   }));
   let requests = 0;
@@ -190,6 +192,72 @@ describe('HistoryComposer', () => {
     expect(writes.some(item => item.path.endsWith('/continue'))).toBe(false);
   });
 
+  it('authorizes an inherited remote directory before creating and reuses the selection on an uncertain retry', async () => {
+    const remote = { ...session, id: 'remote-directory-source', deviceId: 'remote-1', cwd: '/remote/history-repo' };
+    let resolve!: (response: Response) => void;
+    const response = new Promise<Response>(done => { resolve = done; });
+    const writes = setup(undefined, false, [{ ...projects[0], deviceId: remote.deviceId, cwd: '/remote/default' }], remote, { failCreate: true, pickDirectory: () => response });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /带上下文新开会话/ }));
+    await screen.findByLabelText('工作目录：/remote/history-repo');
+    const input = screen.getByRole('textbox', { name: '新会话首条消息（可选）' });
+    await user.type(input, 'hi');
+    await user.click(screen.getByRole('button', { name: '创建并发送' }));
+    await screen.findByText(/请在目标设备选择并确认工作目录/);
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+    expect(writes.filter(item => item.path.endsWith('/directory-picker'))).toHaveLength(1);
+    expect(writes.some(item => item.path.endsWith('/continue-as-new'))).toBe(false);
+    await act(async () => { resolve(Response.json({ status: 'completed', cwd: '/remote/confirmed', requestId: '11111111-1111-4111-8111-111111111111' })); });
+    await screen.findByText(/创建结果暂不可用/);
+    expect(input).toHaveProperty('value', 'hi');
+    await user.click(screen.getByRole('button', { name: '创建并发送' }));
+    await waitFor(() => expect(writes.filter(item => item.path.endsWith('/continue-as-new'))).toHaveLength(2));
+    const creates = writes.filter(item => item.path.endsWith('/continue-as-new'));
+    expect(creates[0]?.body).toMatchObject({ cwd: '/remote/confirmed', directoryRequestId: '11111111-1111-4111-8111-111111111111', message: 'hi' });
+    expect(creates[1]?.body).toEqual(creates[0]?.body);
+    expect(writes.filter(item => item.path.endsWith('/directory-picker'))).toHaveLength(1);
+  });
+
+  it.each(['cancelled', 'failed'])('preserves the draft without creating when remote directory selection is %s', async directoryStatus => {
+    const remote = { ...session, id: `remote-${directoryStatus}`, deviceId: 'remote-1', cwd: '/remote/history-repo' };
+    const writes = setup(undefined, false, [{ ...projects[0], deviceId: remote.deviceId, cwd: '/remote/default' }], remote, { pickDirectory: async () => Response.json({ status: directoryStatus, message: '设备无法选择目录' }) });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /带上下文新开会话/ }));
+    await screen.findByLabelText('工作目录：/remote/history-repo');
+    await user.type(screen.getByRole('textbox', { name: '新会话首条消息（可选）' }), '保留输入');
+    await user.click(screen.getByRole('button', { name: '创建并发送' }));
+    await screen.findByText(directoryStatus === 'cancelled' ? '已取消选择目录' : '设备无法选择目录');
+    expect(screen.getByRole('textbox', { name: '新会话首条消息（可选）' })).toHaveProperty('value', '保留输入');
+    expect(writes.some(item => item.path.endsWith('/continue-as-new'))).toBe(false);
+  });
+
+  it('submits the target default directory instead of falling back to the historical directory', async () => {
+    const remote = { ...session, id: 'remote-default-directory', deviceId: 'remote-1', cwd: '/remote/history-repo' };
+    const writes = setup(undefined, false, [{ ...projects[0], deviceId: remote.deviceId, cwd: '/remote/default' }], remote);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /带上下文新开会话/ }));
+    await user.click(await screen.findByLabelText('工作目录：/remote/history-repo'));
+    await user.click(screen.getByRole('button', { name: '使用默认目录' }));
+    await user.click(screen.getByRole('button', { name: '创建会话' }));
+    await waitFor(() => expect(writes.find(item => item.path.endsWith('/continue-as-new'))?.body).toMatchObject({ cwd: '/remote/default', message: '' }));
+    expect(writes.some(item => item.path.endsWith('/directory-picker'))).toBe(false);
+  });
+
+  it('does not create after leaving a session while its directory selection is pending', async () => {
+    const remote = { ...session, id: 'remote-leave-picker', deviceId: 'remote-1', cwd: '/remote/history-repo' };
+    let resolve!: (response: Response) => void;
+    const response = new Promise<Response>(done => { resolve = done; });
+    const writes = setup(undefined, false, [{ ...projects[0], deviceId: remote.deviceId, cwd: '/remote/default' }], remote, { pickDirectory: () => response });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /带上下文新开会话/ }));
+    await screen.findByLabelText('工作目录：/remote/history-repo');
+    await user.click(screen.getByRole('button', { name: '创建会话' }));
+    await screen.findByText(/请在目标设备选择并确认工作目录/);
+    cleanup();
+    await act(async () => { resolve(Response.json({ status: 'completed', cwd: '/remote/confirmed', requestId: '11111111-1111-4111-8111-111111111111' })); });
+    expect(writes.some(item => item.path.endsWith('/continue-as-new'))).toBe(false);
+  });
+
   it('requires an explicit destination directory when creating on another device', async () => {
     const writes = setup(undefined, false, [...projects, { ...projects[0], id: 'remote-project', deviceId: 'remote-1', deviceName: '远端开发机', cwd: '/remote/default' }]);
     const user = userEvent.setup();
@@ -201,7 +269,7 @@ describe('HistoryComposer', () => {
     await user.click(screen.getByLabelText('工作目录：/remote/default'));
     await user.type(screen.getByRole('textbox', { name: '工作目录' }), '/remote/repo');
     await user.click(screen.getByRole('button', { name: '创建会话' }));
-    await waitFor(() => expect(writes.find(item => item.path.endsWith('/continue-as-new'))?.body).toMatchObject({ deviceId: 'remote-1', projectId: 'remote-project', cwd: '/remote/repo', message: '' }));
+    await waitFor(() => expect(writes.find(item => item.path.endsWith('/continue-as-new'))?.body).toMatchObject({ deviceId: 'remote-1', projectId: 'remote-project', cwd: '/remote/chosen', directoryRequestId: '11111111-1111-4111-8111-111111111111', message: '' }));
   });
 
   it('retains a failed creation and retries with the same request identity', async () => {

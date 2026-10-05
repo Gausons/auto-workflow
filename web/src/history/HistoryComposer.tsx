@@ -58,6 +58,8 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
   const [newBranch, setNewBranch] = useState('');
   const [branchMutating, setBranchMutating] = useState(false);
   const [picking, setPicking] = useState(false);
+  const pickerPending = useRef(false);
+  const mounted = useRef(true);
   const [responding, setResponding] = useState(false);
   const [decision, setDecision] = useState('decline');
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -67,6 +69,7 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
   const syncing = useRef(false);
   const queryClient = useQueryClient();
   const canSendNative = canContinueHistory(session);
+  useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useLayoutEffect(() => { newSessionDrafts.set(session.id, { mode: newSessionMode, target: selectedTarget, cwd, directoryRequestId, model, effort }); }, [session.id, newSessionMode, selectedTarget, cwd, directoryRequestId, model, effort]);
   useLayoutEffect(() => { setOutputHost(document.getElementById('historyLiveOutput')); }, [session.id]);
   const targets = useQuery({ queryKey: ['history', 'targets'], queryFn: ({ signal }) => apiRequest<Targets>('/api/task-center/codex', { signal }), enabled: canEdit && newSessionMode, retry: false });
@@ -149,38 +152,52 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
   }
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (newSessionMode) { createSession(); return; }
+    if (newSessionMode) { void createSession(); return; }
     if (!canSend) return;
     const draft = drafts.get(session.id)!;
     draft.requestId ||= requestId(); draft.sentText = text.trim();
     setError(''); send.mutate({ message: text.trim(), id: draft.requestId });
   }
-  function createSession() {
-    if (!canCreate || !project || newRequests.get(session.id)?.pending) return;
+  async function createSession() {
+    if (!canCreate || !project || pickerPending.current || newRequests.get(session.id)?.pending) return;
     if (project.deviceId !== (session.deviceId || 'local') && !cwd.trim()) { setNewStatus('跨设备交接请先在目标设备明确选择工作目录。'); return; }
+    let directory = { cwd: cwd.trim() || project.cwd, directoryRequestId };
+    if (project.deviceId !== 'local' && directory.cwd !== project.cwd && !directory.directoryRequestId) {
+      const selected = await chooseDirectory();
+      if (!selected || !mounted.current) return;
+      directory = selected;
+    }
     const message = text.trim();
-    const signature = JSON.stringify([project.deviceId, project.id, cwd, directoryRequestId, model, effort, message]);
+    const signature = JSON.stringify([project.deviceId, project.id, directory.cwd, directory.directoryRequestId, model, effort, message]);
     let attempt = newRequests.get(session.id);
     if (!attempt || attempt.signature !== signature) { attempt = { signature, requestId: requestId() }; newRequests.set(session.id, attempt); }
     attempt.pending = true; setNewStatus('');
-    create.mutate({ targetAgent: project.agent || 'codex', deviceId: project.deviceId, projectId: project.id, cwd: cwd.trim(), directoryRequestId: directoryRequestId || undefined, model, reasoningEffort: effort, message, requestId: attempt.requestId });
+    create.mutate({ targetAgent: project.agent || 'codex', deviceId: project.deviceId, projectId: project.id, cwd: directory.cwd, directoryRequestId: directory.directoryRequestId || undefined, model, reasoningEffort: effort, message, requestId: attempt.requestId });
   }
   async function chooseDirectory() {
-    if (!canEdit || !newSessionMode || !project || configurationDisabled) return;
-    setPicking(true); setNewStatus('');
+    if (!canEdit || !newSessionMode || !project || configurationDisabled || pickerPending.current) return null;
+    pickerPending.current = true;
+    setPicking(true); setNewStatus('请在目标设备选择并确认工作目录，确认后将继续当前操作。');
     try {
       const response = await apiRequest<DirectoryResult>('/api/task-center/directory-picker', { method: 'POST', body: JSON.stringify({ deviceId: project.deviceId, projectId: project.id }) });
-      if (response.status === 'completed') { setCwd(response.cwd || ''); setDirectoryRequestId(response.requestId || ''); return; }
+      let result = response;
       for (let attempt = 0; attempt < 300; attempt++) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        const result = await apiRequest<DirectoryResult>(`/api/task-center/directory-picker?requestId=${encodeURIComponent(response.requestId)}`);
-        if (result.status === 'completed') { setCwd(result.cwd || ''); setDirectoryRequestId(response.requestId); return; }
+        if (!mounted.current) return null;
+        if (result.status === 'completed') {
+          if (!result.cwd || (project.deviceId !== 'local' && !response.requestId)) throw new Error('目录选择结果不完整，请重新选择');
+          const selected = { cwd: result.cwd, directoryRequestId: response.requestId || '' };
+          setCwd(selected.cwd); setDirectoryRequestId(selected.directoryRequestId); setNewStatus('');
+          return selected;
+        }
         if (result.status === 'cancelled') throw new Error('已取消选择目录');
         if (result.status === 'failed') throw new Error(result.message || '无法选择目录');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        if (!mounted.current) return null;
+        result = await apiRequest<DirectoryResult>(`/api/task-center/directory-picker?requestId=${encodeURIComponent(response.requestId)}`);
       }
       throw new Error('等待目录选择超时');
-    } catch (failure) { setNewStatus(errorMessage(failure)); }
-    finally { setPicking(false); }
+    } catch (failure) { if (mounted.current) setNewStatus(errorMessage(failure)); return null; }
+    finally { pickerPending.current = false; if (mounted.current) setPicking(false); }
   }
   async function branchAction(action: 'switch' | 'create', name: string) {
     if (!canEdit || !newSessionMode || !project || configurationDisabled || branchDirectoryPending) return;
@@ -208,7 +225,7 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
       </div>
       {newSessionMode ? <><p className={styles.modeHint}>为新会话选择运行配置。可直接创建，也可输入第一条消息后创建并发送。</p><div className="tc-create-context" aria-label="新会话运行环境">
       {targets.isPending ? <p className="tc-create-hint" role="status">正在读取运行配置…</p> : targets.isError ? <p role="alert">{errorMessage(targets.error)}</p> : project ? <>
-        <DismissibleDetails className="tc-config-menu tc-directory-menu" name="create-config"><summary aria-label={`工作目录：${cwd || project.cwd || '默认目录'}`}>▱ <span>{runDirectoryName(cwd || project.cwd || '')}</span><span aria-hidden="true">⌄</span></summary><div className="tc-config-panel"><label className="tc-create-setting">工作目录<input value={cwd} onChange={event => { setCwd(event.target.value); setDirectoryRequestId(''); }} placeholder={project.cwd || '输入工作目录'} maxLength={2000} disabled={configurationDisabled} /></label><div className="tc-actions"><button type="button" className="button secondary" disabled={configurationDisabled} onClick={() => void chooseDirectory()}>选择目录</button><button type="button" className="button ghost" disabled={configurationDisabled} onClick={() => { setCwd(''); setDirectoryRequestId(''); }}>使用默认目录</button></div>{!!project.commonDirectories?.length && <div className="tc-directory-options">{project.commonDirectories.slice(0, 4).map(path => <button key={path} type="button" disabled={configurationDisabled} onClick={() => { setCwd(path); setDirectoryRequestId(''); }}>{runDirectoryName(path)}<small>{path}</small></button>)}</div>}</div></DismissibleDetails>
+        <DismissibleDetails className="tc-config-menu tc-directory-menu" name="create-config"><summary aria-label={`工作目录：${cwd || project.cwd || '默认目录'}`}>▱ <span>{runDirectoryName(cwd || project.cwd || '')}</span><span aria-hidden="true">⌄</span></summary><div className="tc-config-panel"><label className="tc-create-setting">工作目录<input value={cwd} onChange={event => { setCwd(event.target.value); setDirectoryRequestId(''); }} placeholder={project.cwd || '输入工作目录'} maxLength={2000} disabled={configurationDisabled} /></label><div className="tc-actions"><button type="button" className="button secondary" disabled={configurationDisabled} onClick={() => void chooseDirectory()}>选择目录</button><button type="button" className="button ghost" disabled={configurationDisabled} onClick={() => { setCwd(project.cwd); setDirectoryRequestId(''); }}>使用默认目录</button></div>{!!project.commonDirectories?.length && <div className="tc-directory-options">{project.commonDirectories.slice(0, 4).map(path => <button key={path} type="button" disabled={configurationDisabled} onClick={() => { setCwd(path); setDirectoryRequestId(''); }}>{runDirectoryName(path)}<small>{path}</small></button>)}</div>}</div></DismissibleDetails>
         <label className="tc-target-control">▣ <select aria-label="执行位置" value={index} disabled={configurationDisabled} onChange={event => { setSelectedTarget(projectIdentity(projects[Number(event.target.value)]!)); setCwd(''); setDirectoryRequestId(''); setModel(''); setEffort(''); }}>{projects.map((item, at) => <option key={`${item.deviceId}:${item.id}`} value={at}>{item.name} · {item.deviceName}{item.online ? '' : '（离线）'}</option>)}</select></label>
         <DismissibleDetails className="tc-config-menu tc-branch-menu" name="create-config" onToggle={event => { if (event.currentTarget.open && !branchBusy) void branchQuery.refetch(); }}><summary aria-label="Git 分支">⑂ <span>{branch?.repository ? branch.current || '分离 HEAD' : branchBusy ? '读取分支…' : branchError ? '分支读取失败' : branch ? '非 Git 目录' : 'Git 分支'}</span><span aria-hidden="true">⌄</span></summary><div className="tc-config-panel">{branchBusy ? <p role="status">正在处理分支…</p> : branchError ? <p role="alert">{branchError}</p> : branch?.repository ? <><input aria-label="搜索分支" value={branchSearch} onChange={event => setBranchSearch(event.target.value)} placeholder="搜索分支" /><p className="tc-create-hint">当前：{branch.current || '分离 HEAD'} · 未提交：{branch.changes} 项</p><div className="tc-branch-options">{branch.branches.filter(name => name.toLowerCase().includes(branchSearch.toLowerCase())).map(name => <button key={name} type="button" disabled={configurationDisabled} aria-pressed={name === branch.current} onClick={() => void branchAction('switch', name)}>{name}{name === branch.current ? ' ✓' : ''}</button>)}</div><label className="tc-create-setting">新分支<input aria-label="新分支名称" value={newBranch} onChange={event => setNewBranch(event.target.value)} maxLength={200} disabled={configurationDisabled} /></label><button type="button" className="button secondary" disabled={configurationDisabled || !newBranch.trim()} onClick={() => void branchAction('create', newBranch.trim())}>创建并切换</button></> : <p className="tc-create-hint">当前目录不是 Git 仓库。</p>}</div></DismissibleDetails>
       </> : <p role="alert" className="tc-create-hint">{selectedTarget ? '已选执行位置当前不可用，请重新选择。' : targets.data?.localError || '没有可用 Agent'}{selectedTarget && <button type="button" className="button secondary" disabled={configurationDisabled} onClick={() => { setSelectedTarget(null); setCwd(''); setDirectoryRequestId(''); setModel(''); setEffort(''); }}>重新选择执行位置</button>}</p>}</div></> : <div className={styles.currentConfig} aria-label="当前会话配置">
