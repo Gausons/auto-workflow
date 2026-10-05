@@ -9,6 +9,30 @@ import { openDatabase as openApplicationDatabase } from '../src/database.js';
 import { openPostgres, postgresConfig } from '../src/storage/postgres.js';
 import type { RemoteHistory } from '../shared/taskTypes.js';
 
+test('PostgreSQL waits for the current reply after a stale notification without repeating a write', t => {
+  const db = rawDatabase(randomUUID());
+  t.after(() => db.close());
+  db.prepare('CREATE TABLE wakeup_fixture (id SERIAL PRIMARY KEY)').run();
+  const wait = Atomics.wait;
+  let staleWakeups = 0;
+  const mockedWait = t.mock.method(Atomics, 'wait', (...args: Parameters<typeof Atomics.wait>) => {
+    if (staleWakeups === 0) {
+      staleWakeups++;
+      // Reproduce the previous request notifying after the next wait started,
+      // before the worker has stored the current request's completion flag.
+      assert.equal(Atomics.load(args[0], args[1]), 0);
+      return 'ok';
+    }
+    return wait(...args);
+  });
+  try {
+    const row = db.prepare('INSERT INTO wakeup_fixture SELECT 1 FROM pg_sleep(0.05) RETURNING id').get();
+    assert.equal(row?.id, 1);
+    assert.equal(staleWakeups, 1);
+    assert.equal(Number(db.prepare('SELECT count(*) AS count FROM wakeup_fixture').get()?.count), 1);
+  } finally { mockedWait.mock.restore(); }
+});
+
 test('PostgreSQL initializes new schemas, upgrades version 1, preserves data and rejects future versions', () => {
   const key = randomUUID();
   const db = openDatabase(key);

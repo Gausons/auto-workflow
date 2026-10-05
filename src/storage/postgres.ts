@@ -29,8 +29,15 @@ export function openPostgres(config: PostgresConfig): Connection {
     if (closed) throw new Error('PostgreSQL 连接已关闭，需重启服务后核对未确认的操作');
     Atomics.store(signal, 0, 0);
     port1.postMessage({ operation, sql, params });
-    if (Atomics.wait(signal, 0, 0, 30000) === 'timed-out') {
-      terminate(); throw new Error('PostgreSQL 响应超时，操作结果未确认；连接已关闭，不会自动重试');
+    const deadline = performance.now() + 30000;
+    // A previous reply's notify can arrive after this call resets the signal.
+    // Only the stored completion flag confirms that this reply has been posted.
+    while (Atomics.load(signal, 0) === 0) {
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) {
+        terminate(); throw new Error('PostgreSQL 响应超时，操作结果未确认；连接已关闭，不会自动重试');
+      }
+      Atomics.wait(signal, 0, 0, remaining);
     }
     const response = receiveMessageOnPort(port1)?.message as { result?: unknown; error?: string; fatal?: boolean } | undefined;
     if (!response) { terminate(); throw new Error('PostgreSQL 工作线程响应丢失，操作结果未确认'); }
