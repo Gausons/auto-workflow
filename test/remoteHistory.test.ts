@@ -30,3 +30,39 @@ test('remote history rejects invalid roles, ranges and oversized record arrays',
     assert.throws(() => normalizeRemoteHistory({ ...input, ...change }), { statusCode: 400 });
   }
 });
+
+test('remote history truncates text and image labels without splitting Unicode pairs', () => {
+  const notice = '\n[内容超过同步上限，已截断]';
+  for (const [padding, keepEmoji] of [
+    [23000 - notice.length - 1, false],
+    [23000 - notice.length - 2, true]
+  ] as const) {
+    const text = 'a'.repeat(padding) + '😀' + 'b'.repeat(100);
+    const normalized = normalizeRemoteHistory({ offset: 0, total: 1, sourcePartial: false, truncated: false,
+      messages: [{ role: 'assistant', text, images: [
+        { dataUrl: image, alt: 'a'.repeat(499) + '😀tail' }, { dataUrl: image, alt: 'a'.repeat(498) + '😀tail' }
+      ] }] });
+    assert.ok(typeof normalized.messages[0].text === 'string');
+    assert.doesNotMatch(normalized.messages[0].text, /[\uD800-\uDFFF]/u);
+    assert.equal(normalized.messages[0].text, 'a'.repeat(padding) + (keepEmoji ? '😀' : '') + notice);
+    assert.ok(normalized.messages[0].text.length <= 23000);
+    assert.equal(normalized.messages[0].images?.[0].alt, 'a'.repeat(499));
+    assert.equal(normalized.messages[0].images?.[1].alt, 'a'.repeat(498) + '😀');
+    assert.equal(normalized.truncated, true);
+    assert.deepEqual(normalizeRemoteHistory(normalized), normalized);
+  }
+});
+
+test('remote history marks invalid Unicode in preview strings while preserving valid pairs and literal escapes', () => {
+  const text = '中文😀\u0000\ud800x\udc00\\u0000';
+  const normalized = normalizeRemoteHistory({ offset: 0, total: 1, sourcePartial: false, truncated: false,
+    messages: [{ role: 'tool_result', text, name: text, callId: text, turnId: text, timestamp: text, images: [{ dataUrl: image, alt: text }] }] });
+  const expected = '中文😀\uFFFD\uFFFDx\uFFFD\\u0000';
+  for (const key of ['text', 'name', 'callId', 'turnId', 'timestamp'] as const) assert.equal(normalized.messages[0][key], expected);
+  assert.equal(normalized.messages[0].images?.[0].alt, expected);
+  assert.equal(normalized.messages[0].images?.[0].dataUrl, image);
+  assert.equal(normalized.truncated, true);
+  assert.deepEqual(normalizeRemoteHistory(normalized), normalized);
+  assert.equal(normalizeRemoteHistory({ offset: 0, total: 1, sourcePartial: false, truncated: false,
+    messages: [{ role: 'user', text: '中文😀\\u0000' }] }).truncated, false);
+});

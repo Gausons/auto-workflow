@@ -15,6 +15,14 @@ export function normalizeRemoteHistory(value: unknown): RemoteHistory {
       !Number.isSafeInteger(input.total) || Number(input.total) < Number(input.offset) + input.messages.length ||
       typeof input.sourcePartial !== 'boolean' || typeof input.truncated !== 'boolean') throw httpError(400, '远程历史记录范围无效');
   let textBudget = TEXT_LIMIT, imageBudget = IMAGE_BUDGET, truncated = input.truncated;
+  function previewText(value: string, limit = value.length) {
+    // JSONB rejects NUL and unpaired UTF-16 surrogates. In Unicode mode the
+    // surrogate range leaves complete pairs intact; never split one at a limit.
+    const safe = value.replace(/[\u0000\uD800-\uDFFF]/gu, '\uFFFD');
+    const result = safe.slice(0, limit).replace(/[\uD800-\uDBFF]$/u, '');
+    if (result !== value) truncated = true;
+    return result;
+  }
   const messages: HistoryMessage[] = [];
   const rows = [...input.messages].reverse();
   for (const [index, value] of rows.entries()) {
@@ -25,7 +33,7 @@ export function normalizeRemoteHistory(value: unknown): RemoteHistory {
     // Reserve a readable snippet for older messages so a large tool result
     // cannot turn all preceding user messages into empty bubbles.
     const available = textBudget - (rows.length - index - 1) * 200;
-    const content = row.text.length <= available ? row.text : row.text.slice(0, available - notice.length) + notice;
+    const content = row.text.length <= available ? previewText(row.text) : previewText(row.text, available - notice.length) + notice;
     textBudget -= content.length;
     if (content.length < row.text.length) truncated = true;
     const message: HistoryMessage = { role: String(row.role), text: content };
@@ -36,12 +44,12 @@ export function normalizeRemoteHistory(value: unknown): RemoteHistory {
     for (const key of ['name', 'callId', 'turnId', 'timestamp'] as const) {
       if (row[key] !== undefined) {
         if (typeof row[key] !== 'string' || row[key].length > 500) throw httpError(400, '远程历史消息元数据无效');
-        message[key] = row[key];
+        message[key] = previewText(row[key]);
       }
     }
     if (Array.isArray(row.images)) message.images = row.images.map(value => {
       const image = object(value);
-      const alt = typeof image.alt === 'string' ? image.alt.slice(0, 500) : '会话图片';
+      const alt = typeof image.alt === 'string' ? previewText(image.alt, 500) : '会话图片';
       if (typeof image.dataUrl === 'string' && image.dataUrl.length <= imageBudget && /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=\r\n]+$/.test(image.dataUrl)) {
         imageBudget -= image.dataUrl.length;
         return { dataUrl: image.dataUrl, alt };

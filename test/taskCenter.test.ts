@@ -250,6 +250,30 @@ test('structured history batches stay below the HTTP byte limit and retry only u
   assert.equal(database.readRemoteSessionHistory('default', createHash('sha256').update('remote\0codex:new').digest('hex')), null);
 });
 
+test('heartbeat stores Unicode previews in JSONB and accepts legacy malformed strings without losing the batch', async t => {
+  const { database, center, cmd } = fixture(t);
+  const notice = '\n[内容超过同步上限，已截断]';
+  const sessions = [
+    { nativeId: 'emoji', agent: 'claude', title: '截断边界', remoteHistory: { offset: 0, total: 1, sourcePartial: false, truncated: false,
+      messages: [{ role: 'assistant', text: 'a'.repeat(23000 - notice.length - 1) + '😀tail'.repeat(10) }] } },
+    { nativeId: 'legacy', agent: 'claude', title: '旧连接器预览', remoteHistory: { offset: 0, total: 1, sourcePartial: false, truncated: false,
+      messages: [{ role: 'tool_result', text: '中文😀\u0000\ud800x\udc00', callId: 'call\u0000', images: [{ alt: '旧图片\ud800' }] }] } }
+  ];
+  for (let attempt = 0; attempt < 2; attempt++) await cmd(heartbeat(sessions));
+  const state = database.readTaskCenter('default');
+  assert.equal(state.sessions.length, 2);
+  const [emoji, legacy] = state.sessions;
+  assert.equal(database.readRemoteSessionHistory('default', emoji.id)?.messages[0].text, 'a'.repeat(23000 - notice.length - 1) + notice);
+  assert.deepEqual(database.readRemoteSessionHistory('default', legacy.id)?.messages[0], {
+    role: 'tool_result', text: '中文😀\uFFFD\uFFFDx\uFFFD', callId: 'call\uFFFD', images: [{ alt: '旧图片\uFFFD' }]
+  });
+  assert.ok(state.sessions.every(session => session.syncedRange?.truncated && session.partial));
+  assert.equal(database.readRemoteSessionHistory('other', legacy.id), null);
+  const before = database.readRemoteSessionHistory('default', legacy.id);
+  await assert.rejects(center.command(heartbeat(sessions), { id: 'someone-else' }), { statusCode: 403 });
+  assert.deepEqual(database.readRemoteSessionHistory('default', legacy.id), before);
+});
+
 test('large project metadata gets its own heartbeat without skipping the first history record', async t => {
   const { center, cmd, database } = fixture(t);
   const dir = await mkdtemp(path.join(os.tmpdir(), 'task-project-batches-'));
