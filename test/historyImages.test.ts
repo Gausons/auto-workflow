@@ -71,6 +71,39 @@ test('image validation rejects unsafe formats, oversized data and altered metada
   ]) assert.throws(() => validateSessionImage(invalid), { statusCode: 400 });
 });
 
+test('image uploads select synced history when workbench sessions share its native identity', async t => {
+  for (const source of ['conversation', 'agentExecution', 'codexExecution'] as const) {
+    for (const workbenchFirst of [true, false]) {
+      await t.test(`${source}, workbench first: ${workbenchFirst}`, async t => {
+        const db = openDatabase(); t.after(() => db.close());
+        db.createTenant({ id: 'default', token: 'x'.repeat(40) });
+        const center = createTaskCenter({ database: db, tenantId: 'default', history: emptyHistory });
+        const service = createHistoryImages(db, 'default');
+        await center.command(heartbeat, actor);
+        const synced = db.readTaskCenter('default').sessions[0];
+        const workbench = { ...synced, id: randomUUID(), source, recordMode: undefined, syncedRange: undefined };
+        db.mutateTaskCenter('default', data => {
+          if (workbenchFirst) data.sessions.unshift(workbench); else data.sessions.push(workbench);
+        });
+
+        assert.deepEqual(service.upload(upload, actor), { id: image.id });
+        assert.deepEqual(service.upload(upload, actor), { id: image.id });
+        assert.equal(service.read(synced.id, image.id).dataUrl, dataUrl);
+        assert.equal(service.list(synced.id, new URLSearchParams()).total, 1);
+        assert.equal(db.listRemoteSessionImages('default', workbench.id).total, 0);
+        const sessions = db.readTaskCenter('default').sessions;
+        assert.equal(sessions.find(session => session.id === synced.id)?.syncedImageCount, 1);
+        assert.deepEqual(sessions.find(session => session.id === workbench.id), JSON.parse(JSON.stringify(workbench)));
+
+        await center.command({ ...heartbeat, sessions: [{ ...heartbeat.sessions[0], remoteHistory: undefined }] }, actor);
+        assert.throws(() => service.upload(upload, actor), { statusCode: 404 });
+        assert.equal(db.listRemoteSessionImages('default', synced.id).total, 0);
+        assert.equal(db.listRemoteSessionImages('default', workbench.id).total, 0);
+      });
+    }
+  }
+});
+
 test('connector uploads images before the preview window and retries only missing objects without backfilling unchanged sessions', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'history-images-'));
   t.after(() => rm(root, { recursive: true, force: true }));

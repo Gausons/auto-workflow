@@ -43,8 +43,10 @@ export function createHistoryImages(database: Database, tenantId: string) {
       return database.mutateTaskCenter(tenantId, data => {
         const device = data.devices.find(item => item.id === input.deviceId);
         if (!device || device.owner !== actor.id) throw httpError(403, '设备不存在或属于其他账号');
-        const found = data.sessions.find(item => item.deviceId === device.id && item.nativeId === input.nativeId && item.agent === input.agent);
-        if (!found || found.recordMode !== 'synced') throw httpError(404, '会话不存在或未开启正文同步');
+        // Workbench conversations/executions can share the native identity of
+        // a separate synced history record. Images belong to that history.
+        const found = data.sessions.find(item => item.deviceId === device.id && item.nativeId === input.nativeId && item.agent === input.agent && item.recordMode === 'synced');
+        if (!found) throw httpError(404, '会话不存在或未开启正文同步');
         if (image.record > (found.syncedRange?.total || 0)) throw httpError(409, '会话记录已变化，请重新同步');
         database.saveRemoteSessionImage(tenantId, found.id, image);
         found.syncedImageCount = database.listRemoteSessionImages(tenantId, found.id, 0, 1).total;
