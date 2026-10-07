@@ -13,7 +13,7 @@ import type { AgentProject, ContextCoverage, ExecutionControl, PromptImageRefere
 interface RemoteJob {
   id: string; status?: string; deviceId?: string; projectId?: string; cwd?: string; agent?: string;
   sessionId?: string | null; threadId?: string | null; output?: string;
-  historySessionId?: string; resumeThreadId?: string;
+  historySessionId?: string; resumeThreadId?: string; resumeSessionId?: string;
   protocol?: 'acp' | 'legacy';
   request?: unknown; message?: string; control?: ExecutionControl | null; controlAck?: string; controlError?: string | null;
   conversationId?: string; contextDigest?: string; remoteContext?: RemoteContextHandoff; userMessage?: string;
@@ -139,7 +139,7 @@ export class RemoteCodexWorker {
     return loadOrFreezeCapture(path.join(this.directory, 'context'), job.id, identity, () => this.sourceSnapshot(job));
   }
   async prepareContext(job: RemoteJob) {
-    if (!job.conversationId || !job.userMessage) return job;
+    if (!job.conversationId || !job.userMessage || job.resumeSessionId || job.resumeThreadId) return job;
     let snapshot: SessionContext;
     if (job.contextSourceDeviceId && job.contextSourceDeviceId !== this.deviceId) {
       const result = await this.request('GET', undefined, `/api/conversations/${job.conversationId}/transfer?executionId=${job.id}&deviceId=${this.deviceId}&format=manifest-v3`) as { ready?: boolean; context?: SessionContext; bundle?: unknown; manifest?: unknown };
@@ -235,7 +235,7 @@ export class RemoteCodexWorker {
     for (const job of snapshot.executions.filter(candidate => candidate.deviceId === this.deviceId)) {
       if (!/^[a-f0-9-]{36}$/.test(job.id)) throw new Error('执行标识无效');
       if (job.status === 'queued' && !this.saved.has(job.id)) {
-        if (job.contextSourceDeviceId && job.contextSourceDeviceId !== this.deviceId && !job.contextTransferError) {
+        if (job.contextSourceDeviceId && job.contextSourceDeviceId !== this.deviceId && !job.resumeSessionId && !job.resumeThreadId && !job.contextTransferError) {
           const transfer = await this.request('GET', undefined, `/api/conversations/${job.conversationId}/transfer?executionId=${job.id}&deviceId=${this.deviceId}&readyOnly=1&format=manifest-v3`) as { ready?: boolean };
           if (!transfer.ready) continue;
         }

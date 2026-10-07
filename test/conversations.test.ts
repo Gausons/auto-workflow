@@ -238,6 +238,52 @@ test('busy source queues preparation and captures the final reply automatically'
   assert.equal(f.launched.length, 2); assert.match(await readFile(f.launched[1].contextMarkdownPath!, 'utf8'), /最后完成修复/);
 });
 
+test('source completing during target discovery is recaptured before the new session starts', async t => {
+  const f = await fixture(t);
+  const a = await f.service.create(f.source, { requestId: randomUUID(), targetAgent: 'claude', message: '修复' });
+  await new Promise(resolve => setImmediate(resolve));
+  const service = createConversations({ ...f.options, execution: { ...f.execution, targets: async () => {
+    f.finish('查询目标期间完成的最终修复');
+    return f.execution.targets();
+  } } });
+  const input = { requestId: randomUUID(), targetAgent: 'codex', message: '检查最终结果' };
+  const b = await service.create(a.sessionId, input);
+  assert.equal(service.detail(b.sessionId).session.status, 'preparing');
+  assert.equal(f.launched.length, 1);
+  assert.deepEqual(await service.create(a.sessionId, input), b);
+  await service.preparePending(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.launched.length, 2);
+  assert.match(await readFile(f.launched[1]!.contextMarkdownPath!, 'utf8'), /查询目标期间完成的最终修复/);
+  await service.preparePending(); assert.equal(f.launched.length, 2);
+});
+
+test('pending preparation retries if another source turn completes during capture', async t => {
+  const f = await fixture(t);
+  await f.execution.continueHistory(f.source, { requestId: randomUUID(), message: '原会话第一轮' });
+  await new Promise(resolve => setImmediate(resolve));
+  const created = await f.service.create(f.source, { requestId: randomUUID(), targetAgent: 'claude', message: '读取最终结果' });
+  assert.equal(f.service.detail(created.sessionId).session.status, 'preparing');
+  f.finish();
+  let racing = true;
+  const service = createConversations({ ...f.options, delivery: { ...f.delivery, detail: async (id, params) => {
+    const page = await f.delivery.detail(id, params);
+    if (racing) {
+      racing = false;
+      await f.execution.continueHistory(f.source, { requestId: randomUUID(), message: '原会话新增一轮' });
+      await new Promise(resolve => setImmediate(resolve));
+      await appendFile(f.file, line(message('捕获期间新增的最终回复', 'assistant')));
+      f.finish('捕获期间新增的最终回复');
+    }
+    return page;
+  } } });
+  await service.preparePending();
+  assert.equal(service.detail(created.sessionId).session.status, 'preparing');
+  assert.equal(f.launched.length, 2, 'only the two source turns have run');
+  await service.preparePending(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.launched.length, 3);
+  assert.match(await readFile(f.launched[2]!.contextMarkdownPath!, 'utf8'), /捕获期间新增的最终回复/);
+});
+
 test('frozen context survives new service instances and source edits; tenant cannot read another context', async t => {
   const f = await fixture(t);
   const created = await f.service.create(f.source, { requestId: randomUUID(), targetAgent: 'claude' });
@@ -439,7 +485,7 @@ test('cross-device A to B waits for the source packet and runs in B selected dir
   const created = await f.service.create(source.id, { requestId: randomUUID(), targetAgent: 'codex', deviceId: 'B', projectId: 'project-B', cwd: dirB, message: 'B 继续' });
   const queued = f.database.readTaskCenter('default').executions.find(job => job.conversationId === created.sessionId);
   assert.ok(queued); assert.equal(queued.contextSourceDeviceId, 'A'); assert.equal(queued.deviceId, 'B');
-  let uploadedManifestDigest = '';
+  let uploadedManifestDigest = '', transferRequests = 0;
   const route = (actor: { id: string }, deviceId: string) => (method: string, body?: unknown, endpoint?: string) => {
     if (endpoint?.includes('/transfer/objects/')) {
       const url = new URL(endpoint, 'http://localhost');
@@ -448,6 +494,7 @@ test('cross-device A to B waits for the source packet and runs in B selected dir
       return 'bytes' in result ? result.bytes : result;
     }
     if (endpoint?.includes('/transfer')) {
+      transferRequests++;
       const url = new URL(endpoint, 'http://localhost');
       const input = method === 'POST' ? body as Record<string, unknown> : { deviceId, readyOnly: url.searchParams.get('readyOnly'), format: url.searchParams.get('format') };
       if (method === 'POST' && 'manifest' in input) uploadedManifestDigest = String((input.manifest as { manifestDigest?: unknown }).manifestDigest || '');
@@ -503,6 +550,27 @@ test('cross-device A to B waits for the source packet and runs in B selected dir
   await workerA.sync(); await workerB.sync(); assert.equal(launched.length, 1);
   assert.equal(f.database.readTaskCenter('default').executions.find(job => job.id === queued.id)?.status, 'completed');
   await rm(path.join(records, 'session.jsonl'));
+  const initialTransfers = transferRequests;
+  for (const protocol of ['legacy', 'acp'] as const) {
+    f.database.mutateTaskCenter('default', data => { data.sessions.find(item => item.id === created.sessionId)!.protocol = protocol; });
+    const input = { requestId: randomUUID(), message: `继续 ${protocol} 会话` };
+    const sent = await f.service.send(created.sessionId, input);
+    assert.deepEqual(await f.service.send(created.sessionId, input), sent);
+    const job = f.database.readTaskCenter('default').executions.find(item => item.id === sent.executionId)!;
+    assert.equal(job.contextSourceDeviceId, undefined);
+    // Already queued by an older server: resume must ignore stale transfer metadata.
+    f.database.mutateTaskCenter('default', data => { data.executions.find(item => item.id === sent.executionId)!.contextSourceDeviceId = 'A'; });
+    await workerB.sync(); await workerB.sync();
+    const resumed = launched.at(-1)!;
+    assert.equal(resumed.id, sent.executionId);
+    assert.equal(protocol === 'acp' ? resumed.resumeSessionId : resumed.resumeThreadId, 'b-native');
+    assert.equal(resumed.prompt, input.message);
+    assert.equal(resumed.contextMarkdownPath, undefined);
+    assert.equal(resumed.promptImages, undefined);
+    assert.equal(f.database.readTaskCenter('default').executions.find(item => item.id === sent.executionId)?.status, 'completed');
+    assert.equal(transferRequests, initialTransfers);
+  }
+  assert.equal(launched.length, 3);
   const returned = await f.service.create(created.sessionId, { requestId: randomUUID(), targetAgent: 'codex', deviceId: 'A', projectId: 'project-A', cwd: dirA, message: '带上 B 的结果返回 A' });
   const returnJob = f.database.readTaskCenter('default').executions.find(job => job.conversationId === returned.sessionId);
   assert.equal(returnJob?.contextSourceDeviceId, 'local');
@@ -513,7 +581,7 @@ test('cross-device A to B waits for the source packet and runs in B selected dir
   const failed = await f.service.create(missingSource.id, { requestId: randomUUID(), targetAgent: 'codex', deviceId: 'B', projectId: 'project-B', cwd: dirB, message: '不得用摘要代替' });
   await workerA.sync(); await workerB.sync();
   const failedJob = f.database.readTaskCenter('default').executions.find(item => item.conversationId === failed.sessionId);
-  assert.equal(failedJob?.status, 'failed'); assert.match(failedJob.message || '', /原始会话不存在/); assert.equal(launched.length, 1);
+  assert.equal(failedJob?.status, 'failed'); assert.match(failedJob.message || '', /原始会话不存在/); assert.equal(launched.length, 3);
 });
 
 test('source connector resumes only missing objects after interrupted upload and restart', async t => {
@@ -587,6 +655,17 @@ test('local source can hand its frozen context to a remote device without copyin
     runnerFactory: update => ({ projects: async () => [{ id: 'codex', cwd: target, agent: 'codex' }], start: async (item: RunnerJob) => { launched.push(item); update({ ...item, status: 'completed', sessionId: 'b-native' }); }, respond: async () => {}, stop: async () => {}, reconcile: async () => {}, close() {} }) });
   t.after(() => worker.close()); await worker.sync();
   assert.equal(launched.length, 1); assert.equal(launched[0]!.cwd, selected); assert.match(await readFile(launched[0]!.contextMarkdownPath!, 'utf8'), /保持原接口兼容/);
+  const request = worker.request;
+  worker.request = (method, body, endpoint) => {
+    assert.ok(!endpoint?.includes('/transfer'), 'resumed turn must not download or inject initial context again');
+    return request(method, body, endpoint);
+  };
+  await f.service.send(created.sessionId, { requestId: randomUUID(), message: '只发送本轮消息' });
+  await worker.sync(); await worker.sync();
+  assert.equal(launched.length, 2);
+  assert.equal(launched[1]!.prompt, '只发送本轮消息');
+  assert.equal(launched[1]!.resumeThreadId, 'b-native');
+  assert.equal(launched[1]!.contextMarkdownPath, undefined);
 });
 
 test('remote source to workbench device waits for upload before launching once', async t => {
@@ -613,6 +692,25 @@ test('remote source to workbench device waits for upload before launching once',
   t.after(() => worker.close()); await worker.sync(); await f.service.preparePending(); await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.launched.length, 1); assert.match(await readFile(f.launched[0]!.contextMarkdownPath!, 'utf8'), /A 设备原文/);
   await f.service.preparePending(); assert.equal(f.launched.length, 1);
+  f.finish();
+  const sent = await f.service.send(created.sessionId, { requestId: randomUUID(), message: '继续工作台会话' });
+  await f.service.preparePending(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.launched.length, 2);
+  assert.equal(f.launched[1]!.id, sent.executionId);
+  assert.equal(f.launched[1]!.resumeSessionId, f.launched[0]!.sessionId || f.service.detail(created.sessionId).session.nativeId);
+  assert.equal(f.launched[1]!.contextSourceDeviceId, undefined);
+  assert.equal(f.launched[1]!.contextMarkdownPath, undefined);
+  assert.equal(f.launched[1]!.prompt, '继续工作台会话');
+  f.finish();
+  const held = createConversations({ ...f.options, execution: { ...f.execution, launch() {} } });
+  const pending = await held.send(created.sessionId, { requestId: randomUUID(), message: '重启前的未决续聊' });
+  f.database.mutateTaskCenter('default', data => { data.executions.find(item => item.id === pending.executionId)!.contextSourceDeviceId = 'A'; });
+  await held.preparePending(); assert.equal(f.launched.length, 2);
+  const restarted = createCodexExecution({ database: f.database, tenantId: 'default', workspace: () => f.root,
+    runnerFactory: () => ({ projects: async () => [], start: async () => assert.fail('must not resend on restart'), close() {} }) });
+  t.after(() => restarted.close());
+  assert.equal(f.database.readTaskCenter('default').executions.find(item => item.id === pending.executionId)?.status, 'unknown');
+  await assert.rejects(held.send(created.sessionId, { requestId: randomUUID(), message: '不得重复发送' }), { statusCode: 409 });
 });
 
 test('new routes explicitly separate execution and read permissions', () => {

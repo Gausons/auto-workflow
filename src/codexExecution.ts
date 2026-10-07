@@ -410,7 +410,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
   })();
   database.mutateTaskCenter(tenantId, (data) => {
     data.executions ||= [];
-    for (const job of data.executions) if (job.deviceId === 'local' && active.has(job.status) && !(job.status === 'queued' && job.contextSourceDeviceId && job.contextSourceDeviceId !== 'local')) {
+    for (const job of data.executions) if (job.deviceId === 'local' && active.has(job.status) && !(job.status === 'queued' && job.contextSourceDeviceId && job.contextSourceDeviceId !== 'local' && !job.resumeSessionId && !job.resumeThreadId)) {
       job.status = 'unknown'; job.request = null; job.message = '工作台已重启，请核对原 Agent 会话，避免重复执行';
       const task = data.tasks.find((item) => item.id === job.taskId); if (task) { task.status = 'error'; task.revision++; }
     }

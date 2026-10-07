@@ -348,6 +348,8 @@ export function createConversations({ database, tenantId, history, delivery, exe
         if (message && repeated.status !== 'preparing') await this.send(repeated.id, { requestId, message });
         return { sessionId: repeated.id, taskId: repeated.taskId };
       }
+      // Execution completion can race both source capture and target discovery.
+      const sourceRevisions = new Map(read().tasks.map(task => [task.id, task.revision]));
       const origin = await source(id);
       const originDeviceId = origin.session.deviceId || 'local';
       const allProjects = (await execution.targets()).projects.filter(project => (project.agent || 'codex') === targetAgent && project.deviceId === (targetDeviceId || originDeviceId));
@@ -382,7 +384,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
           const taskId = task.id;
           if (data.executions.some(job => job.taskId === taskId && job.status === 'unknown')) throw httpError(409, '来源执行结果待核对，请先核对原会话');
         }
-        const waiting = task && busy(data, task.id);
+        const waiting = task && (busy(data, task.id) || sourceRevisions.get(task.id) !== task.revision);
         if (!task) {
           task = { id: randomUUID(), title: origin.session.title, content: origin.session.title, status: 'ready', revision: 1, contextVersion: 1, sessionIds: [id], events: [], createdAt: now(), updatedAt: now() };
           data.tasks.push(task);
@@ -435,7 +437,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
         if (!task) throw httpError(409, '会话关联任务不存在');
         if (busy(current, task.id)) throw httpError(409, '请等待当前执行完成，结果未知时先核对原会话');
         if (s.nativeId !== session.nativeId) throw httpError(409, '会话已更新，请重试');
-        const j: Execution = { id: randomUUID(), requestId, conversationId: id, sourceSessionId: s.sourceSessionId, contextSourceDeviceId: s.contextSourceDeviceId, contextId: s.contextId, contextDigest: snapshot.digest,
+        const j: Execution = { id: randomUUID(), requestId, conversationId: id, sourceSessionId: s.sourceSessionId, ...(first ? { contextSourceDeviceId: s.contextSourceDeviceId } : {}), contextId: s.contextId, contextDigest: snapshot.digest,
           contextCompacted: compiled.compacted, taskId: task.id, contextVersion: task.contextVersion, userMessage: message, prompt: compiled.prompt,
           ...(s.deviceId === 'local' && compiled.markdownPath ? { contextMarkdownPath: compiled.markdownPath } : {}),
           ...(s.deviceId === 'local' && compiled.markdownPath ? { contextCoverage: { records: cleanContextEntries(snapshot.entries).length, images: compiled.images.length, partial: snapshot.partial } } : {}),
@@ -454,7 +456,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
       if (preparing || closed) return;
       preparing = true;
       try {
-        for (const job of read().executions.filter(item => item.deviceId === 'local' && item.contextSourceDeviceId && item.contextSourceDeviceId !== 'local' && item.status === 'queued')) {
+        for (const job of read().executions.filter(item => item.deviceId === 'local' && item.contextSourceDeviceId && item.contextSourceDeviceId !== 'local' && !item.resumeSessionId && !item.resumeThreadId && item.status === 'queued')) {
           if (closed || !job.conversationId) return;
           const transferred = database.readSessionContext(tenantId, job.id);
           if (!transferred && !job.contextTransferError) continue;
@@ -489,6 +491,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
               await service.send(pending.id, { message: pending.pendingMessage, requestId: pending.pendingRequestId });
               continue;
             }
+            const sourceRevision = read().tasks.find(candidate => candidate.id === pending.taskId)?.revision;
             const origin = await source(pending.sourceSessionId);
             if (closed) return;
             const task = read().tasks.find(candidate => candidate.id === pending.taskId);
@@ -497,7 +500,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
             const ready = database.mutateTaskCenter(tenantId, data => {
               const session = managed(pending.id, data);
               if (!session) return false;
-              if (session.status !== 'preparing' || busy(data, session.taskId)) return false;
+              if (session.status !== 'preparing' || busy(data, session.taskId) || data.tasks.find(candidate => candidate.id === session.taskId)?.revision !== sourceRevision) return false;
               database.saveSessionContext(tenantId, updated);
               session.contextId = updated.id;
               if (origin.session.source === 'conversation' && (origin.session.contextTransferred || origin.session.contextSourceDeviceId === 'local')) session.contextSourceDeviceId = 'local';

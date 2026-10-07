@@ -14,6 +14,9 @@ const executionTools = new Set(['mcpToolCall', 'commandExecution', 'fileChange',
 export function isContextBlock(value: unknown): boolean {
   const item = object(value), type = String(item.type);
   return (textTypes.has(type) && typeof item.text === 'string') || imageTypes.has(type) || privateTypes.has(type)
+    || (type === 'resource_link' && typeof item.uri === 'string' && typeof item.name === 'string')
+    || (type === 'resource' && typeof object(item.resource).uri === 'string')
+    || (type === 'audio' && typeof item.data === 'string' && typeof item.mimeType === 'string')
     || toolCalls.has(type) || toolResults.has(type) || type === 'attachment_reference' || executionTools.has(type)
     || ['tool_call', 'tool_call_update'].includes(String(item.sessionUpdate));
 }

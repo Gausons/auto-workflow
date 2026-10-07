@@ -92,7 +92,10 @@ export function verifyDetachedManifest(value: unknown): DetachedManifest {
         typeof entry.source !== 'string' || !Array.isArray(entry.segments) || !entry.segments.length || entry.segments.length > 10000 ||
         !Array.isArray(entry.fieldOrder) || !entry.fieldOrder.includes('text') || !entry.fieldOrder.includes('role') || !entry.fieldOrder.includes('source') ||
         new Set(entry.fieldOrder).size !== entry.fieldOrder.length ||
-        entry.fieldOrder.some(key => !['role', 'text', 'source', 'line', 'timestamp', 'turnId'].includes(String(key)))) throw invalid('交接事件格式无效');
+        entry.fieldOrder.some(key => !['role', 'text', 'source', 'line', 'timestamp', 'turnId', 'name', 'callId', 'phase'].includes(String(key))) ||
+        (entry.name !== undefined && typeof entry.name !== 'string') ||
+        (entry.callId !== undefined && typeof entry.callId !== 'string') ||
+        (entry.phase !== undefined && !['commentary', 'final'].includes(String(entry.phase)))) throw invalid('交接事件格式无效');
     for (const segment of entry.segments) {
       if (!isRecord(segment)) throw invalid('交接内容格式无效');
       if (segment.type === 'text' && typeof segment.value === 'string') textBytes += Buffer.byteLength(segment.value);

@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { verifySnapshot } from '@auto-workflow/context-engine';
+import { detachSnapshot, restoreDetachedSnapshot } from '@auto-workflow/context-engine/detached-bundle';
 import { contextPrompt, freezeContext, readContext, type ContextEntry } from '../src/contextCompiler.js';
 import { cleanUserContext } from '../src/agentHistory/adapters.js';
 import { contextEntryText } from '../shared/contextContent.js';
@@ -12,6 +13,48 @@ import { createContextModelSummarizer, type ModelSummary } from '../src/contextM
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
 const image = { type: 'image', mimeType: 'image/png', data: png };
 const entry = (role: string, content: unknown): ContextEntry => ({ role, source: 'fixture', text: typeof content === 'string' ? content : JSON.stringify(content) });
+
+test('captured tool metadata and reply phases survive detached transport', async () => {
+  const events = [
+    { agent: 'codex', record: { type: 'response_item', payload: { type: 'function_call', name: 'exec_command', call_id: 'call-1', arguments: '{}' } } },
+    { agent: 'codex', record: { type: 'response_item', payload: { type: 'function_call_output', call_id: 'call-1', output: 'passed' } } },
+    ...['commentary', 'final'].map(phase => ({ agent: 'codex', record: { type: 'response_item', payload: { type: 'message', role: 'assistant', phase, content: [{ type: 'output_text', text: phase }] } } })),
+    { agent: 'claude', record: { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', id: 'call-2', input: {} }] } } }
+  ].map((event, index) => ({ ...event, kind: 'record', sourceLine: index + 1 }));
+  const captured = await readContext({ detail: async () => ({ coverage: { pendingBytes: 0 }, events }), record: async () => ({}) }, 'fixture');
+  const snapshot = freezeContext(captured.entries, ['fixture']);
+  assert.equal(snapshot.entries[0]?.name, 'exec_command');
+  assert.equal(snapshot.entries[1]?.callId, 'call-1');
+  assert.equal(snapshot.entries[2]?.phase, 'commentary');
+  assert.equal(snapshot.entries[3]?.phase, 'final');
+  const bundle = detachSnapshot(snapshot);
+  const wire = JSON.parse(JSON.stringify(bundle.manifest));
+  assert.deepEqual(restoreDetachedSnapshot(wire, new Map()), snapshot);
+});
+
+test('mixed MCP resources and audio do not hide adjacent tool images', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'context-mixed-mcp-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const content = [
+    { type: 'text', text: '工具截图' }, image,
+    { type: 'resource_link', uri: 'https://example.com/report', name: 'report' },
+    { type: 'resource', resource: { uri: 'file:///report.txt', text: '参考记录' } },
+    { type: 'audio', mimeType: 'audio/wav', data: 'YXVkaW8=' }
+  ];
+  const snapshot = freezeContext([
+    entry('tool_result', { type: 'function_call_output', output: JSON.stringify({ content }) }),
+    entry('tool_result', { type: 'mcpToolCall', result: { content } })
+  ], ['fixture']);
+  const compiled = await contextPrompt(snapshot, '检查截图', root);
+  assert.equal(compiled.images.length, 1);
+  assert.deepEqual(await readFile(compiled.images[0]!.path), Buffer.from(png, 'base64'));
+  const markdown = await readFile(compiled.fullMarkdownPath, 'utf8');
+  assert.equal(markdown.match(/!\[历史图片 image-1\]/g)?.length, 2);
+  assert.ok(!markdown.includes(png));
+  assert.match(markdown, /https:\/\/example.com\/report/);
+  assert.match(markdown, /参考记录/);
+  assert.deepEqual(verifySnapshot(JSON.parse(await readFile(compiled.evidencePath, 'utf8'))), snapshot);
+});
 
 test('readable handoff retains failing command exit codes and MCP structured results', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'context-results-'));
