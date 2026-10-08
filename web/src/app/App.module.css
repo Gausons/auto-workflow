@@ -6,7 +6,7 @@
 .shell :global(.brand span) { font-size: 10px; margin-top: 5px; }
 .shell.shell :global(.nav-list a), .shell :global(.settings-link) { min-height: 42px; gap: 12px; padding: 0 12px; border-radius: 10px; font-size: 14px; font-weight: 400; color: #333; }
 .shell.shell :global(.nav-create-task span) { font-size: 14px; margin: 0; }
-.shell.shell :global(.nav-create-task) { margin-bottom: 12px; background: transparent; }
+.shell.shell :global(.nav-create-task) { margin-bottom: 0; background: transparent; }
 .shell.shell :global(.nav-list a:hover), .shell.shell :global(.nav-list a.active) { background: #eaeaea; }
 .shell.shell :global(.nav-icon) { width: 19px; height: 19px; flex: 0 0 19px; color: #444; }
 .shell.shell :global(.sidebar-note) { border: 0; min-height: auto; padding: 0 12px; font-size: 11px; }
@@ -33,7 +33,6 @@
   .shell.shell { display: block; }
   .shell.shell :global(.sidebar) { padding: 10px 84px 10px 10px; }
   .shell.shell .account { display: none; }
-  .shell.shell :global(.nav-create-task) { margin-bottom: 0; }
   .shell.shell :global(.main) { padding: 22px 18px; }
   .shell :global(.settings-link) { right: 8px; top: 10px; padding: 0 8px; }
   .shell :global(.settings-link .nav-icon) { display: none; }
