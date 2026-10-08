@@ -168,7 +168,7 @@ test('model summary receives failing tool evidence and newest corrections before
     assert.ok(content.records.some(value => value.text.includes('LATEST_TEST_FAILURE')));
     assert.ok(content.records.some(value => value.text.includes('pnpm test')));
     assert.ok(content.records.some(value => value.index === 101));
-    assert.ok(!content.records.some(value => value.index === 1), 'older records yield budget to recent turns');
+    assert.ok(content.records.some(value => value.index === 1), 'original goal remains available alongside recent evidence');
     return Response.json({ output_text: JSON.stringify(summary) });
   } });
   const result = await summarize(freezeContext(entries, ['fixture']), entries, root);

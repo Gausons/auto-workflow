@@ -145,7 +145,8 @@ test('new conversation is ready without executing historical requests; first mes
   await f.service.send(created.sessionId, { requestId: randomUUID(), message: '按刚才的方案继续' });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.launched.length, 1);
-  assert.doesNotMatch(f.launched[0].prompt, /保持原接口兼容|TOOL_RESULT_/);
+  assert.match(f.launched[0].prompt, /保持原接口兼容/);
+  assert.ok(f.launched[0].prompt.length < 5000, 'first prompt includes a bounded brief, not the long tool output');
   assert.ok(f.launched[0].contextMarkdownPath);
   const handoff = await readFile(f.launched[0].contextMarkdownPath, 'utf8');
   const evidence = await readFile(path.join(f.root, 'context', `evidence-${f.launched[0].contextId}-source.json`), 'utf8');
@@ -153,6 +154,10 @@ test('new conversation is ready without executing historical requests; first mes
   assert.ok((await linkedContext(f.launched[0].contextMarkdownPath)).includes(long)); assert.ok(evidence.includes(long));
   assert.doesNotMatch(f.launched[0].prompt, /hidden-system|secret-for-context-test/);
   assert.equal(f.service.detail(created.sessionId).messages[0].text, '按刚才的方案继续');
+  const brief = f.service.contextPreview(created.sessionId).brief;
+  assert.ok(brief);
+  assert.equal(brief.snapshotDigest, f.launched[0].contextDigest);
+  assert.ok(f.launched[0].prompt.includes(JSON.stringify(brief.text)));
 });
 
 test('context preview decodes multimodal records without changing the connector snapshot or tenant boundary', async t => {
@@ -223,7 +228,8 @@ test('switching back carries original context and new turns without nesting inje
   const handoff = await readFile(f.launched[1].contextMarkdownPath!, 'utf8');
   for (const text of ['保持原接口兼容', '继续补测试', '已补充测试，全部通过']) assert.ok(handoff.includes(text));
   assert.match(prompt, /检查上面的结果/);
-  assert.doesNotMatch(prompt, /保持原接口兼容|<inherited_context>/);
+  assert.match(prompt, /保持原接口兼容/);
+  assert.doesNotMatch(prompt, /<inherited_context>/);
   assert.equal(a.taskId, b.taskId); assert.equal(f.database.readTaskCenter('default').tasks.length, 1);
 });
 
@@ -304,7 +310,7 @@ test('bounded reading guide retains full source records in linked evidence', asy
   const entries = Array.from({ length: 30 }, (_, i) => ({ role: 'assistant', text: `record-${i} ` + 'x'.repeat(500), source: f.source }));
   const snapshot = freezeContext(entries, [f.source]);
   const result = await contextPrompt(snapshot, '继续', path.join(f.root, 'context'), 3000);
-  assert.equal(result.compacted, true); assert.match(result.prompt, /Markdown 交接文件/); assert.doesNotMatch(result.prompt, /record-29/);
+  assert.equal(result.compacted, true); assert.match(result.prompt, /Markdown 交接文件/); assert.ok(result.brief.length <= 2200);
   const handoff = await readFile(result.markdownPath, 'utf8');
   assert.ok(handoff.length <= 3000); assert.match(handoff, /record-29/);
   assert.match(await readFile(result.fullMarkdownPath, 'utf8'), /记录 15/);
@@ -350,7 +356,8 @@ test('inherited context removes runtime envelopes while retaining user text and 
     ]) }
   ] }, '继续', path.join(f.root, 'context'));
   assert.doesNotMatch(compiled.prompt, /external_codex_apps_open_page|recommended_plugins|environment_context|legacy catalog|legacy environment/);
-  assert.doesNotMatch(compiled.prompt, /旧快照中的真实请求|data:image\/png/);
+  assert.match(compiled.prompt, /旧快照中的真实请求/);
+  assert.doesNotMatch(compiled.prompt, /data:image\/png/);
   assert.match(compiled.prompt, /Markdown 交接文件/); assert.equal(compiled.images.length, 1);
   const markdown = await readFile(compiled.markdownPath, 'utf8');
   assert.doesNotMatch(markdown, /external_codex_apps_open_page|legacy environment/);
@@ -418,7 +425,7 @@ test('remote connector builds a full Markdown handoff from its original session 
   await worker.sync();
   const launched = launchedJobs[0];
   assert.ok(launched?.contextMarkdownPath);
-  assert.match(launched.prompt || '', /Markdown 交接文件/); assert.doesNotMatch(launched.prompt || '', /远端完整原文/);
+  assert.match(launched.prompt || '', /Markdown 交接文件/); assert.match(launched.prompt || '', /核心交接单/);
   const markdown = await readFile(launched.contextMarkdownPath, 'utf8');
   assert.match(markdown, /远端完整原文|远端答复/); assert.doesNotMatch(markdown, /data:image\/png;base64,/);
   assert.ok((await linkedContext(launched.contextMarkdownPath, true)).includes(imageBytes.toString('base64')));
@@ -432,11 +439,17 @@ test('remote connector builds a full Markdown handoff from its original session 
   assert.equal(inherited.partial, true, 'server preview remains only a placeholder');
   assert.equal(inherited.count, 1);
   assert.deepEqual(inherited.coverage, { records: 2, images: 1, partial: false });
+  const brief = f.service.contextPreview(created.sessionId).brief;
+  assert.ok(brief, 'new connector reports the brief actually supplied to the Agent');
+  assert.ok(launched.prompt?.includes(JSON.stringify(brief.text)));
   const report = { status: 'completed', contextCoverage: inherited.coverage };
   await f.execution.action({ action: 'report', executionId: queued.id, report }, owner);
   await assert.rejects(f.execution.action({ action: 'report', executionId: queued.id, report }, { id: 'other-owner' }), { statusCode: 403 });
   await assert.rejects(f.execution.action({ action: 'report', executionId: queued.id, report: { ...report, contextCoverage: { records: -1, images: 0, partial: false } } }, owner), { statusCode: 400 });
   await assert.rejects(f.execution.action({ action: 'report', executionId: queued.id, report: { ...report, contextCoverage: { records: 99, images: 1, partial: false } } }, owner), { statusCode: 409 });
+  await assert.rejects(f.execution.action({ action: 'report', executionId: queued.id, report: { ...report, contextBrief: { ...brief, text: 'x'.repeat(3001) } } }, owner), { statusCode: 400 });
+  await assert.rejects(f.execution.action({ action: 'report', executionId: queued.id, report: { ...report, contextBrief: { ...brief, text: '替换原始交接单' } } }, owner), { statusCode: 409 });
+  await assert.rejects(f.execution.action({ action: 'report', executionId: queued.id, report: { ...report, contextBrief: { ...brief, intentDigest: '0'.repeat(64) } } }, owner), { statusCode: 400 });
   await appendFile(remoteFile, line(message('冻结后新增内容')));
   const switched = await f.service.create(created.sessionId, { requestId: randomUUID(), targetAgent: 'codex', projectId: 'remote-project', message: '切换后继续' });
   await worker.sync();

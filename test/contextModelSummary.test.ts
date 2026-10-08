@@ -25,7 +25,7 @@ test('model summary cites source records, excludes image data, and reuses the sa
   const summarize = createContextModelSummarizer({ apiKey: 'test-key', baseUrl: 'https://example.invalid/v1', model: 'test-model', timeoutMs: 1000, fetchImpl });
   const first = await contextPrompt(snapshot, '继续', root, 120000, true, summarize);
   assert.match(first.prompt, /Markdown 交接文件/);
-  assert.doesNotMatch(first.prompt, /保持接口兼容/);
+  assert.match(first.prompt, /保持接口兼容/);
   assert.match(await readFile(first.markdownPath, 'utf8'), /保持接口兼容（记录 1）/);
   assert.equal((await summarize(snapshot, snapshot.entries, root)).status, 'complete');
   assert.equal(calls, 1);

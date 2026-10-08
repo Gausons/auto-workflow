@@ -22,6 +22,20 @@ function mount(selectedInfo = info) {
 
 describe('InheritedContext', () => {
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  it('shows the actual prepared brief as safe text and reloads when first execution prepares it', async () => {
+    const brief = { version: 1 as const, snapshotId: 'a'.repeat(64), snapshotDigest: 'b'.repeat(64), intentDigest: 'c'.repeat(64), text: '当前要求：保持兼容\n工具结果：失败\n<script>历史材料</script>' };
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(preview)).mockResolvedValueOnce(Response.json({ ...preview, brief }));
+    vi.stubGlobal('fetch', fetchMock);
+    const view = mount();
+    await userEvent.setup().click(screen.getByRole('button', { name: /接续自 原始问题/ }));
+    await screen.findByText('查看截图');
+    expect(screen.queryByRole('heading', { name: '本次交接单' })).toBeNull();
+    view.update({ ...info, briefId: brief.intentDigest });
+    const section = await screen.findByRole('region', { name: '本次交接单' });
+    expect(section.textContent).toContain(brief.text);
+    expect(section.querySelector('script')).toBeNull();
+    expect(section.textContent).toContain('不表示 Agent 已阅读或验证');
+  });
   it('loads automatically on expansion and renders safe multimodal detail in a separate drawer', async () => {
     const fetchMock = vi.fn(async () => Response.json(preview)); vi.stubGlobal('fetch', fetchMock);
     mount(); const user = userEvent.setup();

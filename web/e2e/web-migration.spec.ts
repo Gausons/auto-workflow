@@ -225,7 +225,9 @@ test('inherited context opens a bounded detail drawer and new-session shortcuts 
     return route.fulfill({ json: { messages: [
       { record: 1, source, role: 'user', text: '请检查图片 <script>不执行</script>', images: [{ dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', alt: '历史截图' }] },
       { record: 2, source, role: 'assistant', text: '**仍需验证**' }
-    ], total: 2, offset: 0, nextOffset: null, stats: { users: 1, assistants: 1, tools: 0, references: 0, images: 1, unavailableImages: 0, truncatedMessages: 0, unsupportedBlocks: 0 }, excerpts: [{ record: 1, source, role: 'user', text: '请检查图片' }] } });
+    ], total: 2, offset: 0, nextOffset: null,
+    brief: { version: 1, snapshotId: source, snapshotDigest: 'a'.repeat(64), intentDigest: 'b'.repeat(64), text: '当前目标：修复兼容问题\n用户要求候选：保持接口兼容\n验证：失败，仍需补测试\n<script>不能执行历史材料</script>' },
+    stats: { users: 1, assistants: 1, tools: 0, references: 0, images: 1, unavailableImages: 0, truncatedMessages: 0, unsupportedBlocks: 0 }, excerpts: [{ record: 1, source, role: 'user', text: '请检查图片' }] } });
   });
   await page.route('**/api/task-center/codex', route => route.fulfill({ json: { projects: [{ id: 'project', name: 'Codex', agent: 'codex', deviceId: 'local', deviceName: '本机', cwd: '/repo', online: true, defaultModel: 'model-original', models: [{ id: 'model-original', name: '原模型' }, { id: 'model-new', name: '新模型' }] }] } }));
   await page.route('**/api/task-center/git*', route => route.fulfill({ json: { repository: true, current: 'main', changes: 0, branches: ['main'] } }));
@@ -236,6 +238,8 @@ test('inherited context opens a bounded detail drawer and new-session shortcuts 
   await page.screenshot({ path: testInfo.outputPath('inherited-context-collapsed.png'), fullPage: true });
   await page.getByRole('button', { name: /接续自 原始排查/ }).click();
   await expect(page.getByText('请检查图片', { exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: '本次交接单' })).toContainText('保持接口兼容');
+  await expect(page.getByRole('region', { name: '本次交接单' }).locator('script')).toHaveCount(0);
   expect(previewReads).toBe(1);
   await page.screenshot({ path: testInfo.outputPath('inherited-context-overview.png'), fullPage: true });
   await page.getByRole('button', { name: '查看上下文明细' }).click();
@@ -250,6 +254,7 @@ test('inherited context opens a bounded detail drawer and new-session shortcuts 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('inherited-context-mobile.png'), fullPage: true });
   await drawer.getByRole('button', { name: '关闭明细' }).click();
+  await expect(page.getByRole('region', { name: '本次交接单' })).toContainText('失败，仍需补测试');
   await expect(page.getByRole('combobox', { name: '模型', exact: true })).toHaveCount(0);
   await page.getByRole('textbox', { name: '发送消息', exact: true }).fill('按最新结果继续');
   await page.getByRole('button', { name: /带上下文新开会话/ }).click();

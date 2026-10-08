@@ -1,4 +1,5 @@
 import path from 'node:path';
+import type { PreparedContextBrief } from '../shared/contextBriefTypes.js';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile, rename, realpath, stat } from 'node:fs/promises';
 import { CodexRunner, pickNativeDirectory } from './codexExecution.js';
@@ -22,6 +23,7 @@ interface RemoteJob {
   directoryRequestId?: string;
   prompt?: string; contextMarkdownPath?: string; promptImages?: PromptImageReference[]; contextSourcePartial?: boolean;
   contextCoverage?: ContextCoverage;
+  contextBrief?: PreparedContextBrief;
 }
 type Request = (method: string, body?: unknown, endpoint?: string) => unknown;
 interface RemoteRunner {
@@ -160,7 +162,7 @@ export class RemoteCodexWorker {
     } else if (job.remoteContext) snapshot = await this.sourceSnapshot(job);
     else return job;
     const compiled = await contextPrompt(snapshot, job.userMessage, path.join(this.directory, 'context'));
-    return { ...job, prompt: compiled.prompt, promptImages: compiled.images, contextMarkdownPath: compiled.markdownPath, contextSourcePartial: snapshot.partial,
+    return { ...job, prompt: compiled.prompt, promptImages: compiled.images, contextMarkdownPath: compiled.markdownPath, contextBrief: compiled.preparedBrief, contextSourcePartial: snapshot.partial,
       contextCoverage: { records: snapshot.entries.length, images: compiled.images.length, partial: snapshot.partial } };
   }
   async flush() {

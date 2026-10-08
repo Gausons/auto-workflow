@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { contextContentParts, contextEntryText, selectContextRecords } from '../shared/contextContent.js';
+import { contextContentParts, contextEntryText } from '../shared/contextContent.js';
+import { contextRequirements, selectHandoffRecords } from '../shared/contextSelection.js';
+import { contextBrief } from './contextBrief.js';
 import type { PromptImageReference } from '../shared/taskTypes.js';
 import type { ContextEntry, SessionContext } from './contextCompiler.js';
 import type { SummaryResult } from './contextModelSummary.js';
@@ -45,7 +47,7 @@ async function writeImmutable(file: string, content: string) {
 }
 
 /** Keep original evidence immutable; the Agent starts with a bounded reading guide. */
-export async function renderContextMarkdown(snapshot: SessionContext, entries: ContextEntry[], images: PromptImageReference[], root: string, budget: number, localFiles: boolean, modelSummary: SummaryResult) {
+export async function renderContextMarkdown(snapshot: SessionContext, entries: ContextEntry[], images: PromptImageReference[], root: string, budget: number, localFiles: boolean, modelSummary: SummaryResult, message = '') {
   if (!Number.isSafeInteger(budget) || budget < 1024) throw httpError(422, '上下文预算不足以容纳交接索引');
   const evidencePath = path.join(root, `evidence-${snapshot.id}-source.json`);
   const fullMarkdownPath = path.join(root, `full-${snapshot.id}-v2.md`);
@@ -67,9 +69,15 @@ export async function renderContextMarkdown(snapshot: SessionContext, entries: C
   await writeImmutable(fullMarkdownPath, full);
   if (images.length) await writeImmutable(exportMarkdownPath, `${fullHeader.replace('图片通过同目录 assets 中的校验原件引用。', '图片以内嵌原始字节保存；此自包含文件供导出使用。')}\n\n${entries.map((entry, index) => renderEntry(entry, index, root, assets, embedded)).join('\n\n')}\n`);
 
-  const maximum = Math.min(budget, 24000);
+  const totalBudget = Math.min(budget, 24000);
+  const brief = contextBrief(entries, message, Math.min(2200, Math.floor(totalBudget / 4)));
+  const maximum = totalBudget - JSON.stringify(brief).length;
+  const requirements = contextRequirements(entries);
+  const requirementsPath = path.join(root, `requirements-${snapshot.id}-v1.md`);
+  await writeImmutable(requirementsPath, `# 用户要求候选索引\n\n${trust}\n\n按来源顺序保留原文；不自动推断撤销或替代关系。存在冲突时核对较新的明确修正。\n\n${requirements.map(item => `## 记录 ${item.record}\n\n${fenced(item.text)}`).join('\n\n')}\n`);
   let guide = `# 会话交接\n\n${trust}\n\n${coverage}\n\n## 按需证据索引\n\n完整原文：[${path.basename(fullMarkdownPath)}](${path.basename(fullMarkdownPath)})，按“记录 N”查找。\n原始审计快照：[${path.basename(evidencePath)}](${path.basename(evidencePath)})。\n以下仅为首读内容；未选取和截取部分保留在完整原文中，不能据此认定已完成。\n`;
   if (guide.length + 200 > maximum) throw httpError(422, '上下文预算不足以容纳交接索引');
+  guide += `\n用户要求候选 ${requirements.length} 项：[要求索引](${path.basename(requirementsPath)})。未在首读中展开的要求需按本轮工作核对，不表示已经失效。\n`;
 
   const users = entries.map((entry, index) => ({ entry, index })).filter(item => item.entry.role === 'user');
   const goals = [...new Map([users[0], ...users.slice(-3), ...entries.map((entry, index) => ({ entry, index })).filter(item => item.entry.role === 'reference').slice(-1)]
@@ -97,7 +105,7 @@ export async function renderContextMarkdown(snapshot: SessionContext, entries: C
   if (guide.length + modelSection.length < maximum - 200) guide += modelSection;
   const recentHeader = '\n## 最近完整轮次与验证记录（长记录节选）\n';
   const remaining = maximum - guide.length - recentHeader.length;
-  const records = selectContextRecords(entries, remaining, Math.max(80, Math.min(6000, Math.floor((remaining - 200) / 2))));
+  const records = selectHandoffRecords(entries, remaining, Math.max(80, Math.min(3000, Math.floor((remaining - 200) / 3))), message);
   guide += recentHeader;
   const sections: string[] = [];
   let used = guide.length, truncated = false;
@@ -105,7 +113,7 @@ export async function renderContextMarkdown(snapshot: SessionContext, entries: C
   // Reserve actual rendered space for the newest evidence before older records.
   for (const record of [...records].reverse()) {
     let body = record.text, excerpted = record.truncated;
-    const render = () => `\n### 记录 ${record.index} · ${labels[record.role] || record.role}${excerpted ? ' · 节选' : ''}\n\n${fenced(body)}\n`;
+    const render = () => `\n### 记录 ${record.index} · ${labels[record.role] || record.role}${excerpted ? ' · 节选' : ''}\n选取依据：${record.reasons.join('；') || '近期记录'}\n\n${fenced(body)}\n`;
     let section = render(), size = body.length;
     while (used + section.length > maximum && size > 80) {
       size = Math.floor(size / 2); excerpted = true;
@@ -119,5 +127,5 @@ export async function renderContextMarkdown(snapshot: SessionContext, entries: C
   const version = createHash('sha256').update(guide).digest('hex').slice(0, 12);
   const markdownPath = path.join(root, `handoff-${snapshot.id}-${version}.md`);
   await writeImmutable(markdownPath, guide);
-  return { inline: localFiles ? guide : full, compacted: localFiles && compacted, markdownPath, fullMarkdownPath, evidencePath, exportMarkdownPath };
+  return { brief, inline: localFiles ? guide : full, compacted: localFiles && compacted, markdownPath, fullMarkdownPath, evidencePath, exportMarkdownPath };
 }

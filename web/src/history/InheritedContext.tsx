@@ -51,7 +51,7 @@ function ContextDrawer({ preview, sourceTitle, close }: { preview: ReturnType<ty
 
 function usePreview(id: string, info: InheritedContextInfo, expanded: boolean) {
   return useInfiniteQuery({
-    queryKey: ['history', 'context-preview', id, info.digest, info.availability, info.count, info.coverage?.records],
+    queryKey: ['history', 'context-preview', id, info.digest, info.briefId, info.availability, info.count, info.coverage?.records],
     initialPageParam: 0,
     enabled: expanded && info.availability !== 'pending',
     queryFn: ({ pageParam, signal }) => apiRequest<ContextPreviewResponse>(`/api/conversations/${encodeURIComponent(id)}/context-preview?offset=${pageParam}`, { signal }),
@@ -86,6 +86,11 @@ function ContextCard({ id, info }: Props) {
           {first.stats.unavailableImages > 0 && <p className={styles.warning}>{first.stats.unavailableImages} 张图片无法在此预览，明细中保留原因。</p>}
           {first.stats.truncatedMessages > 0 && <p className={styles.warning}>{first.stats.truncatedMessages} 条长记录仅展示节选，完整原文仍保留在交接记录中。</p>}
           {first.stats.unsupportedBlocks > 0 && <p className={styles.warning}>{first.stats.unsupportedBlocks} 项内容暂不支持预览，完整原文仍保留在交接记录中。</p>}
+          {first.brief && <section aria-label="本次交接单">
+            <h3 className={styles.excerptHeading}>本次交接单</h3>
+            <p className={styles.scope}>以下内容与首次发送时准备的核心交接单一致，不表示 Agent 已阅读或验证。记录编号对应实际交接快照。</p>
+            <pre className={styles.brief}>{first.brief.text}</pre>
+          </section>}
           <h3 className={styles.excerptHeading}>原文摘录</h3>
           {first.excerpts.length ? first.excerpts.map(excerpt => <blockquote className={styles.excerpt} key={excerpt.record}><span>记录 {excerpt.record} · {roleLabel(excerpt.role)}</span><p>{excerpt.text}</p></blockquote>) : <p>没有可摘录的文本，请查看明细中的图片或工具记录。</p>}
           <div className={styles.actions}><button className="button secondary" type="button" onClick={() => setShowDetails(true)}>查看上下文明细</button><span className={styles.scope}>摘录保留来源顺序，不代表已验证结论</span></div>

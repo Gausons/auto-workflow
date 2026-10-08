@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ContextEntry, SessionContext } from './contextCompiler.js';
-import { selectContextRecords } from '../shared/contextContent.js';
+import { selectHandoffRecords, contextPolicyVersion } from '../shared/contextSelection.js';
 
 export interface SummaryFact { text: string; refs: number[] }
 export interface ModelSummary {
@@ -40,16 +40,18 @@ export function createContextModelSummarizer({ apiKey, baseUrl, model, timeoutMs
   apiKey?: string; baseUrl: string; model: string; timeoutMs: number; fetchImpl?: typeof fetch;
 }) {
   const pending = new Map<string, Promise<SummaryResult>>();
-  const configurationVersion = createHash('sha256').update(JSON.stringify([baseUrl, model, 'recent-evidence-v2'])).digest('hex').slice(0, 12);
+  const configurationVersion = createHash('sha256').update(JSON.stringify([baseUrl, model, contextPolicyVersion])).digest('hex').slice(0, 12);
   return (snapshot: SessionContext, entries: ContextEntry[], root: string): Promise<SummaryResult> => {
     if (!apiKey) return Promise.resolve({ status: 'unavailable', reason: '未配置模型摘要服务，已使用原文摘取' });
-    const prior = pending.get(snapshot.id);
+    const bounded = selectHandoffRecords(entries, 80000);
+    const evidenceVersion = createHash('sha256').update(JSON.stringify([snapshot.digest, bounded])).digest('hex').slice(0, 16);
+    const cacheKey = JSON.stringify([root, snapshot.id, evidenceVersion]);
+    const prior = pending.get(cacheKey);
     if (prior) return prior;
     const work = (async (): Promise<SummaryResult> => {
-      const bounded = selectContextRecords(entries, 80000);
       const coverage: SummaryCoverage = { totalRecords: entries.length, includedRecords: bounded.length, recordRefs: bounded.map(entry => entry.index), truncatedRecordRefs: bounded.filter(entry => entry.truncated).map(entry => entry.index) };
       const availableRefs = new Set(bounded.map(entry => entry.index));
-      const file = path.join(root, `summary-${snapshot.id}-${configurationVersion}.json`);
+      const file = path.join(root, `summary-${snapshot.id}-${configurationVersion}-${evidenceVersion}.json`);
       try { return { status: 'complete', summary: validate(JSON.parse(await readFile(file, 'utf8')), availableRefs), coverage }; }
       catch (error: unknown) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
       const controller = new AbortController();
@@ -75,8 +77,8 @@ export function createContextModelSummarizer({ apiKey, baseUrl, model, timeoutMs
         catch (error: unknown) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
         return { status: 'complete', summary, coverage };
       } finally { clearTimeout(timer); }
-    })().catch((): SummaryResult => ({ status: 'failed', reason: '模型整理失败，已使用原文摘取；可核对逐条证据' })).finally(() => pending.delete(snapshot.id));
-    pending.set(snapshot.id, work);
+    })().catch((): SummaryResult => ({ status: 'failed', reason: '模型整理失败，已使用原文摘取；可核对逐条证据' })).finally(() => pending.delete(cacheKey));
+    pending.set(cacheKey, work);
     return work;
   };
 }

@@ -14,6 +14,7 @@
 !/docs/agent-context-handoff-plan.md
 !/docs/frontend-web-technology-selection.md
 !/docs/context-transfer-engine-design.md
+!/docs/session-context-quality-plan.md
 !/LICENSE
 !/package.json
 !/pnpm-lock.yaml

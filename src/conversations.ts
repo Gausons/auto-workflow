@@ -131,8 +131,16 @@ export function createConversations({ database, tenantId, history, delivery, exe
       const entries: ContextEntry[] = [...prior.entries];
       for (const job of jobsFor(data, id)) {
         entries.push({ role: 'user', text: JSON.stringify([{ type: 'text', text: String(clean({ text: job.userMessage })?.text || '') }]), source: id, timestamp: job.createdAt, turnId: job.id });
-        for (const event of job.contextEvents || []) entries.push({ role: 'tool_result', text: JSON.stringify(clean(event)), source: id });
+        for (const event of job.contextEvents || []) {
+          const value = clean(event);
+          const callId = value.toolCallId ?? value.call_id ?? value.id;
+          entries.push({ role: value.sessionUpdate === 'tool_call' ? 'tool_call' : 'tool_result', text: JSON.stringify(value), source: id, turnId: job.id,
+            ...(typeof callId === 'string' ? { callId } : {}) });
+        }
         if (job.output) entries.push({ role: 'assistant', text: JSON.stringify([{ type: 'text', text: String(clean({ text: job.output })?.text || '') }]), source: id, timestamp: job.updatedAt, turnId: job.id });
+        const statuses: Record<string, string> = { completed: '执行已结束，任务验收及测试结果需另核对', failed: '执行失败', interrupted: '执行已停止，可能存在未完成工作', unknown: '执行结果待核对，不得自动重发' };
+        entries.push({ role: 'reference', source: `execution:${job.id}`, turnId: job.id, timestamp: job.updatedAt,
+          text: String(clean({ text: `执行状态：${statuses[job.status] || '执行尚未结束'}（${job.status}）\n执行标识：${job.id}\n状态说明：${job.message || '未提供'}\n连接释放：${job.releaseStatus || 'unknown'}\n上下文版本：${job.contextVersion}\n工作目录：${job.cwd}\n状态更新时间：${job.updatedAt}\n仅记录执行状态，不代表测试通过；代码版本需核对。` }).text || '') });
       }
       return { session: own, entries, sources: [...prior.sources, id], partial: prior.partial, aliases: [id] };
     }
@@ -201,6 +209,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
         count: inheritedCount,
         partial: context?.partial || false,
         digest: context?.digest,
+        briefId: jobsFor(data, id).find(job => job.contextBrief)?.contextBrief?.intentDigest,
         availability: session.status === 'preparing' ? 'pending' : !session.contextTransferred && (session.contextSourceDeviceId || session.deviceId) !== 'local' ? 'remote' : 'ready',
         ...(session.contextCoverage ? { coverage: session.contextCoverage } : {})
       };
@@ -214,7 +223,8 @@ export function createConversations({ database, tenantId, history, delivery, exe
       if (!context) throw httpError(409, '继承上下文不可用');
       const offset = Number(params.get('offset') || 0);
       if (!Number.isSafeInteger(offset) || offset < 0) throw httpError(400, '分页参数无效');
-      return normalizedContextPreview(cleanContextEntries(context.entries), offset);
+      const brief = jobsFor(read(), id).find(job => job.contextBrief)?.contextBrief;
+      return { ...normalizedContextPreview(cleanContextEntries(context.entries), offset), ...(brief ? { brief } : {}) };
     },
     inherited(id: string, params = new URLSearchParams()) {
       const session = managed(id);
@@ -390,7 +400,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
           data.tasks.push(task);
         } else {
           const taskId = task.id;
-          snapshot = freezeContext([{ role: 'reference', text: String(clean({ text: taskContent(task) })?.text || ''), source: `task:${taskId}` }, ...snapshot.entries.filter(entry => entry.source !== `task:${taskId}`)], snapshot.sources, snapshot.partial);
+          snapshot = freezeContext([{ role: 'reference', text: String(clean({ text: `任务状态：${task.status}；任务版本：${task.revision}；上下文版本：${task.contextVersion}\n${taskContent(task)}` })?.text || ''), source: `task:${taskId}` }, ...snapshot.entries.filter(entry => entry.source !== `task:${taskId}`)], snapshot.sources, snapshot.partial);
         }
         if (!task) throw httpError(409, '会话关联任务不存在');
         database.saveSessionContext(tenantId, snapshot);
@@ -423,7 +433,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
       if (!snapshot) throw httpError(409, '继承上下文不可用');
       const first = !session.nativeId;
       const crossDevice = first && Boolean(session.contextSourceDeviceId && session.contextSourceDeviceId !== session.deviceId);
-      const compiled = first && session.deviceId === 'local' && !crossDevice ? await contextPrompt(snapshot, message, contextRoot, 120000, true, summarize) : { prompt: message, compacted: false, images: [], markdownPath: '' };
+      const compiled = first && session.deviceId === 'local' && !crossDevice ? await contextPrompt(snapshot, message, contextRoot, 120000, true, summarize) : { prompt: message, compacted: false, images: [], markdownPath: '', preparedBrief: undefined };
       const remote = first && (session.contextSourceDeviceId || session.deviceId) !== 'local' ? remoteSource(session, data) : null;
       const job = database.mutateTaskCenter(tenantId, current => {
         const duplicate = current.executions.find(candidate => candidate.requestId === requestId);
@@ -439,6 +449,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
         if (s.nativeId !== session.nativeId) throw httpError(409, '会话已更新，请重试');
         const j: Execution = { id: randomUUID(), requestId, conversationId: id, sourceSessionId: s.sourceSessionId, ...(first ? { contextSourceDeviceId: s.contextSourceDeviceId } : {}), contextId: s.contextId, contextDigest: snapshot.digest,
           contextCompacted: compiled.compacted, taskId: task.id, contextVersion: task.contextVersion, userMessage: message, prompt: compiled.prompt,
+          ...(compiled.preparedBrief ? { contextBrief: compiled.preparedBrief } : {}),
           ...(s.deviceId === 'local' && compiled.markdownPath ? { contextMarkdownPath: compiled.markdownPath } : {}),
           ...(s.deviceId === 'local' && compiled.markdownPath ? { contextCoverage: { records: cleanContextEntries(snapshot.entries).length, images: compiled.images.length, partial: snapshot.partial } } : {}),
           ...(remote ? { remoteContext: { ...remote, contextDigest: snapshot.digest } } : {}),
@@ -467,7 +478,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
             const ready = database.mutateTaskCenter(tenantId, data => {
               const saved = data.executions.find(item => item.id === job.id);
               if (!saved || saved.status !== 'queued') return null;
-              Object.assign(saved, { prompt: compiled.prompt, promptImages: compiled.images, contextMarkdownPath: compiled.markdownPath, contextSourcePartial: transferred.partial,
+              Object.assign(saved, { prompt: compiled.prompt, promptImages: compiled.images, contextMarkdownPath: compiled.markdownPath, contextBrief: compiled.preparedBrief, contextSourcePartial: transferred.partial,
                 contextCoverage: { records: cleanContextEntries(transferred.entries).length, images: compiled.images.length, partial: transferred.partial },
                 status: 'launching', message: '交接包已送达，正在启动本机 Agent', updatedAt: now() });
               return structuredClone(saved);
@@ -496,7 +507,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
             if (closed) return;
             const task = read().tasks.find(candidate => candidate.id === pending.taskId);
             if (!task) throw httpError(409, '会话关联任务不存在');
-            const updated = freezeContext([{ role: 'reference', text: String(clean({ text: taskContent(task) })?.text || ''), source: `task:${task.id}` }, ...origin.entries.filter((e: ContextEntry) => e.source !== `task:${task.id}`)], origin.sources, origin.partial);
+            const updated = freezeContext([{ role: 'reference', text: String(clean({ text: `任务状态：${task.status}；任务版本：${task.revision}；上下文版本：${task.contextVersion}\n${taskContent(task)}` })?.text || ''), source: `task:${task.id}` }, ...origin.entries.filter((e: ContextEntry) => e.source !== `task:${task.id}`)], origin.sources, origin.partial);
             const ready = database.mutateTaskCenter(tenantId, data => {
               const session = managed(pending.id, data);
               if (!session) return false;

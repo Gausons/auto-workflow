@@ -1,3 +1,5 @@
+import type { PreparedContextBrief } from './contextBriefTypes.js';
+
 export type TaskStatus = 'waiting' | 'error' | 'running' | 'ready' | 'review' | 'completed';
 export type ExecutionStatus = 'blocked' | 'queued' | 'launching' | 'running' | 'waiting' | 'completed' | 'interrupted' | 'failed' | 'unknown';
 export type HandoffMode = 'continue' | 'branch' | 'reference';
@@ -179,6 +181,7 @@ export interface Execution {
   contextSourcePartial?: boolean;
   contextCoverage?: ContextCoverage;
   contextMarkdownPath?: string;
+  contextBrief?: PreparedContextBrief;
   remoteContext?: RemoteContextHandoff;
   taskId: string;
   contextVersion: number;

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { parsePreparedContextBrief } from '../shared/contextBriefTypes.js';
 import { taskContent } from '../shared/taskContent.js';
 import { gitBranches, switchGitBranch, decodeAttachments, saveAttachments } from './taskWorkspace.js';
 import { readFile, realpath, stat, rm } from 'node:fs/promises';
@@ -635,6 +636,15 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
               const previous = saved.contextCoverage;
               if (previous && (previous.records !== coverage.records || previous.images !== coverage.images || previous.partial !== coverage.partial)) throw httpError(409, '已准备的交接覆盖信息不能改变');
               patch.contextCoverage = { records: coverage.records, images: coverage.images, partial: coverage.partial };
+            }
+            if (report.contextBrief !== undefined) {
+              if (!saved.conversationId || (!saved.remoteContext && !saved.contextSourceDeviceId)) throw httpError(400, '执行没有上下文交接');
+              let brief;
+              try { brief = parsePreparedContextBrief(report.contextBrief); }
+              catch { throw httpError(400, '交接单格式无效'); }
+              if (brief.intentDigest !== createHash('sha256').update(saved.userMessage || '').digest('hex')) throw httpError(400, '交接单与本轮消息不匹配');
+              if (saved.contextBrief && JSON.stringify(saved.contextBrief) !== JSON.stringify(brief)) throw httpError(409, '已准备的交接单不能改变');
+              patch.contextBrief = brief;
             }
             if (JSON.stringify(report.request || null).length > 64000) throw httpError(400, '交互请求过大');
             recordExecution(data, { ...saved, ...patch, status: reportStatus, request: report.request as InteractionRequest || null, desktopOpened: Boolean(report.desktopOpened), updatedAt: timestamp() });

@@ -1,9 +1,11 @@
 import type { HistoryMessage } from './taskTypes.js';
+import type { PreparedContextBrief } from './contextBriefTypes.js';
 
 export interface InheritedContextInfo {
   count: number;
   partial?: boolean;
   digest?: string;
+  briefId?: string;
   sourceSessionId?: string;
   sourceTitle?: string;
   availability?: 'pending' | 'ready' | 'remote';
@@ -18,6 +20,7 @@ export interface ContextPreviewMessage extends HistoryMessage {
 }
 
 export interface ContextPreviewResponse {
+  brief?: PreparedContextBrief;
   messages: ContextPreviewMessage[];
   total: number;
   offset: number;
