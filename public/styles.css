@@ -1075,94 +1075,18 @@ pre {
 
 .login-screen {
   min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 24px;
+  min-height: 100dvh;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: clamp(40px, 7vh, 80px) 24px 24px;
+  background: #fff;
 }
 
 .login-card {
-  width: min(440px, 100%);
-  padding: 36px;
-  border: 1px solid #dce2ea;
-  border-radius: 16px;
-  background: var(--surface);
-  box-shadow: 0 16px 50px rgb(23 43 77 / 5%);
-}
-
-.login-card h1 {
-  margin: 12px 0;
-  font-size: 26px;
-}
-
-.login-card p {
-  line-height: 1.7;
-  color: #64748b;
-}
-
-.login-card label {
-  display: block;
-  margin: 24px 0 8px;
-  font-weight: 600;
-}
-
-.login-card input {
-  width: 100%;
-  padding: 12px;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-}
-
-.login-card .button {
-  width: 100%;
-}
-
-.login-card .login-error {
-  min-height: 24px;
-  color: #b42318;
-  font-size: 13px;
-}
-
-.login-card .google-button {
-  display: block;
-  margin-top: 22px;
-  border: 1px solid #cbd5e1;
-  background: #fff;
-  color: #172033;
+  width: min(360px, 100%);
   text-align: center;
-  text-decoration: none;
-}
-
-.login-card .google-status {
-  margin: 6px 0 0;
-  color: #64748b;
-  font-size: 12px;
-  text-align: center;
-}
-
-.auth-divider {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 20px 0 0;
-  color: #94a3b8;
-  font-size: 13px;
-}
-
-.auth-divider::before,
-.auth-divider::after {
-  height: 1px;
-  flex: 1;
-  background: var(--line);
-  content: '';
-}
-
-.login-card .auth-switch {
-  width: 100%;
-  margin-top: 18px;
-  border: 0;
-  background: transparent;
-  color: var(--teal);
-  cursor: pointer;
+  color: var(--muted);
 }
 
 .tenant-panel {

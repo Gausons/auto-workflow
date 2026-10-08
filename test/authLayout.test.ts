@@ -54,7 +54,7 @@ test('authentication and workspace views cannot render at the same time', async 
   const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
 
   assert.match(css, /\[hidden\]\s*\{\s*display:\s*none\s*!important;/);
-  assert.match(css, /\.login-screen\s*\{[^}]*display:\s*grid;/s);
+  assert.match(css, /\.login-screen\s*\{[^}]*display:\s*flex;/s);
   assert.match(css, /\.login-card\s*\{/);
   assert.match(html, /id="app"/);
   const app = await readFile(new URL('../web/src/app/App.tsx', import.meta.url), 'utf8');

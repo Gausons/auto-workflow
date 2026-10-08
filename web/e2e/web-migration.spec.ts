@@ -16,6 +16,29 @@ async function login(page: import('@playwright/test').Page) {
   await expect(page.getByRole('heading', { name: '任务中心', exact: true })).toBeVisible();
 }
 
+test('auth form stays centered and usable on desktop and mobile', async ({ page }) => {
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/tasks');
+    await expect(page.getByRole('heading', { name: '登录 AgentFlow' })).toBeVisible();
+    const form = page.locator('#loginForm');
+    const bounds = await form.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(Math.abs(bounds!.x + bounds!.width / 2 - width / 2)).toBeLessThan(2);
+    expect(bounds!.width).toBeLessThanOrEqual(360);
+    const submit = await page.getByRole('button', { name: '登录', exact: true }).boundingBox();
+    const google = await page.getByRole('link', { name: '使用 Google 单点登录' }).boundingBox();
+    expect(google!.y).toBeGreaterThan(submit!.y + submit!.height);
+    await page.getByRole('textbox', { name: '用户名', exact: true }).focus();
+    await page.keyboard.press('Tab');
+    await expect(page.getByLabel('密码', { exact: true })).toBeFocused();
+    await page.getByRole('button', { name: '首次使用？注册个人账号' }).click();
+    await expect(page.getByLabel('显示名称')).toBeVisible();
+    await expect(page.getByRole('button', { name: '注册并进入' })).toBeInViewport();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+  }
+});
+
 test('remote images appear directly outside and inside the preview window and load near the viewport', async ({ page, request }) => {
   const { token } = await (await request.post('/api/auth/login', { data: { username: 'owner', password } })).json() as { token: string };
   const headers = { Authorization: `Bearer ${token}` }, deviceId = 'image-browser-source', nativeId = 'image-browser-session';

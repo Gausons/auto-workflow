@@ -1,0 +1,34 @@
+.panel {
+  width: min(360px, 100%);
+  color: #1f2328;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.header { margin-bottom: 32px; text-align: center; }
+.mark { width: 48px; height: 48px; }
+.header h1 { margin: 20px 0 8px; font-size: 24px; font-weight: 500; letter-spacing: -.5px; }
+.header p { margin: 0; color: #656d76; font-size: 13px; }
+.panel label { display: block; margin: 20px 0 8px; font-weight: 500; }
+.panel input { height: 42px; padding: 8px 12px; border: 1px solid #d0d7de; border-radius: 6px; background: #fff; font-size: 16px; box-shadow: inset 0 1px 0 #1f23280a; }
+.panel input:focus { border-color: #0969da; outline: 2px solid #0969da; outline-offset: -1px; }
+.submit, .google { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 42px; padding: 9px 16px; border: 1px solid #1f232826; border-radius: 6px; font: inherit; font-weight: 500; text-decoration: none; cursor: pointer; }
+.submit { margin-top: 24px; background: #1f883d; color: #fff; box-shadow: 0 1px 0 #1f23281a; }
+.submit:hover { background: #1a7f37; }
+.submit:disabled { opacity: .65; cursor: wait; }
+.google { border-color: #d0d7de; background: #f6f8fa; color: #1f2328; }
+.google:hover { background: #eef1f4; }
+.google svg { flex-shrink: 0; }
+.submit:focus-visible, .google:focus-visible, .switchMode:focus-visible { outline: 2px solid #0969da; outline-offset: 3px; }
+.divider { display: flex; align-items: center; gap: 14px; margin: 24px 0; color: #656d76; font-size: 13px; }
+.divider::before, .divider::after { content: ''; height: 1px; flex: 1; background: #d8dee4; }
+.error { margin: 16px 0 0; padding: 10px 12px; border: 1px solid #ff818266; border-radius: 6px; background: #ffebe9; color: #a40e26; overflow-wrap: anywhere; }
+.providerStatus { margin: 8px 0 0; color: #656d76; font-size: 12px; text-align: center; }
+.switchMode { display: block; width: 100%; min-height: 44px; margin-top: 20px; padding: 10px 0; border: 0; background: transparent; color: #0969da; font: inherit; cursor: pointer; }
+.switchMode:hover { text-decoration: underline; }
+.footer { margin-top: 64px; color: #656d76; font-size: 12px; text-align: center; }
+
+@media (max-width: 480px) {
+  .header { margin-bottom: 28px; }
+  .footer { margin-top: 40px; }
+}
