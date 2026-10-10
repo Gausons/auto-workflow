@@ -3,6 +3,7 @@ import { taskContent, taskTitle } from '../shared/taskContent.js';
 import { hostname } from 'node:os';
 import { httpError } from './rbac.js';
 import { validateRemoteHistory, remoteHistorySummary } from './remoteHistory.js';
+import { sortTasks, taskCenterDelta, type TaskCenterChangeIds } from '../shared/taskCenterSync.js';
 import type { Actor, AgentProject, Device, Handoff, HandoffMode, HandoffStatus, RemoteHistory, Session, Task, TaskCenterData, TaskContext, TaskStatus } from '../shared/taskTypes.js';
 
 const statuses: TaskStatus[] = ['waiting', 'error', 'running', 'ready', 'review', 'completed'];
@@ -10,6 +11,7 @@ const contextKeys: Array<keyof TaskContext> = ['goal', 'constraints', 'decisions
 type InputRecord = Record<string, unknown>;
 interface TaskCenterDatabase {
   readTaskCenter(tenantId: string): TaskCenterData;
+  readTaskCenterChanges?(tenantId: string, since: number): { data: TaskCenterData; reset: boolean; changes: TaskCenterChangeIds };
   mutateTaskCenter<T>(tenantId: string, update: (data: TaskCenterData) => T): T;
   setRemoteSessionHistory(tenantId: string, sessionId: string, history: RemoteHistory | null): void;
 }
@@ -72,12 +74,11 @@ export function createTaskCenter({ database, tenantId, history }: { database: Ta
       sessions: result.sessions.map(s => ({ ...s, deviceId: 'local', nativeId: s.sessionId || s.id, historyId: s.id, excerpt: '' }))
     };
   }
-  function snapshot(local: LocalCatalog): TaskCenterData {
-    const data = database.readTaskCenter(tenantId);
+  function snapshot(local: LocalCatalog, data = database.readTaskCenter(tenantId)): TaskCenterData {
     const synthetic = new Set(data.sessions.filter(s => ['codexExecution', 'agentExecution', 'conversation'].includes(s.source || '')).map(s => `${s.deviceId}:${s.nativeId}`));
     const sessions = [...local.sessions.filter(s => !synthetic.has(`local:${s.nativeId}`)), ...data.sessions.filter(s => ['codexExecution', 'agentExecution', 'conversation'].includes(s.source || '') || !synthetic.has(`${s.deviceId}:${s.nativeId}`)).map(s => ['codexExecution', 'agentExecution', 'conversation'].includes(s.source || '') && s.source !== 'conversation' && s.deviceId === 'local' ? { ...s, historyId: local.sessions.find(l => l.nativeId === s.nativeId)?.historyId } : s)];
     return { ...data, devices: [local.device, ...data.devices].map(d => ({ ...d, online: online(d) })),
-      sessions: sessions.map(remoteHistorySummary), tasks: data.tasks.map(task => ({ ...task, content: taskContent(task) })).sort((a, b) => statuses.indexOf(a.status) - statuses.indexOf(b.status) || b.updatedAt.localeCompare(a.updatedAt)) };
+      sessions: sessions.map(remoteHistorySummary), tasks: sortTasks(data.tasks.map(task => ({ ...task, content: taskContent(task) }))) };
   }
   async function command(rawInput: unknown, actor: Actor) {
     if (!isRecord(rawInput)) throw httpError(400, '请求必须是对象');
@@ -247,5 +248,11 @@ export function createTaskCenter({ database, tenantId, history }: { database: Ta
       }
     });
   }
-  return { snapshot: async () => snapshot(await catalog()), command };
+  return { snapshot: async () => snapshot(await catalog()), command,
+    changes: async (since: number) => {
+      const local = await catalog();
+      const change = database.readTaskCenterChanges?.(tenantId, since);
+      return taskCenterDelta(snapshot(local, change?.data), since, change?.changes || {}, change?.reset ?? true);
+    }
+  };
 }

@@ -102,6 +102,7 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
     server,
     async close() {
       closing = true;
+      for (const runtime of runtimes.values()) runtime.closeStreams();
       const stopped = new Promise((resolve) => server.close(resolve));
       server.closeIdleConnections();
       await stopped;

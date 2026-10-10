@@ -6,7 +6,8 @@ import { HistoryComposer } from './HistoryComposer.js';
 import { InheritedContext } from './InheritedContext.js';
 import { HistoryTranscript } from './HistoryTranscript.js';
 import { canContinueHistory } from './historyCapabilities.js';
-import type { HistoryMessage, Session } from '../../../shared/taskTypes.js';
+import type { HistoryMessage, Session, TaskCenterData } from '../../../shared/taskTypes.js';
+import { useTaskCenterUpdates } from '../tasks/taskCenterUpdates.js';
 import type { InheritedContextInfo } from '../../../shared/contextPreviewTypes.js';
 
 interface HistorySession extends Session { createdAt: string; messageCount: number }
@@ -95,6 +96,12 @@ export function HistoryPage() {
     window.addEventListener('hashchange', update);
     return () => window.removeEventListener('hashchange', update);
   }, []);
+  const snapshot = useQuery({
+    queryKey: ['task-center', 'snapshot'],
+    queryFn: ({ signal }) => apiRequest<TaskCenterData>('/api/task-center', { signal }),
+    enabled: route.active && hasSessionToken(), refetchOnWindowFocus: false
+  });
+  useTaskCenterUpdates(route.active, snapshot.data?.syncVersion);
   const list = useQuery({
     queryKey: ['history', 'list', filters],
     queryFn: ({ signal }) => apiRequest<HistoryListResponse>(`/api/agent-sessions?${new URLSearchParams({ offset: String(filters.offset), limit: '30', agent: filters.agent, q: filters.query, workspace: filters.workspace })}`, { signal }),

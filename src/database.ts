@@ -10,6 +10,8 @@ import type { WorkIssue } from './issueSources/types.js';
 import type { HistoryMessage, RemoteHistory, TaskCenterData } from '../shared/taskTypes.js';
 import type { SessionImage, SessionImageInfo, SessionImageList } from '../shared/historyImageTypes.js';
 import { httpError } from './rbac.js';
+import { taskCenterCollections, type TaskCenterChangeIds } from '../shared/taskCenterSync.js';
+import { changedTaskCenterIds, taskCenterChangeRetention, taskCenterState } from './taskCenterChanges.js';
 import type { SessionContext } from './contextCompiler.js';
 import { packSnapshot, verifySnapshot, type ContextBundle } from '@auto-workflow/context-engine';
 import { verifyDetachedManifest, type DetachedManifest } from '@auto-workflow/context-engine/detached-bundle';
@@ -30,7 +32,9 @@ export const hashToken = (token: string) => createHash('sha256').update(token).d
 export function openDatabase(environment: Record<string, string | undefined>) {
   if (environment.DATABASE_DRIVER && environment.DATABASE_DRIVER !== 'postgres') throw new Error('DATABASE_DRIVER 仅支持 postgres');
   const db: Connection = openPostgres(postgresConfig(environment));
-  const taskCenterListeners = new Map<string, Set<(version: number) => void>>();
+  const taskCenterListeners = new Map<string, Set<(version: number, changes: TaskCenterChangeIds) => void>>();
+  let pendingHistoryIds: Set<string> | null = null;
+  const readTaskCenter = (tenantId: string) => parseTaskCenter((db.prepare('SELECT payload FROM task_centers WHERE tenant_id = ?').get(tenantId) as { payload?: string } | undefined)?.payload);
 
   function transaction<T>(fn: () => T): T {
     db.exec('BEGIN');
@@ -255,6 +259,7 @@ export function openDatabase(environment: Record<string, string | undefined>) {
     // Called within mutateTaskCenter so preview bodies and their metadata commit
     // or roll back together. Unchanged heartbeats never read or rewrite bodies.
     setRemoteSessionHistory: (tenantId: string, sessionId: string, history: RemoteHistory | null) => {
+      pendingHistoryIds?.add(sessionId);
       if (history) db.prepare(`INSERT INTO remote_session_history (tenant_id, session_id, payload) VALUES (?, ?, ?::jsonb)
         ON CONFLICT (tenant_id, session_id) DO UPDATE SET payload = excluded.payload`).run(tenantId, sessionId, JSON.stringify(history));
       else {
@@ -262,19 +267,38 @@ export function openDatabase(environment: Record<string, string | undefined>) {
         db.prepare('DELETE FROM remote_session_images WHERE tenant_id = ? AND session_id = ?').run(tenantId, sessionId);
       }
     },
-    readTaskCenter: (tenantId: string) => parseTaskCenter((db.prepare('SELECT payload FROM task_centers WHERE tenant_id = ?').get(tenantId) as { payload?: string } | undefined)?.payload),
+    readTaskCenter,
+    readTaskCenterChanges: (tenantId: string, since: number) => transaction(() => {
+      const data = readTaskCenter(tenantId), version = data.syncVersion || 0;
+      if (since === version) return { data, version, reset: false, changes: {} as TaskCenterChangeIds };
+      if (since > version || version - since > taskCenterChangeRetention) return { data, version, reset: true, changes: {} as TaskCenterChangeIds };
+      const rows = db.prepare('SELECT version, changes FROM task_center_changes WHERE tenant_id = ? AND version > ? AND version <= ? ORDER BY version')
+        .all(tenantId, since, version) as unknown as Array<{ version: number; changes: TaskCenterChangeIds }>;
+      if (rows.length !== version - since || rows.some((row, index) => row.version !== since + index + 1)) return { data, version, reset: true, changes: {} as TaskCenterChangeIds };
+      const changes: TaskCenterChangeIds = {};
+      for (const key of taskCenterCollections) {
+        const ids = [...new Set(rows.flatMap(row => row.changes[key] || []))];
+        if (ids.length) changes[key] = ids;
+      }
+      return { data, version, reset: false, changes };
+    }),
     mutateTaskCenter: <T>(tenantId: string, update: (data: TaskCenterData) => T): T => {
       const committed = transaction(() => {
-        const data = parseTaskCenter((db.prepare('SELECT payload FROM task_centers WHERE tenant_id = ?').get(tenantId) as { payload?: string } | undefined)?.payload);
-        const result = update(data);
+        const data = readTaskCenter(tenantId), before = taskCenterState(data), historyIds = new Set<string>();
+        pendingHistoryIds = historyIds;
+        let result: T;
+        try { result = update(data); } finally { pendingHistoryIds = null; }
         data.syncVersion = (data.syncVersion || 0) + 1;
+        const changes = changedTaskCenterIds(before, data, historyIds);
         db.prepare('INSERT INTO task_centers VALUES (?, ?) ON CONFLICT(tenant_id) DO UPDATE SET payload = excluded.payload').run(tenantId, JSON.stringify(data));
-        return { result, version: data.syncVersion };
+        db.prepare('INSERT INTO task_center_changes (tenant_id, version, changes) VALUES (?, ?, ?::jsonb)').run(tenantId, data.syncVersion, JSON.stringify(changes));
+        db.prepare('DELETE FROM task_center_changes WHERE tenant_id = ? AND version <= ?').run(tenantId, data.syncVersion - taskCenterChangeRetention);
+        return { result, version: data.syncVersion, changes };
       });
-      for (const listener of taskCenterListeners.get(tenantId) || []) listener(committed.version);
+      for (const listener of taskCenterListeners.get(tenantId) || []) listener(committed.version, committed.changes);
       return committed.result;
     },
-    subscribeTaskCenter: (tenantId: string, listener: (version: number) => void) => {
+    subscribeTaskCenter: (tenantId: string, listener: (version: number, changes: TaskCenterChangeIds) => void) => {
       let listeners = taskCenterListeners.get(tenantId);
       if (!listeners) { listeners = new Set(); taskCenterListeners.set(tenantId, listeners); }
       listeners.add(listener);

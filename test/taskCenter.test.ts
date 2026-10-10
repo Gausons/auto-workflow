@@ -141,6 +141,7 @@ test('HTTP auth, viewer write rejection, and task UI assets', async t => {
   await req('/api/organization/members', 'POST', { username: 'viewer', role: 'viewer', password }, owner.token);
   const viewer = (await req('/api/auth/login', 'POST', { tenantId: 'default', username: 'viewer', password })).data;
   assert.equal((await req('/api/task-center', 'GET', null, viewer.token)).data.tasks?.length, 1);
+  assert.equal((await req('/api/task-center/changes?since=0', 'GET', null, viewer.token)).status, 200);
   assert.equal((await req('/api/task-center', 'POST', { action: 'create', title: 'forbidden' }, viewer.token)).status, 403);
   const invalidPreview = heartbeat([{ nativeId: 'invalid', agent: 'claude', title: '非法预览', remoteHistory: {
     offset: 0, total: 1, sourcePartial: false, truncated: false, messages: [{ role: 'user', text: '\ud800' }]

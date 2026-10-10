@@ -48,7 +48,7 @@ test('PostgreSQL initializes new schemas, upgrades version 1, preserves data and
   assert.equal(upgraded.getTenant('default')?.id, 'default');
   upgraded.close();
   const check = rawDatabase(key);
-  assert.equal(Number(check.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()?.version), 4);
+  assert.equal(Number(check.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()?.version), 5);
   assert.equal(check.prepare("SELECT to_regclass(current_schema() || '.import_receipts') AS table_name").get()?.table_name, null);
   assert.equal(Number(check.prepare('SELECT count(*) AS count FROM remote_session_history').get()?.count), 0);
   assert.equal(Number(check.prepare('SELECT count(*) AS count FROM remote_session_images').get()?.count), 0);
@@ -105,11 +105,29 @@ test('version 4 creates independent image storage without backfilling existing p
   db.close();
   const raw = rawDatabase(key);
   raw.prepare('DROP TABLE remote_session_images').run();
-  raw.prepare('DELETE FROM schema_migrations WHERE version = 4').run(); raw.close();
+  raw.prepare('DELETE FROM schema_migrations WHERE version >= 4').run(); raw.close();
   const upgraded = openDatabase(key);
   assert.equal(upgraded.listRemoteSessionImages('default', 'old').total, 0);
   assert.deepEqual(upgraded.readRemoteSessionHistory('default', 'old')?.messages, history.messages);
   upgraded.close();
+});
+
+test('version 5 upgrades existing task snapshots without inventing prior change history', () => {
+  const key = randomUUID(), database = openDatabase(key);
+  database.createTenant({ id: 'default', token: 'a'.repeat(43) });
+  database.mutateTaskCenter('default', data => { data.sessions.push({ id: 'existing', deviceId: 'remote', nativeId: 'native', agent: 'codex', title: '已有历史', cwd: '/repo', updatedAt: '2026-10-10T00:00:00Z' }); });
+  const before = database.readTaskCenter('default'); database.close();
+  const raw = rawDatabase(key);
+  raw.prepare('DROP TABLE task_center_changes').run();
+  raw.prepare('DELETE FROM schema_migrations WHERE version = 5').run(); raw.close();
+  const upgraded = openDatabase(key);
+  try {
+    assert.deepEqual(upgraded.readTaskCenter('default'), before);
+    assert.equal(upgraded.readTaskCenterChanges('default', 0).reset, true);
+    upgraded.mutateTaskCenter('default', data => { data.sessions[0].title = '新变化'; });
+    assert.deepEqual(upgraded.readTaskCenterChanges('default', before.syncVersion!).changes.sessions, ['existing']);
+    assert.equal(upgraded.readTaskCenterChanges('default', before.syncVersion!).reset, false);
+  } finally { upgraded.close(); }
 });
 
 test('PostgreSQL serializes competing processes and recovers from a terminated connection without retries', async () => {

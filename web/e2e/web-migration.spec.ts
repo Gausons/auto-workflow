@@ -182,6 +182,41 @@ test('creates one task without silently starting an unavailable Agent', async ({
   expect(JSON.parse(writes[0]!)).toMatchObject({ action: 'create', content: '浏览器回归测试任务' });
 });
 
+test('external task changes update the page incrementally without refetching its snapshot or reconnecting SSE', async ({ page, request }) => {
+  const { token } = await (await request.post('/api/auth/login', { data: { username: 'owner', password } })).json() as { token: string };
+  const headers = { Authorization: `Bearer ${token}` };
+  const reads: string[] = [];
+  page.on('request', req => { if (req.method() === 'GET') reads.push(new URL(req.url()).pathname); });
+  await login(page);
+  await expect.poll(() => reads.filter(path => path === '/api/task-center/updates').length).toBe(1);
+  const fullReads = reads.filter(path => path === '/api/task-center').length;
+  const created = await request.post('/api/task-center', { headers, data: { action: 'create', title: '跨端增量同步回归' } });
+  expect(created.ok()).toBeTruthy();
+  const { taskId } = await created.json() as { taskId: string };
+  await expect(page.getByText('跨端增量同步回归', { exact: true }).first()).toBeVisible();
+  expect((await request.post('/api/task-center', { headers, data: { action: 'update', taskId, revision: 1, content: '跨端增量更新回归', status: 'ready' } })).ok()).toBeTruthy();
+  await expect(page.getByText('跨端增量更新回归', { exact: true }).first()).toBeVisible();
+  expect(reads.filter(path => path === '/api/task-center/changes').length).toBeGreaterThan(0);
+  expect(reads.filter(path => path === '/api/task-center').length).toBe(fullReads);
+  expect(reads.filter(path => path === '/api/task-center/updates').length).toBe(1);
+});
+
+test('open history receives only its changed remote preview without a page reload', async ({ page, request }) => {
+  const { token } = await (await request.post('/api/auth/login', { data: { username: 'owner', password } })).json() as { token: string };
+  const headers = { Authorization: `Bearer ${token}` }, deviceId = 'incremental-history-device';
+  const heartbeat = (text: string) => ({ action: 'heartbeat', deviceId, name: '增量历史设备', agents: ['codex'], sessions: [{ nativeId: 'incremental-preview', agent: 'codex', title: '增量正文回归', remoteHistory: { offset: 0, total: 1, sourcePartial: false, truncated: false, messages: [{ role: 'assistant', text }] } }] });
+  expect((await request.post('/api/task-center', { headers, data: heartbeat('同步前的正文') })).ok()).toBeTruthy();
+  const { sessions } = await (await request.get('/api/agent-sessions', { headers })).json() as { sessions: Array<{ id: string; deviceId: string }> };
+  const id = sessions.find(session => session.deviceId === deviceId)!.id;
+  await login(page); await page.goto(`/history/${id}`);
+  await expect(page.getByText('同步前的正文', { exact: true })).toBeVisible();
+  const patch = page.waitForResponse(response => new URL(response.url()).pathname === '/api/task-center/changes');
+  expect((await request.post('/api/task-center', { headers, data: heartbeat('同步后的正文') })).ok()).toBeTruthy();
+  await patch;
+  await expect(page.getByText('同步后的正文', { exact: true })).toBeVisible();
+  await expect(page.getByText('同步前的正文', { exact: true })).toHaveCount(0);
+});
+
 test('viewer cannot create or execute tasks', async ({ page, request }) => {
   const owner = await request.post('/api/auth/login', { data: { username: 'owner', password } });
   const { token: ownerToken } = await owner.json() as { token: string };

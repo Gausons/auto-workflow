@@ -23,6 +23,7 @@ export function permissionForRoute(method: string | undefined, pathname: string)
   if (/^\/api\/agent-sessions\/[a-f0-9]{64}\/continue$/.test(pathname) && ['GET', 'POST'].includes(method || '')) return method === 'POST' ? 'work.execute' : 'read';
   if (pathname === '/api/task-center/codex' && method === 'GET') return 'work.execute';
   if (pathname === '/api/task-center/updates' && method === 'GET') return 'read';
+  if (pathname === '/api/task-center/changes' && method === 'GET') return 'read';
   if (pathname === '/api/task-center/git' && ['GET', 'POST'].includes(method || '')) return 'work.execute';
   if (pathname === '/api/task-center/git-action' && method === 'POST') return 'work.execute';
   if (pathname === '/api/task-center/history-images' && method === 'POST') return 'work.execute';

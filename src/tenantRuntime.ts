@@ -1,5 +1,6 @@
 import { readJson, readBytes } from './http/body.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createTaskCenterStream, taskCenterSince } from './taskCenterStream.js';
 import path from 'node:path';
 import { taskContent } from '../shared/taskContent.js';
 import { DEFAULT_AI_ASSIGNMENT_MODEL } from '../shared/assignmentModels.js';
@@ -119,33 +120,11 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
   }
 
   async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
+    if (url.pathname === '/api/task-center/changes' && req.method === 'GET') {
+      sendJson(res, 200, await taskCenter.changes(taskCenterSince(url.searchParams))); return;
+    }
     if (url.pathname === '/api/task-center/updates' && req.method === 'GET') {
-      const rawSince = Number(url.searchParams.get('since') || 0);
-      if (!Number.isSafeInteger(rawSince) || rawSince < 0) throw Object.assign(new Error('同步版本无效'), { statusCode: 400 });
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-cache, no-transform',
-        Connection: 'keep-alive',
-        'X-Accel-Buffering': 'no'
-      });
-      res.flushHeaders();
-      let delivered = rawSince;
-      const publish = (version: number) => {
-        if (version <= delivered || res.destroyed) return;
-        delivered = version;
-        res.write(`id: ${version}\nevent: task-center\ndata: ${JSON.stringify({ version })}\n\n`);
-      };
-      const unsubscribe = database.subscribeTaskCenter(tenant.id, publish);
-      const current = database.readTaskCenter(tenant.id).syncVersion || 0;
-      if (current > delivered) publish(current);
-      const keepAlive = setInterval(() => { if (!res.destroyed) res.write(': keep-alive\n\n'); }, 15_000);
-      keepAlive.unref();
-      await new Promise<void>(resolve => {
-        const close = () => { clearInterval(keepAlive); unsubscribe(); resolve(); };
-        req.once('aborted', close);
-        res.once('close', close);
-      });
-      return;
+      await taskCenterStream.serve(req, res, url.searchParams); return;
     }
     const newConversation = /^\/api\/sessions\/([a-f0-9]{64})\/continue-as-new$/.exec(url.pathname);
     if (newConversation && req.method === 'POST') { sendJson(res, 202, await conversations.create(newConversation[1], await readJson(req), requestIdentity.getStore()!.user)); return; }
@@ -673,6 +652,7 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
   const agentHistory = createAgentHistory({ environment, tenantId: tenant.id, rootDir, workspace: () => state.config.codexWorkspaceDir });
   const sessionDelivery = createSessionDelivery({ history: agentHistory, environment });
   const taskCenter = createTaskCenter({ database, tenantId: tenant.id, history: agentHistory });
+  const taskCenterStream = createTaskCenterStream(database, tenant.id);
   const codexExecution = createCodexExecution({ database, attachmentRoot: path.join(rootDir, '.workflow-data', 'attachments', createHash('sha256').update(tenant.id).digest('hex')), tenantId: tenant.id, workspace: () => state.config.codexWorkspaceDir, history: agentHistory, environment });
   const remoteGit = createRemoteGit(database, tenant.id);
   const historyImages = createHistoryImages(database, tenant.id);
@@ -686,6 +666,7 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
   conversationTimer.unref();
   return {
     workspace: () => state.config.codexWorkspaceDir,
+    closeStreams: () => taskCenterStream.close(),
     async handleApi(req: IncomingMessage, res: ServerResponse, url: URL, principal: Principal) {
       const mutation = req.method !== 'GET';
       if (mutation && mutationPending) { sendJson(res, 409, { error: 'tenant_busy', message: '当前账号正在处理其他请求，请稍后重试' }); req.resume(); return; }
@@ -695,6 +676,7 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
       finally { if (mutation) mutationPending = false; }
     },
     async close() {
+      taskCenterStream.close();
       clearInterval(conversationTimer); conversations.close(); codexExecution.close(); configureScheduler(false); assignmentJobSeq++; await persistIssueState(); closing = true;
     }
   };

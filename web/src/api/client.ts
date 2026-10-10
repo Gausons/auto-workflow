@@ -1,3 +1,5 @@
+import type { TaskCenterUpdate } from '../../../shared/taskCenterSync.js';
+
 const SESSION_TOKEN_KEY = 'bugflow.sessionToken';
 
 export class ApiError extends Error {
@@ -29,33 +31,42 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, author
   return data as T;
 }
 
-export async function subscribeTaskCenterUpdates(since: number, onVersion: (version: number) => void, signal: AbortSignal): Promise<void> {
+export async function subscribeTaskCenterUpdates(since: number, onVersion: (version: number, update: TaskCenterUpdate) => void, signal: AbortSignal): Promise<void> {
   const token = sessionStorage.getItem(SESSION_TOKEN_KEY);
-  if (!token) return;
+  if (!token) throw new ApiError('请登录个人账号', 401);
   const response = await fetch(`/api/task-center/updates?since=${encodeURIComponent(String(since))}`, {
     headers: { Accept: 'text/event-stream', Authorization: `Bearer ${token}` }, signal
   });
-  if (!response.ok || !response.body) {
+  if (!response.ok || !response.body || !response.headers.get('content-type')?.includes('text/event-stream')) {
     if (response.status === 401) sessionStorage.removeItem(SESSION_TOKEN_KEY);
     throw new ApiError(`实时同步连接失败：${response.status}`, response.status);
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let pending = '';
-  while (!signal.aborted) {
-    const { done, value } = await reader.read();
-    pending += decoder.decode(value, { stream: !done }).replaceAll('\r\n', '\n');
-    let boundary = pending.indexOf('\n\n');
-    while (boundary >= 0) {
-      const event = pending.slice(0, boundary);
-      pending = pending.slice(boundary + 2);
-      const id = event.split('\n').find(line => line.startsWith('id:'))?.slice(3).trim();
-      const version = Number(id);
-      if (Number.isSafeInteger(version) && version >= 0) onVersion(version);
-      boundary = pending.indexOf('\n\n');
+  try {
+    while (!signal.aborted) {
+      const { done, value } = await reader.read();
+      pending = (pending + decoder.decode(value, { stream: !done })).replaceAll('\r\n', '\n');
+      if (pending.length > 1_000_000) throw new Error('实时同步事件超过大小限制');
+      let boundary = pending.indexOf('\n\n');
+      while (boundary >= 0) {
+        const event = pending.slice(0, boundary);
+        pending = pending.slice(boundary + 2);
+        const lines = event.split('\n');
+        const type = lines.find(line => line.startsWith('event:'))?.slice(6).trim();
+        if (type === 'task-center') {
+          const id = lines.find(line => line.startsWith('id:'))?.slice(3).trim();
+          const version = Number(id);
+          const update: unknown = JSON.parse(lines.filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n'));
+          if (!id || !/^\d+$/.test(id) || !Number.isSafeInteger(version) || !update || typeof update !== 'object' || !('version' in update) || update.version !== version) throw new Error('实时同步版本无效');
+          onVersion(version, update as TaskCenterUpdate);
+        }
+        boundary = pending.indexOf('\n\n');
+      }
+      if (done) return;
     }
-    if (done) return;
-  }
+  } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
 
 export function saveSessionToken(token: string) {
