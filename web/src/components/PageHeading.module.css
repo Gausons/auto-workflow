@@ -1,0 +1,13 @@
+.heading { min-height: 72px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 28px; border-bottom: 1px solid #eee; color: #303030; }
+.title { min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 16px; }
+.heading h1 { margin: 0; font-size: 18px; font-weight: 600; line-height: 1.5; letter-spacing: -.4px; }
+.heading p { margin: 0; color: #858585; font-size: 12px; line-height: 1.5; }
+.actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.heading .actions :global(.button) { width: auto; min-height: 34px; padding: 7px 12px; font-size: 12px; }
+@media (max-width: 860px) {
+  .heading { padding: 14px 18px; }
+}
+@media (max-width: 600px) {
+  .title { flex-direction: column; align-items: flex-start; }
+  .actions { justify-content: flex-end; }
+}

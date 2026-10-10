@@ -417,7 +417,7 @@ pnpm context:bundle -- import-snapshot /absolute/output/handoff-1 /absolute/impo
 
 ## 开发
 
-前端已迁移为 React + TypeScript + Vite 的纯 Web 应用：登录、设置、缺陷工作台、任务中心、新建任务和历史会话续聊均由 React 承载。页面使用普通路径（如 `/tasks`、`/tasks/new`、`/history/:id`）；旧 `#tasks` 等 hash 链接会自动转到对应路径。服务端通过 Vite manifest 加载带指纹的 JS/CSS，业务接口保持不变。现有视觉基础样式保留在 `public/styles.css`，新组件样式使用 CSS Modules。详细决策见[Web 前端技术选型](docs/frontend-web-technology-selection.md)。
+前端已迁移为 React + TypeScript + Vite 的纯 Web 应用：登录、设置、缺陷工作台、任务中心、新建任务和历史会话续聊均由 React 承载。页面使用普通路径（如 `/tasks`、`/tasks/new`、`/history/:id`）；旧 `#tasks` 等 hash 链接会自动转到对应路径。服务端通过 Vite manifest 加载带指纹的 JS/CSS，业务接口保持不变。所有 tab 共用 `App` 外壳与 `PageHeading` 页头：侧边栏宽度、品牌、导航、账号区和标题字号统一由 CSS Modules 管理，页面只定义自身业务区域的布局，不按路由覆盖公共外壳。现有视觉基础样式保留在 `public/styles.css`，新组件样式使用 CSS Modules。详细决策见[Web 前端技术选型](docs/frontend-web-technology-selection.md)。
 
 ```bash
 # 开发模式（服务端自动重启，前端自动重建后刷新页面）

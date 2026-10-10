@@ -1,9 +1,4 @@
 .workspace { height: 100dvh; min-height: 0; display: flex; flex-direction: column; color: #292929; font-size: 14px; }
-.heading { min-height: 76px; padding: 18px 28px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.heading > :global(.tc-actions) { flex-wrap: nowrap; }
-.heading > div:first-child { display: flex; align-items: baseline; gap: 16px; }
-.heading h1 { font-size: 18px; font-weight: 600; letter-spacing: -.4px; }
-.heading span { font-size: 12px; color: #858585; }
 .workspace .newTask { width: auto; display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 7px 12px; font-size: 12px; border-radius: 8px; text-decoration: none; }
 .iconButton { display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 8px; color: #737373; background: transparent; cursor: pointer; }
 .iconButton:hover { background: #f1f1f1; color: #222; }
@@ -98,7 +93,6 @@
 .workspace :is(button, a, summary):focus-visible { outline: 2px solid #6d8dab; outline-offset: 3px; }
 @media (max-width: 1200px) {
   .layout { grid-template-columns: 270px minmax(0, 1fr); }
-  .heading > div:first-child > span { display: none; }
   .detailHead { flex-wrap: wrap; padding: 20px 24px; gap: 12px; }
   .detailActions { margin-left: auto; }
   .reading { padding: 24px; }
@@ -108,7 +102,6 @@
   .workspace { height: calc(100dvh - 62px); }
 }
 @media (max-width: 800px) {
-  .heading { min-height: 64px; padding: 14px 18px; }
   .navigation { padding: 0 18px; gap: 20px; overflow-x: auto; }
   .navigation a { font-size: 12px; }
   .layout { grid-template-columns: minmax(0, 1fr); }

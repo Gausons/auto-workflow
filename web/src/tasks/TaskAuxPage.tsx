@@ -1,3 +1,6 @@
+import { PageHeading } from '../components/PageHeading.js';
+import styles from './TaskAuxPage.module.css';
+import taskStyles from './TaskPage.module.css';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
@@ -113,11 +116,11 @@ export function TaskAuxPage() {
   const visible = unassigned.filter(session => !needle || [session.title, session.agent, session.cwd, data?.devices.find(device => device.id === session.deviceId)?.name].join(' ').toLowerCase().includes(needle));
   const refresh = () => { void client.invalidateQueries({ queryKey: snapshotKey }); };
   return <>
-    <header className="tc-heading"><div><p className="eyebrow">跨设备 · 跨 Agent</p><h1>任务中心</h1></div><div className="tc-actions"><button className="button secondary" type="button" disabled={snapshot.isFetching} onClick={() => void snapshot.refetch()}>刷新</button></div></header>
-    <nav className="tc-nav" aria-label="任务中心视图"><a href="#tasks" aria-current={view === null ? 'page' : undefined}>全部任务<span>{data?.tasks.length || 0}</span></a>
+    <PageHeading title={view === 'devices' ? '设备与 Agent' : '未归属会话'} description={view === 'devices' ? '查看连接状态与可用执行目标' : '将历史会话关联到任务'}><div className="tc-actions"><button className="button secondary" type="button" disabled={snapshot.isFetching} onClick={() => void snapshot.refetch()}>刷新</button></div></PageHeading>
+    <nav className={taskStyles.navigation} aria-label="任务中心视图"><a href="#tasks" aria-current={view === null ? 'page' : undefined}>全部任务<span>{data?.tasks.length || 0}</span></a>
       <a href="#inbox" aria-current={view === 'inbox' ? 'page' : undefined}>未归属会话<span>{unassigned.length}</span></a>
       <a href="#devices" aria-current={view === 'devices' ? 'page' : undefined}>设备与 Agent<span>{data?.devices.length || 0}</span></a></nav>
-    {snapshot.isPending ? <p role="status">正在汇总任务与会话…</p> : snapshot.isError ? <p role="alert">加载失败：{errorMessage(snapshot.error)} <button className="button secondary" type="button" onClick={() => void snapshot.refetch()}>重试</button></p> : data && (view === 'devices' ?
+    <div className={styles.content}>{snapshot.isPending ? <p role="status">正在汇总任务与会话…</p> : snapshot.isError ? <p role="alert">加载失败：{errorMessage(snapshot.error)} <button className="button secondary" type="button" onClick={() => void snapshot.refetch()}>重试</button></p> : data && (view === 'devices' ?
       <section className="tc-devices">{data.devices.map(device => <article key={device.id}><div className="tc-actions"><h2>{device.name}</h2><span className="tc-tag">{device.online ? '在线' : '离线'}</span></div>
         <p>{device.agents.join(' · ') || '未发现 Agent'}</p><p className="tc-meta">{device.transport === 'manual' ? '工作台所在设备' : `连接器 · 最近心跳 ${time(device.lastSeen)}`}</p>
         {device.transport === 'connector' && <><p>{device.codexProjects?.length ? `可远程执行 · ${device.codexProjects.length} 个项目` : '仅同步 · 未提供可执行项目'}{device.capabilities?.resumeCodex ? ' · 支持 Codex 原会话续聊' : ''}</p>
@@ -130,6 +133,6 @@ export function TaskAuxPage() {
         <p className="tc-meta">自动汇总的历史记录需要手动关联任务；远端设备需运行同步连接器。</p>
         {visible.length ? visible.map(session => <InboxSession key={session.id} session={session} data={data} canEdit={identity.data?.permissions.includes('work.execute') === true} refresh={refresh} />)
           : <div className="tc-empty"><h2>暂无匹配会话</h2><p>可以调整搜索条件，或连接其他设备后刷新。</p></div>}
-      </section>)}
+      </section>)}</div>
   </>;
 }

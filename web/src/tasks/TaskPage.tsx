@@ -1,3 +1,4 @@
+import { PageHeading } from '../components/PageHeading.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
@@ -119,7 +120,7 @@ export function TaskPage() {
   const waiting = jobs.find(job => job.status === 'waiting' && job.request);
   const activeJob = jobs.some(job => ['queued', 'launching', 'running', 'waiting', 'unknown'].includes(job.status));
   return <div className={styles.workspace}>
-    <header className={styles.heading}><div><h1>任务中心</h1><span>让每一件事，持续向前</span></div><div className="tc-actions"><button className={styles.iconButton} type="button" aria-label="刷新任务" title="刷新任务" disabled={snapshot.isFetching} onClick={() => void snapshot.refetch()}><Icon name="refresh" /></button>{canEdit && <a className={`button primary ${styles.newTask}`} aria-label="创建任务" href="#new-task"><Icon name="plus" />新建任务</a>}</div></header>
+    <PageHeading title="任务中心" description="让每一件事，持续向前"><div className="tc-actions"><button className={styles.iconButton} type="button" aria-label="刷新任务" title="刷新任务" disabled={snapshot.isFetching} onClick={() => void snapshot.refetch()}><Icon name="refresh" /></button>{canEdit && <a className={`button primary ${styles.newTask}`} aria-label="创建任务" href="#new-task"><Icon name="plus" />新建任务</a>}</div></PageHeading>
     <nav className={styles.navigation} aria-label="任务中心视图"><a href="#tasks" aria-current="page">全部任务<span>{data.tasks.length}</span></a><a href="#inbox">未归属会话<span>{unassigned.length}</span></a><a href="#devices">设备与 Agent<span>{data.devices.length}</span></a></nav>
     <div className={styles.layout} data-mobile-detail={mobileDetail}>
       <aside className={styles.list} aria-label="任务列表">

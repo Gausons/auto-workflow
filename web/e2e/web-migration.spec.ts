@@ -16,6 +16,63 @@ async function login(page: import('@playwright/test').Page) {
   await expect(page.getByRole('heading', { name: '任务中心', exact: true })).toBeVisible();
 }
 
+test('all tabs share sidebar geometry, typography and page headings at every breakpoint', async ({ page }, testInfo) => {
+  await login(page);
+  for (const width of [1440, 1000, 800, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/tasks');
+    await expect(page.locator('.main h1')).toHaveText('任务中心');
+    await page.locator('.sidebar').evaluate(element => { element.setAttribute('data-shared-shell', 'retained'); });
+    const measure = () => page.evaluate(() => {
+      const appearance = (selector: string) => {
+        const element = document.querySelector(selector)!;
+        const style = getComputedStyle(element);
+        return { fontFamily: style.fontFamily, fontSize: style.fontSize, fontWeight: style.fontWeight, lineHeight: style.lineHeight, padding: style.padding, gap: style.gap, borderRadius: style.borderRadius, color: style.color, display: style.display };
+      };
+      const sidebar = document.querySelector('.sidebar')!.getBoundingClientRect();
+      return {
+        sidebar: { width: sidebar.width, height: sidebar.height, ...appearance('.sidebar') },
+        brand: appearance('.brand'), brandTitle: appearance('.brand strong'), brandSubtitle: appearance('.brand span'),
+        brandMark: document.querySelector('.brand-mark')!.getBoundingClientRect().toJSON(),
+        navigation: Array.from(document.querySelectorAll('.nav-list a'), link => ({
+          height: link.getBoundingClientRect().height,
+          fontSize: getComputedStyle(link).fontSize, lineHeight: getComputedStyle(link).lineHeight,
+          padding: getComputedStyle(link).padding, gap: getComputedStyle(link).gap,
+          iconWidth: link.querySelector('svg')!.getBoundingClientRect().width
+        })),
+        settings: appearance('.settings-link'), note: appearance('.sidebar-note'), account: appearance('.tenant-panel'),
+        accountName: appearance('.tenant-panel strong'), logout: appearance('.tenant-panel button'),
+        heading: appearance('.page-heading'), title: appearance('.page-heading h1')
+      };
+    });
+    const baseline = await measure();
+    expect(baseline.sidebar.width).toBe(width > 1100 ? 232 : width > 860 ? 208 : width);
+    expect(baseline.navigation.every(link => link.fontSize === '14px' && link.height === 42)).toBe(true);
+    expect(baseline.title.fontSize).toBe('18px');
+    const destinations = [
+      ['/tasks/new', '新建任务', 'a[href="/tasks/new"]'], ['/tasks', '任务中心', '.nav-list a[href="/tasks"]'],
+      ['/inbox', '未归属会话', '.main a[href="#inbox"]'], ['/devices', '设备与 Agent', '.nav-list a[href="/devices"]'],
+      ['/workbench', '缺陷工作台', '.nav-list a[href="/workbench"]'], ['/history', '会话', '.nav-list a[href="/history"]'],
+      ['/settings/assignment', '设置', '.settings-link'], ['/settings/config', '设置', '.settings-nav a[href="/settings/config"]'],
+      ['/settings/account', '设置', '.settings-nav a[href="/settings/account"]']
+    ];
+    for (const [path, title, selector] of destinations) {
+      await page.locator(selector!).click();
+      await expect(page).toHaveURL(new RegExp(`${path}$`));
+      await expect(page.locator('.main h1')).toHaveText(title!);
+      await expect(page.locator('.sidebar')).toHaveAttribute('data-shared-shell', 'retained');
+      await page.evaluate(() => window.scrollTo(0, 0));
+      expect(await measure(), `${path} at ${width}px`).toEqual(baseline);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth), `${path} overflow at ${width}px`).toBe(width);
+      await expect(page.locator('.sidebar a[aria-current="page"]')).toHaveCount(1);
+      if (path === '/workbench') await expect(page.getByRole('button', { name: '立即拉取' })).toBeVisible();
+      if ((width === 1440 || width === 390) && (path === '/history' || path === '/devices')) {
+        await page.screenshot({ path: testInfo.outputPath(`shared-ui-${path.slice(1)}-${width}.png`) });
+      }
+    }
+  }
+});
+
 test('auth form stays centered and usable on desktop and mobile', async ({ page }) => {
   for (const width of [1440, 375]) {
     await page.setViewportSize({ width, height: 900 });

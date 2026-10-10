@@ -1,3 +1,4 @@
+import { PageHeading } from '../components/PageHeading.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
@@ -156,7 +157,7 @@ export function NewTaskPage() {
   if (!active) return null;
   const blocked = create.isPending || busy;
   return <>
-    <header className="tc-heading"><div><p className="eyebrow">跨设备 · 跨 Agent</p><h1>新建任务</h1></div><a className="button secondary" href="#tasks">返回任务中心</a></header>
+    <PageHeading title="新建任务"><a className="button secondary" href="#tasks">返回任务中心</a></PageHeading>
     {!canEdit && !identity.isPending ? <p role="alert">当前账号没有创建任务权限。</p> : null}
     <section className="tc-create" aria-label="新建任务会话"><div className="tc-create-log" role="log" aria-live="polite">
       {created.length ? created.map(item => <div key={item.taskId}><p className="tc-create-message">{item.content}</p><div className="tc-create-reply">{item.executed ? '任务已创建并提交 Agent。' : '任务已创建。'}<a className="button secondary" href="#tasks" onClick={() => window.dispatchEvent(new CustomEvent('bugflow:open-task', { detail: { taskId: item.taskId } }))}>查看任务</a></div></div>) : <div className="tc-empty"><h2>想让 Agent 完成什么？</h2><p>描述你的目标，让 Agent 帮你完成。</p></div>}
