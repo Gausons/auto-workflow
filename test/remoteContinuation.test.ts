@@ -127,6 +127,97 @@ test('graceful connector shutdown publishes unknown without restarting the agent
   const restarted = f.worker(); await restarted.sync(); assert.equal(f.started.length, 1);
 });
 
+test('stop and approval remain available while a native directory picker is waiting', { timeout: 10_000 }, async t => {
+  const f = await fixture(t);
+  const { executionId } = await f.service.continueHistory(f.session.id, { requestId: randomUUID(), message: '继续' });
+  const worker = f.worker(); await worker.sync();
+  f.update({ ...f.started[0]!, threadId: f.nativeId, status: 'waiting', request: { method: 'permission' } }); await worker.sync();
+  let enter!: () => void, release!: (cwd: string) => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const selected = new Promise<string>(resolve => { release = resolve; });
+  worker.directoryPicker = async () => { enter(); return selected; };
+  const original = worker.request;
+  worker.request = (method, body, endpoint) => endpoint === '/api/task-center/directory-action'
+    ? f.service.directoryAction(body as Parameters<Service['directoryAction']>[0], f.owner) : original(method, body, endpoint);
+  await f.service.pickDirectory({ deviceId: 'remote', projectId: 'p' }, f.owner);
+  const busy = worker.sync(); await entered;
+  try {
+    await f.service.action({ action: 'respond', executionId, decision: 'decline' });
+    await Promise.all([worker.syncControls(), worker.syncControls()]);
+    assert.equal(f.responses.length, 1);
+    await f.service.action({ action: 'stop', executionId });
+    await Promise.all([worker.syncControls(), worker.syncControls()]);
+    assert.equal((await f.service.historyExecution(f.session.id)).execution?.status, 'interrupted');
+    assert.equal(f.started.length, 1);
+  } finally { release(f.root); await busy; }
+});
+
+test('stop during preparation cancels before sending an Agent instruction and survives restart', { timeout: 10_000 }, async t => {
+  const f = await fixture(t);
+  const { executionId } = await f.service.continueHistory(f.session.id, { requestId: randomUUID(), message: '继续' });
+  const worker = f.worker();
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const prepared = new Promise<void>(resolve => { release = resolve; });
+  const validate = worker.validateTarget.bind(worker);
+  worker.validateTarget = async (job, snapshot) => { enter(); await prepared; await validate(job, snapshot); };
+  const busy = worker.sync(); await entered;
+  try {
+    await f.service.action({ action: 'stop', executionId });
+    await Promise.all([worker.syncControls(), worker.syncControls()]);
+    assert.equal((await f.service.historyExecution(f.session.id)).execution?.status, 'interrupted');
+  } finally { release(); await busy; }
+  assert.equal(f.started.length, 0);
+  const saved = JSON.parse(await readFile(path.join(f.root, 'journal', `${executionId}.json`), 'utf8')) as Report;
+  assert.equal(saved.status, 'interrupted');
+  worker.close(); await f.worker().sync(); assert.equal(f.started.length, 0);
+});
+
+test('shutdown reports a cancelled directory selection after aborting the picker', { timeout: 10_000 }, async t => {
+  const f = await fixture(t), stop = new AbortController();
+  f.workerOptions.signal = stop.signal;
+  const worker = f.worker();
+  let enter!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  worker.directoryPicker = async () => {
+    enter();
+    return new Promise<string>((_resolve, reject) => stop.signal.addEventListener('abort', () => reject(new Error('picker aborted')), { once: true }));
+  };
+  const original = worker.request;
+  worker.request = (method, body, endpoint) => endpoint === '/api/task-center/directory-action'
+    ? f.service.directoryAction(body as Parameters<Service['directoryAction']>[0], f.owner) : original(method, body, endpoint);
+  const selection = await f.service.pickDirectory({ deviceId: 'remote', projectId: 'p' }, f.owner);
+  assert.ok('requestId' in selection);
+  const busy = worker.sync(); await entered;
+  stop.abort(); await assert.rejects(busy, /picker aborted/);
+  assert.equal(f.service.directoryStatus({ requestId: selection.requestId }, f.owner).status, 'selecting');
+  await worker.shutdown();
+  assert.equal(f.service.directoryStatus({ requestId: selection.requestId }, f.owner).status, 'cancelled');
+  assert.equal(f.started.length, 0);
+});
+
+test('a lost control report response retries the receipt without repeating the approval', async t => {
+  const f = await fixture(t);
+  const { executionId } = await f.service.continueHistory(f.session.id, { requestId: randomUUID(), message: '继续' });
+  const worker = f.worker(); await worker.sync();
+  f.update({ ...f.started[0]!, threadId: f.nativeId, status: 'waiting', request: { method: 'permission' } }); await worker.sync();
+  await f.service.action({ action: 'respond', executionId, decision: 'accept' });
+  const original = worker.request;
+  let lost = false;
+  worker.request = async (method, body, endpoint) => {
+    const result = await original(method, body, endpoint);
+    if (!lost && method === 'POST' && body && typeof body === 'object' && 'controlAck' in body && body.controlAck) {
+      lost = true; throw new Error('report response lost');
+    }
+    return result;
+  };
+  await assert.rejects(worker.syncControls(), /report response lost/);
+  await Promise.all([worker.syncControls(), worker.syncControls()]);
+  assert.equal(f.responses.length, 1);
+  assert.equal(f.db.readTaskCenter('default').executions[0].control, null);
+  assert.equal(worker.pending.size, 0);
+});
+
 
 test('device journal binding rejects cross-server, tenant and user reuse', async t => {
   const { bindDeviceConnection } = await import('../src/deviceConnectionIdentity.js');

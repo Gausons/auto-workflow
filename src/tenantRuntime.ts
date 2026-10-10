@@ -1,6 +1,7 @@
 import { readJson, readBytes } from './http/body.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createTaskCenterStream, taskCenterSince } from './taskCenterStream.js';
+import { createDeviceControl } from './deviceControl.js';
 import path from 'node:path';
 import { taskContent } from '../shared/taskContent.js';
 import { DEFAULT_AI_ASSIGNMENT_MODEL } from '../shared/assignmentModels.js';
@@ -120,6 +121,12 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
   }
 
   async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
+    if (url.pathname === '/api/task-center/device-state' && req.method === 'GET') {
+      sendJson(res, 200, deviceControl.snapshot(url.searchParams, requestIdentity.getStore()!.user.id)); return;
+    }
+    if (url.pathname === '/api/task-center/device-updates' && req.method === 'GET') {
+      await deviceControl.serve(req, res, url.searchParams, requestIdentity.getStore()!.user.id); return;
+    }
     if (url.pathname === '/api/task-center/changes' && req.method === 'GET') {
       sendJson(res, 200, await taskCenter.changes(taskCenterSince(url.searchParams))); return;
     }
@@ -653,6 +660,7 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
   const sessionDelivery = createSessionDelivery({ history: agentHistory, environment });
   const taskCenter = createTaskCenter({ database, tenantId: tenant.id, history: agentHistory });
   const taskCenterStream = createTaskCenterStream(database, tenant.id);
+  const deviceControl = createDeviceControl(database, tenant.id);
   const codexExecution = createCodexExecution({ database, attachmentRoot: path.join(rootDir, '.workflow-data', 'attachments', createHash('sha256').update(tenant.id).digest('hex')), tenantId: tenant.id, workspace: () => state.config.codexWorkspaceDir, history: agentHistory, environment });
   const remoteGit = createRemoteGit(database, tenant.id);
   const historyImages = createHistoryImages(database, tenant.id);
@@ -666,7 +674,7 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
   conversationTimer.unref();
   return {
     workspace: () => state.config.codexWorkspaceDir,
-    closeStreams: () => taskCenterStream.close(),
+    closeStreams: () => { taskCenterStream.close(); deviceControl.close(); },
     async handleApi(req: IncomingMessage, res: ServerResponse, url: URL, principal: Principal) {
       const mutation = req.method !== 'GET';
       if (mutation && mutationPending) { sendJson(res, 409, { error: 'tenant_busy', message: '当前账号正在处理其他请求，请稍后重试' }); req.resume(); return; }
@@ -677,6 +685,7 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
     },
     async close() {
       taskCenterStream.close();
+      deviceControl.close();
       clearInterval(conversationTimer); conversations.close(); codexExecution.close(); configureScheduler(false); assignmentJobSeq++; await persistIssueState(); closing = true;
     }
   };

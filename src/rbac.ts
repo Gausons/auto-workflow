@@ -22,6 +22,7 @@ export function permissionForRoute(method: string | undefined, pathname: string)
   if (/^\/api\/conversations\/[a-f0-9]{64}\/transfer\/objects\/[a-f0-9]{64}$/.test(pathname) && ['GET', 'POST'].includes(method || '')) return 'work.execute';
   if (/^\/api\/agent-sessions\/[a-f0-9]{64}\/continue$/.test(pathname) && ['GET', 'POST'].includes(method || '')) return method === 'POST' ? 'work.execute' : 'read';
   if (pathname === '/api/task-center/codex' && method === 'GET') return 'work.execute';
+  if (['/api/task-center/device-state', '/api/task-center/device-updates'].includes(pathname) && method === 'GET') return 'work.execute';
   if (pathname === '/api/task-center/updates' && method === 'GET') return 'read';
   if (pathname === '/api/task-center/changes' && method === 'GET') return 'read';
   if (pathname === '/api/task-center/git' && ['GET', 'POST'].includes(method || '')) return 'work.execute';

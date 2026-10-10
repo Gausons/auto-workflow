@@ -28,6 +28,8 @@ agent-workbench-connector --env-file ./agent.env
 
 进程需要保持运行，按 Ctrl+C 正常退出。仅同步模式配置 `WORKBENCH_EXECUTE_CODEX=false` 后，可以使用 `agent-workbench-connector --env-file ./agent.env --once` 单次同步。`agent-workbench-connector --help` 查看参数，`agent-workbench-connector --version` 查看版本。
 
+执行模式主动连接工作台的设备专属 SSE 通知通道，收到任务、审批、停止、目录或 Git 请求后立即读取状态，并每 3 秒补查。断线时会提示、继续补查并自动重连；命令仍通过原有领取和持久回执处理，重连不会自动重发已提交的 Agent 指令。历史及图片同步独立每轮等待 30 秒，另有每 30 秒心跳；慢同步或目录选择器等待不会阻塞已有执行的停止与审批。退出时取消通知、在途请求和目录选择器，并保存未结束执行供核对。使用这些能力需先更新工作台，再重新打包、升级并重启连接器，无需新增配置。
+
 ## 状态与迁移
 
 包名与命令名统一为 `agent-workbench-connector`。为兼容已有安装，默认配置目录仍保留 `~/.bugflow/agent.env`，设备状态目录也不变；无需迁移凭据或重建设备。若安装过旧命令，先停止旧进程，再使用新命令启动，避免两个连接器同时工作。

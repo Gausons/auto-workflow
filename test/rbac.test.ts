@@ -61,6 +61,7 @@ test('organization members, role enforcement, cross-organization access and imme
       ['POST', '/api/bugs/x/assignment/apply'], ['POST', '/api/bugs/x/assignment/recommend'],
       ['POST', '/api/assignments/apply-all'],
       ['POST', '/api/task-center/git'], ['GET', '/api/task-center/git?requestId=missing'], ['POST', '/api/task-center/git-action'],
+      ['GET', '/api/task-center/device-state?deviceId=remote'], ['GET', '/api/task-center/device-updates?deviceId=remote'],
       ['GET', '/api/organization/members'], ['POST', '/api/organization/members'], ['GET', '/api/organization/audit']
     ]) assert.equal((await request(viewer.token, endpoint, method, method === 'GET' ? undefined : { role: 'owner', tenantId: 'other' })).status, 403, endpoint);
     assert.equal((await request(operator.token, '/api/bugs/not-found/task', 'POST', {})).status, 404);

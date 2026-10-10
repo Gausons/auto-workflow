@@ -6,6 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createAgentHistory } from './agentHistory/index.js';
 import { createSessionDelivery } from './sessionDelivery/index.js';
 import { RemoteCodexWorker } from './remoteCodexWorker.js';
+import { runDeviceControl, watchDeviceUpdates } from './deviceControlClient.js';
 import { bindDeviceConnection } from './deviceConnectionIdentity.js';
 import { normalizeRemoteHistory, REMOTE_HISTORY_LIMIT } from './remoteHistory.js';
 import type { AgentProject, RemoteHistory, TaskCenterData } from '../shared/taskTypes.js';
@@ -187,15 +188,27 @@ export async function runDeviceConnector({ environment = { ...process.env }, onc
   catch (caught: unknown) { const error = asError(caught); if (error.code !== 'ENOENT') throw error; deviceId = randomUUID(); await writeFile(path.join(stateDir, 'id'), deviceId, { flag: 'wx', mode: 0o600 }); }
   const history = createAgentHistory({ environment, workspace: () => defaults.workspace });
   const delivery = createSessionDelivery({ history, environment });
+  const stopping = new AbortController();
+  let shuttingDown = false, heartbeatAgents = ['codex'];
   const request: Request = async (method, body, endpoint = '/api/task-center') => {
     const binary = body instanceof Uint8Array;
-    const response = await fetch(new URL(endpoint, base), { method,
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': binary ? 'application/octet-stream' : 'application/json' },
-      ...(body !== undefined ? { body: binary ? Buffer.from(body) : JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(endpoint.includes('/transfer') ? 180000 : 60000) });
-    if (!response.ok) { const result = record(await response.json()); throw Object.assign(new Error(String(result.message || '请求失败')), { status: response.status }); }
-    if (method === 'GET' && endpoint.includes('/transfer/objects/')) return new Uint8Array(await response.arrayBuffer());
-    return record(await response.json());
+    const controller = new AbortController(), abort = () => controller.abort();
+    const timer = setTimeout(abort, endpoint.includes('/transfer') ? 180000 : 60000);
+    if (!shuttingDown) {
+      stopping.signal.addEventListener('abort', abort, { once: true });
+      if (stopping.signal.aborted) abort();
+    }
+    try {
+      const response = await fetch(new URL(endpoint, base), { method,
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': binary ? 'application/octet-stream' : 'application/json' },
+        ...(body !== undefined ? { body: binary ? Buffer.from(body) : JSON.stringify(body) } : {}),
+        signal: controller.signal });
+      if (!response.ok) { const result = record(await response.json()); throw Object.assign(new Error(String(result.message || '请求失败')), { status: response.status }); }
+      if (method === 'GET' && endpoint.includes('/transfer/objects/')) return new Uint8Array(await response.arrayBuffer());
+      const result = record(await response.json());
+      if (method === 'POST' && record(body).action === 'heartbeat') heartbeatAgents = record(body).agents as string[];
+      return result;
+    } finally { clearTimeout(timer); stopping.signal.removeEventListener('abort', abort); }
   };
   const outputDir = path.join(stateDir, 'inbox');
   const sessionIndexFile = path.join(stateDir, 'session-sync-index.json');
@@ -204,38 +217,55 @@ export async function runDeviceConnector({ environment = { ...process.env }, onc
     const saved = JSON.parse(await readFile(sessionIndexFile, 'utf8')) as unknown;
     if (saved && typeof saved === 'object' && !Array.isArray(saved)) sessionIndex = Object.fromEntries(Object.entries(saved).filter(([key, value]) => key.length <= 500 && typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)).slice(0, 100_000));
   } catch (caught: unknown) { if (asError(caught).code !== 'ENOENT') console.warn('会话增量索引不可用，将执行一次完整同步'); }
-  const worker = defaults.execute ? new RemoteCodexWorker({ request, deviceId, directory: path.join(stateDir, 'executions'), workspace: defaults.workspace, contextSource: { catalog: () => history.catalog(), delivery } }) : null;
-  const stopping = new AbortController();
+  const deviceParams = new URLSearchParams({ deviceId });
+  const workerRequest: Request = (method, body, endpoint) => request(method, body, method === 'GET' && !endpoint ? `/api/task-center/device-state?${deviceParams}` : endpoint);
+  const worker = defaults.execute ? new RemoteCodexWorker({ request: workerRequest, signal: stopping.signal, deviceId, directory: path.join(stateDir, 'executions'), workspace: defaults.workspace, contextSource: { catalog: () => history.catalog(), delivery } }) : null;
   const stop = () => stopping.abort();
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
   console.log(`设备：${environment.WORKBENCH_DEVICE_NAME || hostname()}；模式：${worker ? '远程执行' : '仅同步'}；交接包目录：${outputDir}`);
   const reportError = (caught: unknown) => {
     const error = asError(caught);
-    if ((typeof error.status === 'number' && [401, 403].includes(error.status)) || once) throw error;
+    if ((typeof error.status === 'number' && [401, 403].includes(error.status)) || once) { stopping.abort(); throw error; }
     console.error(`同步未完成：${error.message}；稍后重试`);
   };
-  try {
+  const heartbeat = async () => {
+    await request('POST', { action: 'heartbeat', deviceId, name: environment.WORKBENCH_DEVICE_NAME || hostname(), agents: heartbeatAgents,
+      sessions: [], capabilities: { resumeCodex: Boolean(worker), gitBranches: Boolean(worker) } });
+  };
+  const syncHistory = async () => {
+    const result = await syncDeviceOnce({ request, history, deviceId, name: environment.WORKBENCH_DEVICE_NAME || hostname(), outputDir,
+      includeExcerpts: defaults.includeExcerpts, codexProjects: worker ? await worker.projects() : [], resumeCodex: Boolean(worker), sessionIndex });
+    const stagingIndex = sessionIndexFile + '.pending';
+    await writeFile(stagingIndex, JSON.stringify(sessionIndex), { mode: 0o600 });
+    await rename(stagingIndex, sessionIndexFile);
+    console.log(`同步 ${result.sessions} 个会话，接收 ${result.received} 个交接包`);
+  };
+  const historyLoop = async () => {
     do {
-      try {
-        const result = await syncDeviceOnce({ request, history, deviceId, name: environment.WORKBENCH_DEVICE_NAME || hostname(), outputDir,
-          includeExcerpts: defaults.includeExcerpts, codexProjects: worker ? await worker.projects() : [], resumeCodex: Boolean(worker), sessionIndex });
-        const stagingIndex = sessionIndexFile + '.pending';
-        await writeFile(stagingIndex, JSON.stringify(sessionIndex), { mode: 0o600 });
-        await rename(stagingIndex, sessionIndexFile);
-        console.log(`同步 ${result.sessions} 个会话，接收 ${result.received} 个交接包`);
-      } catch (caught: unknown) { reportError(caught); }
-      // A history/discovery failure must not prevent approvals or stop requests
-      // for an execution that is already running on this connector.
-      if (worker && !stopping.signal.aborted) {
-        try { await worker.sync(); } catch (caught: unknown) { reportError(caught); }
-      }
-      if (once || stopping.signal.aborted) break;
-      await delay(worker ? 3000 : 30000, undefined, { signal: stopping.signal }).catch(error => { if (!stopping.signal.aborted) throw error; });
+      if (stopping.signal.aborted) return;
+      try { await syncHistory(); } catch (error) { if (!stopping.signal.aborted) reportError(error); }
+      if (once || stopping.signal.aborted) return;
+      await delay(30_000, undefined, { signal: stopping.signal }).catch(error => { if (!stopping.signal.aborted) throw error; });
     } while (!stopping.signal.aborted);
+  };
+  const loops: Promise<void>[] = [];
+  try {
+    if (worker) {
+      try { await heartbeat(); } catch (error) { if (!stopping.signal.aborted) reportError(error); }
+      loops.push(runDeviceControl({ signal: stopping.signal, work: () => worker.sync(), controls: () => worker.syncControls(), heartbeat,
+        onError: reportError,
+        subscribe: (wake, signal) => watchDeviceUpdates({ url: new URL(`/api/task-center/device-updates?${deviceParams}`, base), token, signal, wake,
+          onError: () => console.warn('设备通知通道暂不可用，继续每 3 秒补查远端控制请求') }) }));
+    }
+    loops.push(historyLoop());
+    await Promise.all(loops);
   } finally {
+    stopping.abort();
+    await Promise.allSettled(loops);
     process.removeListener('SIGINT', stop);
     process.removeListener('SIGTERM', stop);
+    shuttingDown = true;
     await worker?.shutdown();
   }
 }

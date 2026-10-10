@@ -94,17 +94,17 @@ export async function openCodexThread(threadId: string) {
   await promisify(execFile)(command[0], command[1], { timeout: 10000 });
 }
 
-export async function pickNativeDirectory(defaultCwd = process.cwd()) {
+export async function pickNativeDirectory(defaultCwd = process.cwd(), signal?: AbortSignal) {
   try {
     let result: { stdout: string | Buffer };
     if (process.platform === 'darwin') {
       const script = 'on run argv\nset chosenFolder to choose folder with prompt "选择 IDE 工作目录" default location POSIX file (item 1 of argv)\nreturn POSIX path of chosenFolder\nend run';
-      result = await promisify(execFile)('osascript', ['-e', script, defaultCwd], { timeout: 300000 });
+      result = await promisify(execFile)('osascript', ['-e', script, defaultCwd], { timeout: 300000, signal });
     } else if (process.platform === 'win32') {
       const script = 'Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.FolderBrowserDialog; if($d.ShowDialog() -eq "OK"){[Console]::Write($d.SelectedPath)}else{exit 2}';
-      result = await promisify(execFile)('powershell.exe', ['-NoProfile', '-Command', script], { timeout: 300000 });
+      result = await promisify(execFile)('powershell.exe', ['-NoProfile', '-Command', script], { timeout: 300000, signal });
     } else {
-      result = await promisify(execFile)('zenity', ['--file-selection', '--directory', `--filename=${defaultCwd}${path.sep}`], { timeout: 300000 });
+      result = await promisify(execFile)('zenity', ['--file-selection', '--directory', `--filename=${defaultCwd}${path.sep}`], { timeout: 300000, signal });
     }
     return await realpath(String(result.stdout || '').trim());
   } catch (caught: unknown) {

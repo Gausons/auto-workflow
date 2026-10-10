@@ -36,6 +36,7 @@ interface RemoteRunner {
 }
 interface WorkerOptions {
   request: Request;
+  signal?: AbortSignal;
   deviceId: string;
   directory: string;
   workspace: string;
@@ -53,9 +54,13 @@ export class RemoteCodexWorker {
   pending: Map<string, RemoteJob>; saved: Map<string, RemoteJob>; published: Set<string>; queue: Promise<void>; loaded: boolean; storageError: unknown; runner: RemoteRunner; update: (job: RemoteJob) => void;
   request: Request; directoryPicker: (workspace: string) => Promise<string>; deviceId: string; directory: string; workspace: string;
   contextSource?: WorkerOptions['contextSource'];
+  signal?: AbortSignal;
+  private invoked = new Set<string>();
+  private selections = new Set<string>();
 
-  constructor({ request, deviceId, directory, workspace, runnerFactory, directoryPicker = pickNativeDirectory, contextSource }: WorkerOptions) {
+  constructor({ request, signal, deviceId, directory, workspace, runnerFactory, directoryPicker = root => pickNativeDirectory(root, signal), contextSource }: WorkerOptions) {
     this.request = request; this.deviceId = deviceId; this.directory = directory; this.workspace = workspace; this.directoryPicker = directoryPicker; this.contextSource = contextSource;
+    this.signal = signal;
     this.pending = new Map(); this.saved = new Map(); this.published = new Set(); this.queue = Promise.resolve(); this.loaded = false;
     const update = (job: RemoteJob) => {
       this.saved.set(job.id, structuredClone(job)); this.pending.set(job.id, structuredClone(job));
@@ -165,7 +170,12 @@ export class RemoteCodexWorker {
     return { ...job, prompt: compiled.prompt, promptImages: compiled.images, contextMarkdownPath: compiled.markdownPath, contextBrief: compiled.preparedBrief, contextSourcePartial: snapshot.partial,
       contextCoverage: { records: snapshot.entries.length, images: compiled.images.length, partial: snapshot.partial } };
   }
-  async flush() {
+  private flushing: Promise<void> | null = null;
+  flush(): Promise<void> {
+    if (!this.flushing) this.flushing = this.flushOnce().finally(() => { this.flushing = null; });
+    return this.flushing;
+  }
+  private async flushOnce() {
     await this.queue; if (this.storageError) throw this.storageError;
     for (const [id, report] of this.pending) {
       await this.request('POST', { action: 'report', executionId: id, report, controlAck: report.controlAck, controlError: report.controlError }, '/api/task-center/execution-action');
@@ -173,12 +183,18 @@ export class RemoteCodexWorker {
     }
   }
   private controls = new Map<string, string>();
+  private loading: Promise<void> | null = null;
+  private controlSync: Promise<void> | null = null;
   private syncing: Promise<void> | null = null;
   sync(): Promise<void> {
     if (!this.syncing) this.syncing = this.syncOnce().finally(() => { this.syncing = null; });
     return this.syncing;
   }
-  private async syncOnce() {
+  private load(): Promise<void> {
+    if (!this.loading) this.loading = this.loadOnce().catch(error => { this.loading = null; throw error; });
+    return this.loading;
+  }
+  private async loadOnce() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     if (!this.loaded) {
       for (const file of await readdir(this.directory)) {
@@ -198,7 +214,41 @@ export class RemoteCodexWorker {
       }
       this.loaded = true;
     }
+  }
+  syncControls(): Promise<void> {
+    if (!this.controlSync) this.controlSync = this.controlsOnce().finally(() => { this.controlSync = null; });
+    return this.controlSync;
+  }
+  private async controlsOnce() {
+    await this.load();
+    const snapshot = await this.request('GET') as TaskCenterData;
+    for (const job of snapshot.executions.filter(candidate => candidate.deviceId === this.deviceId)) {
+      const current = this.saved.get(job.id);
+      if (!job.control || !current || current.controlAck === job.control.id) continue;
+      if (!/^[a-f0-9-]{36}$/.test(job.id)) throw new Error('执行标识无效');
+      if (this.controls.get(job.id) === job.control.id) {
+        this.update({ ...current, controlAck: job.control.id, controlError: '操作处理结果待核对；不会自动重复提交' });
+        continue;
+      }
+      const receiptPath = path.join(this.directory, `control-${job.id}.json`);
+      await writeFile(receiptPath + '.pending', JSON.stringify({ id: job.control.id }), { mode: 0o600 });
+      await rename(receiptPath + '.pending', receiptPath);
+      this.controls.set(job.id, job.control.id);
+      try {
+        if (job.control.action === 'stop' && current.status === 'launching' && !this.invoked.has(job.id)) {
+          this.update({ ...current, status: 'interrupted', request: null, message: '已取消执行准备，未向 Agent 发送指令' });
+        } else if (job.control.action === 'stop') await this.runner.stop(job.id);
+        else if (job.control.action === 'respond') await this.runner.respond(job.id, job.control);
+        else if (job.control.action === 'reconcile') await this.runner.reconcile(current);
+        this.update({ ...current, ...this.saved.get(job.id), controlAck: job.control.id, controlError: null });
+      } catch (caught: unknown) { this.update({ ...this.saved.get(job.id)!, controlAck: job.control.id, controlError: asError(caught).message }); }
+    }
     await this.flush();
+  }
+  private async syncOnce() {
+    await this.load();
+    await this.flush();
+    await this.syncControls();
     const snapshot = await this.request('GET') as TaskCenterData;
     await syncRemoteGit({ request: this.request, deviceId: this.deviceId, directory: this.directory, projects: () => this.projects() }, snapshot);
     for (const job of snapshot.executions.filter(candidate => candidate.contextSourceDeviceId === this.deviceId && candidate.deviceId !== this.deviceId && candidate.status === 'queued' && candidate.remoteContext && !this.published.has(candidate.id))) {
@@ -226,12 +276,18 @@ export class RemoteCodexWorker {
     }
     for (const selection of (snapshot.directoryRequests || []).filter(item => item.deviceId === this.deviceId && item.status === 'pending').slice(0, 1)) {
       await this.request('POST', { action: 'claim', requestId: selection.id }, '/api/task-center/directory-action');
+      this.selections.add(selection.id);
       try {
         const cwd = await this.directoryPicker(this.workspace);
         await this.request('POST', { action: 'report', requestId: selection.id, cwd }, '/api/task-center/directory-action');
+        this.selections.delete(selection.id);
       } catch (caught: unknown) {
+        // HTTP has already been aborted. Publish cancellation during shutdown,
+        // when final reports can use a fresh request instead of the stopped one.
+        if (this.signal?.aborted) throw caught;
         const error = asError(caught);
         await this.request('POST', { action: 'report', requestId: selection.id, cancelled: error.code === 'DIRECTORY_PICKER_CANCELLED', message: error.message }, '/api/task-center/directory-action');
+        this.selections.delete(selection.id);
       }
     }
     for (const job of snapshot.executions.filter(candidate => candidate.deviceId === this.deviceId)) {
@@ -246,17 +302,24 @@ export class RemoteCodexWorker {
         const claimed = claimedResult.job;
         if (claimed.id !== job.id || claimed.deviceId !== this.deviceId) throw new Error('领取执行的设备或标识不匹配');
         // Persist the claim before invoking thread/start. A crash here remains unknown.
-        this.saved.set(job.id, claimed); await this.persist(claimed);
+        this.update(claimed); await this.queue; if (this.storageError) throw this.storageError;
         if (claimed.contextTransferError) {
           this.update({ ...claimed, status: 'failed', request: null, message: `跨设备交接失败：${claimed.contextTransferError}` });
           continue;
         }
         let prepared: RemoteJob;
-        try { await this.validateTarget(claimed, snapshot); prepared = await this.prepareContext(claimed); await this.persist(prepared); this.saved.set(job.id, prepared); }
+        try {
+          await this.validateTarget(claimed, snapshot); prepared = await this.prepareContext(claimed);
+          if (this.saved.get(job.id)?.status === 'interrupted' || this.signal?.aborted) continue;
+          this.update(prepared); await this.queue; if (this.storageError) throw this.storageError;
+        }
         catch (caught: unknown) {
+          if (this.saved.get(job.id)?.status === 'interrupted' || this.signal?.aborted) continue;
           this.update({ ...claimed, status: 'failed', request: null, message: `远端执行准备失败：${asError(caught).message}` });
           continue;
         }
+        if (this.saved.get(job.id)?.status === 'interrupted' || this.signal?.aborted) continue;
+        this.invoked.add(job.id);
         try { await this.runner.start(prepared); }
         catch (caught: unknown) {
           this.update({ ...this.saved.get(job.id)!, status: 'unknown', request: null, message: `启动结果待核对：${asError(caught).message}；不会自动重试` });
@@ -264,25 +327,9 @@ export class RemoteCodexWorker {
       } else if (['launching', 'running', 'waiting'].includes(job.status) && !this.saved.has(job.id)) {
         this.update({ ...job, status: 'unknown', request: null, message: '本机没有这次执行的运行记录，请核对 Agent 会话' });
       }
-      const current = this.saved.get(job.id);
-      if (job.control && current && current.controlAck !== job.control.id) {
-        if (this.controls.get(job.id) === job.control.id) {
-          this.update({ ...current, controlAck: job.control.id, controlError: '操作处理结果待核对；不会自动重复提交' });
-          continue;
-        }
-        const receiptPath = path.join(this.directory, `control-${job.id}.json`);
-        await writeFile(receiptPath + '.pending', JSON.stringify({ id: job.control.id }), { mode: 0o600 });
-        await rename(receiptPath + '.pending', receiptPath);
-        this.controls.set(job.id, job.control.id);
-        try {
-          if (job.control.action === 'stop') await this.runner.stop(job.id);
-          else if (job.control.action === 'respond') await this.runner.respond(job.id, job.control);
-          else if (job.control.action === 'reconcile') await this.runner.reconcile(current);
-          this.update({ ...current, ...this.saved.get(job.id), controlAck: job.control.id, controlError: null });
-        } catch (caught: unknown) { this.update({ ...this.saved.get(job.id)!, controlAck: job.control.id, controlError: asError(caught).message }); }
-      }
     }
     await this.flush();
+    await this.syncControls();
   }
   async shutdown() {
     this.runner.close();
@@ -290,6 +337,10 @@ export class RemoteCodexWorker {
       this.update({ ...job, status: 'unknown', request: null, message: '连接器已退出，请核对原 Agent 会话；不会自动重复执行' });
     }
     await this.flush();
+    for (const requestId of this.selections) {
+      await this.request('POST', { action: 'report', requestId, cancelled: true, message: '连接器已退出，目录选择已取消' }, '/api/task-center/directory-action');
+      this.selections.delete(requestId);
+    }
   }
   close() { this.runner.close(); }
 }
