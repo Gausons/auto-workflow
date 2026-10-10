@@ -36,6 +36,7 @@ interface RemoteRunner {
 }
 interface WorkerOptions {
   request: Request;
+  onPending?: () => void;
   signal?: AbortSignal;
   deviceId: string;
   directory: string;
@@ -58,13 +59,16 @@ export class RemoteCodexWorker {
   private invoked = new Set<string>();
   private selections = new Set<string>();
 
-  constructor({ request, signal, deviceId, directory, workspace, runnerFactory, directoryPicker = root => pickNativeDirectory(root, signal), contextSource }: WorkerOptions) {
+  constructor({ request, signal, onPending, deviceId, directory, workspace, runnerFactory, directoryPicker = root => pickNativeDirectory(root, signal), contextSource }: WorkerOptions) {
     this.request = request; this.deviceId = deviceId; this.directory = directory; this.workspace = workspace; this.directoryPicker = directoryPicker; this.contextSource = contextSource;
     this.signal = signal;
     this.pending = new Map(); this.saved = new Map(); this.published = new Set(); this.queue = Promise.resolve(); this.loaded = false;
     const update = (job: RemoteJob) => {
-      this.saved.set(job.id, structuredClone(job)); this.pending.set(job.id, structuredClone(job));
-      this.queue = this.queue.then(() => this.persist(job)).catch((error: unknown) => { this.storageError = error; });
+      const journal = structuredClone(job);
+      this.saved.set(job.id, structuredClone(journal));
+      this.queue = this.queue.then(() => this.persist(journal)).then(() => {
+        this.pending.set(journal.id, journal); onPending?.();
+      }).catch((error: unknown) => { this.storageError = error; });
     };
     this.runner = (runnerFactory ? runnerFactory(update) : (() => {
       const fallback = new CodexRunner({ executable: process.env.CODEX_EXECUTABLE || 'codex', onUpdate: update, desktopOpener: async () => {} });

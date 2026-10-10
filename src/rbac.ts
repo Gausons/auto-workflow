@@ -15,6 +15,12 @@ export function permissionsFor(role: unknown): string[] {
   return typeof role === 'string' && Object.hasOwn(ROLES, role) ? [...ROLES[role as keyof typeof ROLES].permissions] : [];
 }
 
+export function permissionForRealtimeChannel(channel: unknown): string | null {
+  if (channel === 'task-center') return 'read';
+  if (channel === 'device-control') return 'work.execute';
+  return null;
+}
+
 export function permissionForRoute(method: string | undefined, pathname: string): string | null {
   if (/^\/api\/sessions\/[a-f0-9]{64}\/continue-as-new$/.test(pathname) && method === 'POST') return 'work.execute';
   if ((pathname === '/api/conversations' || /^\/api\/conversations\/[a-f0-9]{64}\/(?:inherited|context-preview)$/.test(pathname)) && method === 'GET') return 'read';

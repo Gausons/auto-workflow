@@ -32,6 +32,16 @@ export function createDeviceControl(database: ReturnType<typeof openDatabase>, t
   };
   return {
     snapshot,
+    subscribe(params: URLSearchParams, userId: string, send: (version: number) => void, onError: (error: unknown) => void) {
+      let key: string | undefined;
+      const check = () => {
+        const data = snapshot(params, userId), next = controlKey(data, data.devices[0].id);
+        if (key !== next) { key = next; send(data.syncVersion || 0); }
+      };
+      const unsubscribe = database.subscribeTaskCenter(tenantId, () => { try { check(); } catch (error) { onError(error); } });
+      try { check(); } catch (error) { unsubscribe(); throw error; }
+      return { check, close: unsubscribe };
+    },
     close() { for (const response of connections) response.end(); },
     async serve(req: IncomingMessage, res: ServerResponse, params: URLSearchParams, userId: string) {
       const initial = snapshot(params, userId), deviceId = initial.devices[0].id;

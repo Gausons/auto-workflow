@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { prepareSessionImage } from '../../src/historyImages.js';
+import { connectDeviceUpdates } from '../../src/deviceControlClient.js';
+import type { SendExecutionFeedback } from '../../shared/realtime.js';
 
 const password = 'Test-Web-E2E-Password-2026';
 
@@ -182,13 +184,14 @@ test('creates one task without silently starting an unavailable Agent', async ({
   expect(JSON.parse(writes[0]!)).toMatchObject({ action: 'create', content: '浏览器回归测试任务' });
 });
 
-test('external task changes update the page incrementally without refetching its snapshot or reconnecting SSE', async ({ page, request }) => {
+test('external task changes update the page incrementally without refetching its snapshot or reconnecting WebSocket', async ({ page, request }) => {
   const { token } = await (await request.post('/api/auth/login', { data: { username: 'owner', password } })).json() as { token: string };
   const headers = { Authorization: `Bearer ${token}` };
-  const reads: string[] = [];
+  const reads: string[] = [], sockets: string[] = [];
+  page.on('websocket', socket => sockets.push(new URL(socket.url()).pathname));
   page.on('request', req => { if (req.method() === 'GET') reads.push(new URL(req.url()).pathname); });
   await login(page);
-  await expect.poll(() => reads.filter(path => path === '/api/task-center/updates').length).toBe(1);
+  await expect.poll(() => sockets.filter(path => path === '/api/realtime').length).toBe(1);
   const fullReads = reads.filter(path => path === '/api/task-center').length;
   const created = await request.post('/api/task-center', { headers, data: { action: 'create', title: '跨端增量同步回归' } });
   expect(created.ok()).toBeTruthy();
@@ -198,7 +201,7 @@ test('external task changes update the page incrementally without refetching its
   await expect(page.getByText('跨端增量更新回归', { exact: true }).first()).toBeVisible();
   expect(reads.filter(path => path === '/api/task-center/changes').length).toBeGreaterThan(0);
   expect(reads.filter(path => path === '/api/task-center').length).toBe(fullReads);
-  expect(reads.filter(path => path === '/api/task-center/updates').length).toBe(1);
+  expect(sockets.filter(path => path === '/api/realtime').length).toBe(1);
 });
 
 test('open history receives only its changed remote preview without a page reload', async ({ page, request }) => {
@@ -495,21 +498,32 @@ test('device setup selects remote target and browser controls a remote original 
   const { execution } = await status.json() as { execution: { id: string; resumeThreadId: string; deviceId: string } };
   expect(execution.resumeThreadId).toBe(nativeId); expect(execution.deviceId).toBe(deviceId);
   expect((await request.post('/api/task-center/execution-action', { headers, data: { action: 'claim', executionId: execution.id } })).ok()).toBeTruthy();
-  const report = { threadId: nativeId, status: 'waiting', request: { method: 'item/commandExecution/requestApproval', params: { command: 'echo fixture' } }, output: '受控远端输出' };
-  expect((await request.post('/api/task-center/execution-action', { headers, data: { action: 'report', executionId: execution.id, report } })).ok()).toBeTruthy();
-  await page.getByRole('button', { name: '处理请求' }).click();
-  await page.getByRole('button', { name: '发送回复', exact: true }).click();
-  await expect(page.getByText(/等待目标设备处理操作/)).toBeVisible();
-  const pending = await request.get(`/api/agent-sessions/${session.id}/continue`, { headers });
-  const current = await pending.json() as { execution: { control: { id: string; action: string; decision: string } } };
-  expect(current.execution.control).toMatchObject({ action: 'respond', decision: 'decline' });
-  await request.post('/api/task-center/execution-action', { headers, data: { action: 'report', executionId: execution.id, controlAck: current.execution.control.id, report: { ...report, request: null, status: 'running' } } });
-  await page.getByRole('button', { name: '停止', exact: true }).click();
-  const stopped = await request.get(`/api/agent-sessions/${session.id}/continue`, { headers });
-  const stop = await stopped.json() as { execution: { control: { id: string; action: string } } };
-  expect(stop.execution.control.action).toBe('stop');
-  await request.post('/api/task-center/execution-action', { headers, data: { action: 'report', executionId: execution.id, controlAck: stop.execution.control.id, report: { ...report, request: null, status: 'interrupted' } } });
-  await expect(page.getByRole('button', { name: '重新编辑本轮消息' })).toBeVisible();
+  const stopConnection = new AbortController();
+  let ready!: (send: SendExecutionFeedback) => void, failed!: (error: unknown) => void;
+  const available = new Promise<SendExecutionFeedback>((resolve, reject) => { ready = resolve; failed = reject; });
+  const connected = connectDeviceUpdates({ url: new URL('/api/realtime', status.url()), token: connectorToken, deviceId, signal: stopConnection.signal,
+    wake() {}, onFeedback(send) { if (send) ready(send); } });
+  void connected.catch(failed);
+  try {
+    const send = await available;
+    const report = { threadId: nativeId, status: 'waiting', request: { method: 'item/commandExecution/requestApproval', params: { command: 'echo fixture' } }, output: '受控远端输出' };
+    await send({ executionId: execution.id, report });
+    await expect(page.getByText('受控远端输出', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '处理请求' }).click();
+    await page.getByRole('button', { name: '发送回复', exact: true }).click();
+    await expect(page.getByText(/等待目标设备处理操作/)).toBeVisible();
+    const pending = await request.get(`/api/agent-sessions/${session.id}/continue`, { headers });
+    const current = await pending.json() as { execution: { control: { id: string; action: string; decision: string } } };
+    expect(current.execution.control).toMatchObject({ action: 'respond', decision: 'decline' });
+    await send({ executionId: execution.id, controlAck: current.execution.control.id, report: { ...report, request: null, status: 'running' } });
+    await expect(page.getByText(/等待目标设备处理操作/)).toHaveCount(0);
+    await page.getByRole('button', { name: '停止', exact: true }).click();
+    const stopped = await request.get(`/api/agent-sessions/${session.id}/continue`, { headers });
+    const stop = await stopped.json() as { execution: { control: { id: string; action: string } } };
+    expect(stop.execution.control.action).toBe('stop');
+    await send({ executionId: execution.id, controlAck: stop.execution.control.id, report: { ...report, request: null, status: 'interrupted' } });
+    await expect(page.getByRole('button', { name: '重新编辑本轮消息' })).toBeVisible();
+  } finally { stopConnection.abort(); await connected; }
 });
 
 test('workbench reading layout handles long sync messages, filtering and narrow screens', async ({ page }) => {

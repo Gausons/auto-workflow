@@ -1,3 +1,4 @@
+import { realtimeEvent, realtimeProtocol, realtimeUrl } from '../../../shared/realtime.js';
 import type { TaskCenterUpdate } from '../../../shared/taskCenterSync.js';
 
 const SESSION_TOKEN_KEY = 'bugflow.sessionToken';
@@ -34,39 +35,44 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}, author
 export async function subscribeTaskCenterUpdates(since: number, onVersion: (version: number, update: TaskCenterUpdate) => void, signal: AbortSignal): Promise<void> {
   const token = sessionStorage.getItem(SESSION_TOKEN_KEY);
   if (!token) throw new ApiError('请登录个人账号', 401);
-  const response = await fetch(`/api/task-center/updates?since=${encodeURIComponent(String(since))}`, {
-    headers: { Accept: 'text/event-stream', Authorization: `Bearer ${token}` }, signal
-  });
-  if (!response.ok || !response.body || !response.headers.get('content-type')?.includes('text/event-stream')) {
-    if (response.status === 401) sessionStorage.removeItem(SESSION_TOKEN_KEY);
-    throw new ApiError(`实时同步连接失败：${response.status}`, response.status);
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let pending = '';
-  try {
-    while (!signal.aborted) {
-      const { done, value } = await reader.read();
-      pending = (pending + decoder.decode(value, { stream: !done })).replaceAll('\r\n', '\n');
-      if (pending.length > 1_000_000) throw new Error('实时同步事件超过大小限制');
-      let boundary = pending.indexOf('\n\n');
-      while (boundary >= 0) {
-        const event = pending.slice(0, boundary);
-        pending = pending.slice(boundary + 2);
-        const lines = event.split('\n');
-        const type = lines.find(line => line.startsWith('event:'))?.slice(6).trim();
-        if (type === 'task-center') {
-          const id = lines.find(line => line.startsWith('id:'))?.slice(3).trim();
-          const version = Number(id);
-          const update: unknown = JSON.parse(lines.filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n'));
-          if (!id || !/^\d+$/.test(id) || !Number.isSafeInteger(version) || !update || typeof update !== 'object' || !('version' in update) || update.version !== version) throw new Error('实时同步版本无效');
-          onVersion(version, update as TaskCenterUpdate);
+  if (signal.aborted) return;
+  const socket = new WebSocket(realtimeUrl(new URL('/api/realtime', location.href)), realtimeProtocol);
+  await new Promise<void>((resolve, reject) => {
+    let timer = setTimeout(() => finish(new Error('实时连接认证超时')), 15_000), ended = false;
+    const finish = (error?: Error) => {
+      if (ended) return;
+      ended = true; clearTimeout(timer); signal.removeEventListener('abort', abort);
+      socket.removeEventListener('open', open); socket.removeEventListener('message', message);
+      socket.removeEventListener('error', failed); socket.removeEventListener('close', close);
+      socket.close();
+      if (error) { if (error instanceof ApiError && error.status === 401) sessionStorage.removeItem(SESSION_TOKEN_KEY); reject(error); }
+      else resolve();
+    };
+    const abort = () => finish();
+    const open = () => socket.send(JSON.stringify({ type: 'subscribe', channel: 'task-center', token, since }));
+    const message = (event: MessageEvent<unknown>) => {
+      try {
+        clearTimeout(timer); timer = setTimeout(() => finish(new Error('实时连接心跳超时')), 45_000);
+        if (typeof event.data !== 'string' || event.data.length > 1_000_000) throw new Error('实时同步消息无效');
+        const input: unknown = JSON.parse(event.data);
+        if (!input || typeof input !== 'object' || !('type' in input)) throw new Error('实时同步消息无效');
+        if (input.type === 'heartbeat') { socket.send(JSON.stringify({ type: 'pong' })); return; }
+        if (input.type === 'ready' && 'channel' in input && input.channel === 'task-center') return;
+        if (input.type === 'error' && 'status' in input && typeof input.status === 'number') {
+          throw new ApiError('message' in input && typeof input.message === 'string' ? input.message : '实时连接失败', input.status);
         }
-        boundary = pending.indexOf('\n\n');
-      }
-      if (done) return;
-    }
-  } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+        const update = realtimeEvent(input);
+        if (update.type !== 'task-center') throw new Error('实时同步订阅不匹配');
+        onVersion(update.version, update);
+      } catch (error) { finish(error instanceof Error ? error : new Error('实时同步消息无效')); }
+    };
+    const failed = () => finish(new Error('WebSocket 实时连接失败'));
+    const close = (event: CloseEvent) => finish([4401, 4403].includes(event.code) ? new ApiError('实时连接权限已失效', event.code === 4401 ? 401 : 403) : undefined);
+    socket.addEventListener('open', open); socket.addEventListener('message', message);
+    socket.addEventListener('error', failed); socket.addEventListener('close', close);
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) abort();
+  });
 }
 
 export function saveSessionToken(token: string) {

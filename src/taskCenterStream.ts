@@ -12,6 +12,18 @@ export function taskCenterSince(params: URLSearchParams): number {
 export function createTaskCenterStream(database: ReturnType<typeof openDatabase>, tenantId: string) {
   const connections = new Set<ServerResponse>();
   return {
+    subscribe(since: number, send: (update: import('../shared/taskCenterSync.js').TaskCenterUpdate) => void) {
+      let delivered = since;
+      const publish = (version: number, changes?: TaskCenterChangeIds) => {
+        if (version === delivered) return;
+        const reset = version !== delivered + 1 || !changes;
+        delivered = version; send({ version, changes, ...(reset && { reset: true }) });
+      };
+      const unsubscribe = database.subscribeTaskCenter(tenantId, publish);
+      try { publish(database.readTaskCenter(tenantId).syncVersion || 0); }
+      catch (error) { unsubscribe(); throw error; }
+      return { check: () => publish(database.readTaskCenter(tenantId).syncVersion || 0), close: unsubscribe };
+    },
     close() { for (const response of connections) response.end(); },
     async serve(req: IncomingMessage, res: ServerResponse, params: URLSearchParams) {
       let delivered = taskCenterSince(params);

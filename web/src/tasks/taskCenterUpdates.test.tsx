@@ -15,16 +15,27 @@ function setup(read: (since: number, signal: AbortSignal) => Promise<Response>, 
   sessionStorage.setItem('bugflow.sessionToken', 'test');
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryData(key, base);
-  const streams: Array<{ controller: ReadableStreamDefaultController<Uint8Array>; signal: AbortSignal }> = [];
+  const sockets: Socket[] = [];
+  class Socket extends EventTarget {
+    static OPEN = 1;
+    readyState = 0;
+    sent: string[] = [];
+    constructor() {
+      super(); sockets.push(this);
+      queueMicrotask(() => {
+        if (this.readyState === 3) return;
+        this.readyState = 1; this.dispatchEvent(new Event('open'));
+        this.receive({ type: 'ready', channel: 'task-center' });
+      });
+    }
+    send(value: string) { this.sent.push(value); }
+    close() { this.readyState = 3; }
+    disconnect() { this.close(); this.dispatchEvent(new CloseEvent('close', { code: 1006 })); }
+    receive(value: unknown) { this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(value) })); }
+  }
+  vi.stubGlobal('WebSocket', Socket);
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     const signal = init!.signal as AbortSignal;
-    if (url.startsWith('/api/task-center/updates?')) {
-      const body = new ReadableStream<Uint8Array>({ start(controller) {
-        streams.push({ controller, signal });
-        signal.addEventListener('abort', () => { try { controller.close(); } catch {} }, { once: true });
-      } });
-      return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
-    }
     if (url.startsWith('/api/task-center/changes?')) return read(Number(new URL(url, 'http://localhost').searchParams.get('since')), signal);
     throw new Error(`Unexpected request ${url}`);
   });
@@ -36,22 +47,22 @@ function setup(read: (since: number, signal: AbortSignal) => Promise<Response>, 
   }
   const view = render(<QueryClientProvider client={client}><Probe /></QueryClientProvider>);
   const notify = async (version: number, reset = false) => {
-    await act(async () => { streams.at(-1)!.controller.enqueue(new TextEncoder().encode(`id: ${version}\nevent: task-center\ndata: ${JSON.stringify({ version, reset })}\n\n`)); });
+    await act(async () => { await Promise.resolve(); sockets.at(-1)!.receive({ type: 'task-center', version, reset }); });
   };
-  return { client, fetchMock, streams, notify, ...view };
+  return { client, fetchMock, sockets, notify, ...view };
 }
 
 afterEach(() => { cleanup(); sessionStorage.clear(); vi.unstubAllGlobals(); });
 
-it('merges entity changes, coalesces notifications and keeps one stream as the cache version advances', async () => {
+it('merges entity changes, coalesces notifications and keeps one WebSocket as the cache version advances', async () => {
   const pending = deferred<Response>(), read = vi.fn(() => pending.promise);
-  const { client, fetchMock, streams, notify } = setup(read, data(0, [task('keep', '保留任务')]));
+  const { client, fetchMock, sockets, notify } = setup(read, data(0, [task('keep', '保留任务')]));
   await notify(1); await notify(2); await notify(2);
   await act(async () => pending.resolve(response(taskCenterDelta(data(2, [task('new', '新增任务')]), 0, { tasks: ['new'] }, false))));
   await screen.findByText('保留任务、新增任务');
   expect(client.getQueryData<TaskCenterData>(key)?.syncVersion).toBe(2);
   expect(read).toHaveBeenCalledTimes(1);
-  expect(streams).toHaveLength(1);
+  expect(sockets).toHaveLength(1);
   await notify(2);
   expect(read).toHaveBeenCalledTimes(1);
   expect(fetchMock.mock.calls.some(([url]) => url === '/api/task-center')).toBe(false);
@@ -59,13 +70,13 @@ it('merges entity changes, coalesces notifications and keeps one stream as the c
 
 it('does not lose a notification that arrives while the previous cache merge is finishing', async () => {
   const read = vi.fn().mockImplementation((since: number) => Promise.resolve(response(taskCenterDelta(data(since + 1, [task('same', since === 0 ? '第一版' : '第二版')]), since, { tasks: ['same'] }, false))));
-  const { client, notify, streams } = setup(read);
+  const { client, notify, sockets } = setup(read);
   let notified = false;
   const unsubscribe = client.getQueryCache().subscribe(event => {
     const current = event.query.state.data as TaskCenterData | undefined;
     if (current?.syncVersion === 1 && !notified) {
       notified = true;
-      streams[0].controller.enqueue(new TextEncoder().encode('id: 2\nevent: task-center\ndata: {"version":2}\n\n'));
+      sockets[0].receive({ type: 'task-center', version: 2 });
     }
   });
   await notify(1);
@@ -98,20 +109,20 @@ it('discards a delta whose base was replaced by a concurrent refresh and reads f
 
 it('reconnects using the last applied version and handles expired history through an explicit reset', async () => {
   const read = vi.fn().mockResolvedValue(response(taskCenterDelta(data(5, [task('only', '权威快照')]), 0, {}, true)));
-  const { notify, streams, fetchMock } = setup(read, data(0, [task('old', '旧任务')]));
+  const { notify, sockets } = setup(read, data(0, [task('old', '旧任务')]));
   await notify(5, true);
   await screen.findByText('权威快照');
   expect(screen.queryByText('旧任务')).toBeNull();
-  await act(async () => streams[0].controller.close());
-  await waitFor(() => expect(streams).toHaveLength(2), { timeout: 3000 });
-  expect(fetchMock.mock.calls.filter(([url]) => url.startsWith('/api/task-center/updates')).map(([url]) => url)).toEqual(['/api/task-center/updates?since=0', '/api/task-center/updates?since=5']);
+  await act(async () => sockets[0].disconnect());
+  await waitFor(() => expect(sockets).toHaveLength(2), { timeout: 3000 });
+  expect(sockets.map(socket => JSON.parse(socket.sent[0]).since)).toEqual([0, 5]);
 });
 
 it('stops on authentication failure and aborts pending work on unmount', async () => {
   const read = vi.fn().mockResolvedValue(new Response('{}', { status: 401 }));
   const first = setup(read);
   await first.notify(1);
-  await waitFor(() => expect(first.streams[0].signal.aborted).toBe(true));
+  await waitFor(() => expect(first.sockets[0].readyState).toBe(3));
   expect(read).toHaveBeenCalledTimes(1);
   first.unmount();
   const pending = deferred<Response>();
@@ -120,7 +131,7 @@ it('stops on authentication failure and aborts pending work on unmount', async (
   second.unmount();
   await act(async () => pending.resolve(response(taskCenterDelta(data(1, [task('late', '晚到任务')]), 0, { tasks: ['late'] }, false))));
   expect(second.client.getQueryData<TaskCenterData>(key)?.syncVersion).toBe(0);
-  expect(second.streams[0].signal.aborted).toBe(true);
+  expect(second.sockets[0].readyState).toBe(3);
 });
 
 it('heartbeats leave unrelated history details fresh while a changed session invalidates its own detail', async () => {

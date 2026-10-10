@@ -1,5 +1,5 @@
 import { PageHeading } from '../components/PageHeading.js';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
 import { runDirectoryName } from './agentRunConfig.js';
@@ -7,6 +7,8 @@ import type { AgentProject, TaskCenterData } from '../../../shared/taskTypes.js'
 import { ModelEffortMenu } from './ModelEffortMenu.js';
 import { DismissibleDetails } from '../components/DismissibleDetails.js';
 import { requestGitBranches } from './gitBranches.js';
+import { useTaskCenterUpdates } from './taskCenterUpdates.js';
+import { waitForRemoteRequest } from './remoteRequest.js';
 
 interface Targets { projects: AgentProject[]; localError?: string }
 interface DirectoryResult { status: 'pending' | 'selecting' | 'completed' | 'cancelled' | 'failed'; requestId: string; cwd?: string; message?: string }
@@ -25,19 +27,15 @@ async function encodeFile(file: File) {
   });
 }
 
-async function pickDirectory(project: AgentProject) {
+async function pickDirectory(client: QueryClient, project: AgentProject, signal: AbortSignal) {
   const response = await apiRequest<DirectoryResult>('/api/task-center/directory-picker', {
-    method: 'POST', body: JSON.stringify({ deviceId: project.deviceId, projectId: project.id })
+    method: 'POST', body: JSON.stringify({ deviceId: project.deviceId, projectId: project.id }), signal
   });
-  if (response.status === 'completed') return response.cwd || '';
-  for (let attempt = 0; attempt < 300; attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    const result = await apiRequest<DirectoryResult>(`/api/task-center/directory-picker?requestId=${encodeURIComponent(response.requestId)}`);
-    if (result.status === 'completed') return result.cwd || '';
-    if (result.status === 'cancelled') throw new Error('已取消选择目录');
-    if (result.status === 'failed') throw new Error(result.message || '无法选择目录');
-  }
-  throw new Error('等待目录选择超时');
+  const result = await waitForRemoteRequest(client, 'directoryRequests', response.requestId, response,
+    () => apiRequest<DirectoryResult>(`/api/task-center/directory-picker?requestId=${encodeURIComponent(response.requestId)}`, { signal }), 300_000, signal);
+  if (result.status === 'completed') return result.cwd || '';
+  if (result.status === 'cancelled') throw new Error('已取消选择目录');
+  throw new Error(result.message || '无法选择目录');
 }
 
 export function NewTaskPage() {
@@ -60,6 +58,8 @@ export function NewTaskPage() {
   const fileInput = useRef<HTMLInputElement>(null);
   const messageInput = useRef<HTMLTextAreaElement>(null);
   const queryClient = useQueryClient();
+  const actions = useRef(new AbortController());
+  useEffect(() => { actions.current = new AbortController(); return () => actions.current.abort(); }, [active]);
   useEffect(() => {
     const update = () => setActive(route());
     const fromSession = (event: Event) => {
@@ -72,6 +72,7 @@ export function NewTaskPage() {
   }, []);
   const targets = useQuery({ queryKey: ['task-center', 'targets'], queryFn: ({ signal }) => apiRequest<Targets>('/api/task-center/codex', { signal }), enabled: active && hasSessionToken(), retry: false });
   const snapshot = useQuery({ queryKey: ['task-center', 'snapshot'], queryFn: ({ signal }) => apiRequest<TaskCenterData>('/api/task-center', { signal }), enabled: active && hasSessionToken() });
+  useTaskCenterUpdates(active, snapshot.data?.syncVersion);
   const identity = useQuery({ queryKey: ['task-center', 'identity'], queryFn: ({ signal }) => apiRequest<{ permissions: string[] }>('/api/bootstrap', { signal }), enabled: active && hasSessionToken() });
   const appliedDevice = useRef(false);
   useEffect(() => {
@@ -89,7 +90,7 @@ export function NewTaskPage() {
   const branchKey = ['task-center', 'git', project?.deviceId || '', project?.id || '', project?.cwd || '', branchCwd] as const;
   const branchQuery = useQuery({
     queryKey: branchKey,
-    queryFn: ({ signal }) => requestGitBranches(project!, branchCwd, 'list', undefined, signal),
+    queryFn: ({ signal }) => requestGitBranches(queryClient, project!, branchCwd, 'list', undefined, signal),
     enabled: active && canEdit && Boolean(project) && !branchDirectoryPending, retry: false
   });
   const branch = branchDirectoryPending ? undefined : branchQuery.data;
@@ -137,7 +138,7 @@ export function NewTaskPage() {
     setBranchMutating(true); setBranchActionError('');
     try {
       await queryClient.cancelQueries({ queryKey: branchKey });
-      const result = await requestGitBranches(project, cwd, action, name);
+      const result = await requestGitBranches(queryClient, project, cwd, action, name, actions.current.signal);
       queryClient.setQueryData(branchKey, result);
       if (action === 'create') setNewBranch('');
     } catch (failure) { setBranchActionError(errorMessage(failure)); }
@@ -146,7 +147,7 @@ export function NewTaskPage() {
   async function chooseDirectory() {
     if (!project || picking) return;
     setPicking(true); setError('');
-    try { setCwd(await pickDirectory(project)); }
+    try { setCwd(await pickDirectory(queryClient, project, actions.current.signal)); }
     catch (failure) { setError(errorMessage(failure)); }
     finally { setPicking(false); }
   }

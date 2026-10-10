@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { WebSocketServer, type WebSocket as ServerSocket } from 'ws';
+import { realtimeProtocol, type SendExecutionFeedback } from '../shared/realtime.js';
 import { setTimeout as delay } from 'node:timers/promises';
-import { readDeviceUpdates, runDeviceControl, watchDeviceUpdates } from '../src/deviceControlClient.js';
+import { connectDeviceUpdates, runDeviceControl, watchDeviceUpdates } from '../src/deviceControlClient.js';
 
 function deferred() {
   let resolve!: () => void;
@@ -9,21 +12,46 @@ function deferred() {
   return { promise, resolve };
 }
 
-test('device notifications tolerate split CRLF frames and release the reader on malformed data', async () => {
-  let wakes = 0;
-  const encoder = new TextEncoder();
-  const body = new ReadableStream<Uint8Array>({ start(controller) {
-    for (const part of [': keep-alive\r', '\n\r\n', 'event: device-control\r\n', 'data: {"version":12}\r', '\n\r', '\n']) controller.enqueue(encoder.encode(part));
-    controller.close();
-  } });
-  await readDeviceUpdates(new Response(body, { headers: { 'content-type': 'text/event-stream' } }), () => { wakes++; });
-  assert.equal(wakes, 1); assert.equal(body.locked, false);
-  for (const data of ['{"version":-1}', 'null', '{"version":"1"}', 'bad-json', 'x'.repeat(65_537)]) {
-    let cancelled = false;
-    const invalid = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(encoder.encode(`event: device-control\ndata: ${data}\n\n`)); }, cancel() { cancelled = true; } });
-    await assert.rejects(readDeviceUpdates(new Response(invalid, { headers: { 'content-type': 'text/event-stream' } }), () => { assert.fail('invalid event'); }));
-    assert.equal(cancelled, true); assert.equal(invalid.locked, false);
-  }
+async function socketServer(t: import('node:test').TestContext, connected: (socket: ServerSocket) => void) {
+  const server = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  await once(server, 'listening');
+  server.on('connection', (socket, req) => { assert.equal(req.headers['sec-websocket-protocol'], realtimeProtocol); connected(socket); });
+  t.after(async () => { for (const socket of server.clients) socket.terminate(); await new Promise<void>(resolve => server.close(() => resolve())); });
+  const address = server.address(); assert.ok(address && typeof address === 'object');
+  return new URL(`ws://127.0.0.1:${address.port}/api/realtime`);
+}
+
+test('device WebSocket authenticates in its first frame, handles heartbeat and reports with acknowledgments', { timeout: 5000 }, async t => {
+  const stop = new AbortController();
+  let feedback: SendExecutionFeedback | undefined, pongs = 0, reports = 0;
+  const url = await socketServer(t, socket => socket.on('message', raw => {
+    const message = JSON.parse(raw.toString()) as { type: string; token?: string; channel?: string; deviceId?: string; id?: string; input?: { report?: unknown } };
+    if (message.type === 'subscribe') {
+      assert.equal(message.token, 'fixture-token'); assert.equal(message.channel, 'device-control'); assert.equal(message.deviceId, 'remote');
+      socket.send(JSON.stringify({ type: 'ready', channel: 'device-control' }));
+      socket.send(JSON.stringify({ type: 'heartbeat' }));
+    } else if (message.type === 'pong') pongs++;
+    else if (message.type === 'execution-report') {
+      if (++reports === 1) assert.deepEqual(message.input?.report, { status: 'running', output: '中文😀' });
+      else assert.equal((message.input?.report as { output: string }).output.length, 400_000);
+      socket.send(JSON.stringify({ type: 'report-ack', id: message.id, status: 200 }));
+    }
+  }));
+  const ready = deferred();
+  const running = connectDeviceUpdates({ url, token: 'fixture-token', deviceId: 'remote', signal: stop.signal, wake() {},
+    onFeedback(send) { feedback = send; if (send) ready.resolve(); } });
+  await ready.promise; assert.ok(feedback);
+  await feedback({ executionId: 'execution', report: { status: 'running', output: '中文😀' } });
+  await feedback({ executionId: 'execution', report: { status: 'running', output: '中文'.repeat(200_000) } });
+  await assert.rejects(feedback({ executionId: 'execution', report: { status: 'running', output: 'x'.repeat(8_000_000) } }), /超过 8 MB/);
+  assert.equal(reports, 2);
+  assert.equal(pongs, 1); stop.abort(); await running; assert.equal(feedback, undefined);
+});
+
+test('malformed device notifications reject without waking the worker', { timeout: 5000 }, async t => {
+  const url = await socketServer(t, socket => socket.once('message', () => socket.send(JSON.stringify({ type: 'device-control', version: -1 }))));
+  await assert.rejects(connectDeviceUpdates({ url, token: 'test', deviceId: 'remote', signal: new AbortController().signal,
+    wake() { assert.fail('invalid version'); } }), /实时同步版本无效/);
 });
 
 test('control notifications bypass slow work and coalesce without losing a wake received during work', { timeout: 5000 }, async () => {
@@ -58,39 +86,41 @@ test('periodic reconciliation survives missing notifications and transient contr
   assert.equal(errors, 1); assert.ok(controls >= 2);
 });
 
-test('revoked notification credentials stop reconnects', async t => {
-  let requests = 0;
-  t.mock.method(globalThis, 'fetch', async () => { requests++; return new Response('{}', { status: 401 }); });
-  await assert.rejects(watchDeviceUpdates({ url: new URL('https://workbench.example/device-updates'), token: 'test',
+test('revoked WebSocket credentials stop reconnects', { timeout: 5000 }, async t => {
+  let connections = 0;
+  const url = await socketServer(t, socket => { connections++; socket.once('message', () => socket.send(JSON.stringify({ type: 'error', status: 401, message: 'expired' }))); });
+  await assert.rejects(watchDeviceUpdates({ url, token: 'test', deviceId: 'remote',
     signal: new AbortController().signal, wake() { assert.fail('unauthorized'); }, onError() { assert.fail('must stop'); } }), { status: 401 });
-  assert.equal(requests, 1);
+  assert.equal(connections, 1);
 });
 
-test('notification reconnects reconcile even when the version has not advanced', { timeout: 5000 }, async t => {
-  const stop = new AbortController();
-  let requests = 0, wakes = 0, errors = 0;
-  t.mock.method(globalThis, 'fetch', async () => {
-    requests++;
-    return new Response('event: device-control\ndata: {"version":3}\n\n', { headers: { 'content-type': 'text/event-stream' } });
+test('reconnects reconcile the same version and do not replay a lost report acknowledgment internally', { timeout: 5000 }, async t => {
+  const stop = new AbortController(), reportSent = deferred();
+  let connections = 0, errors = 0, reports = 0;
+  let result: Promise<void> | undefined;
+  const url = await socketServer(t, socket => {
+    connections++;
+    socket.on('message', raw => {
+      const message = JSON.parse(raw.toString()) as { type: string };
+      if (message.type === 'subscribe') socket.send(JSON.stringify({ type: 'ready', channel: 'device-control' }));
+      if (message.type === 'execution-report') { reports++; socket.terminate(); reportSent.resolve(); }
+    });
   });
-  await watchDeviceUpdates({ url: new URL('https://workbench.example/device-updates'), token: 'test', signal: stop.signal,
-    wake() { if (++wakes === 2) stop.abort(); }, onError() { errors++; } });
-  assert.equal(requests, 2); assert.equal(wakes, 2); assert.equal(errors, 1);
+  const running = watchDeviceUpdates({ url, token: 'test', deviceId: 'remote', signal: stop.signal, wake() {},
+    onFeedback(send) {
+      if (!send) return;
+      if (connections === 1) { result = send({ executionId: 'execution', report: { status: 'running' } }); void result.catch(() => {}); }
+      else stop.abort();
+    }, onError() { errors++; } });
+  try {
+    await reportSent.promise; assert.ok(result); await assert.rejects(result, /断开|连接失败/);
+    await running; assert.equal(connections, 2); assert.equal(reports, 1); assert.equal(errors, 1);
+  } finally { stop.abort(); await running; }
 });
 
-test('aborting the connector cancels a live notification stream', { timeout: 5000 }, async t => {
-  const stop = new AbortController(), connected = deferred();
-  let connectionSignal: AbortSignal | undefined;
-  t.mock.method(globalThis, 'fetch', async (_url: URL, options: RequestInit) => {
-    connectionSignal = options.signal!;
-    const body = new ReadableStream<Uint8Array>({ start(controller) {
-      options.signal!.addEventListener('abort', () => controller.error(new Error('aborted')), { once: true });
-      connected.resolve();
-    } });
-    return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
-  });
-  const running = watchDeviceUpdates({ url: new URL('https://workbench.example/device-updates'), token: 'test', signal: stop.signal,
-    wake() {}, onError(error) { throw error; } });
-  await connected.promise; stop.abort(); await running;
-  assert.equal(connectionSignal?.aborted, true);
+test('aborting the connector closes its live WebSocket', { timeout: 5000 }, async t => {
+  const stop = new AbortController(), ready = deferred(), closed = deferred();
+  const url = await socketServer(t, socket => { socket.once('close', closed.resolve); socket.once('message', () => socket.send(JSON.stringify({ type: 'ready', channel: 'device-control' }))); });
+  const running = connectDeviceUpdates({ url, token: 'test', deviceId: 'remote', signal: stop.signal, wake() { ready.resolve(); } });
+  await ready.promise; stop.abort(); await running; await closed.promise;
 });

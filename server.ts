@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDatabase } from './src/database.js';
 import { createTenantRuntime } from './src/tenantRuntime.js';
+import { createRealtime } from './src/realtime.js';
 import { createAuthHandler } from './src/authHttp.js';
 import { createStaticHandler } from './src/http/staticAssets.js';
 import { sendJson } from './src/http/response.js';
@@ -98,10 +99,12 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
     }
   });
 
+  const realtime = createRealtime(server, database, runtimeFor);
   return {
     server,
     async close() {
       closing = true;
+      await realtime.close();
       for (const runtime of runtimes.values()) runtime.closeStreams();
       const stopped = new Promise((resolve) => server.close(resolve));
       server.closeIdleConnections();

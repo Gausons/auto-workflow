@@ -1,7 +1,9 @@
 import { apiRequest, ApiError } from '../api/client.js';
+import type { QueryClient } from '@tanstack/react-query';
+import { waitForRemoteRequest } from './remoteRequest.js';
 import type { AgentProject, GitBranchState, GitRequest } from '../../../shared/taskTypes.js';
 
-export async function requestGitBranches(project: AgentProject, cwd: string, action: 'list' | 'switch' | 'create' = 'list', branch?: string, signal?: AbortSignal): Promise<GitBranchState> {
+export async function requestGitBranches(client: QueryClient, project: AgentProject, cwd: string, action: 'list' | 'switch' | 'create' = 'list', branch?: string, signal?: AbortSignal): Promise<GitBranchState> {
   const body = { action, branch, projectId: project.id, deviceId: project.deviceId, cwd };
   if (project.deviceId === 'local') return apiRequest<GitBranchState>('/api/task-center/git', { method: 'POST', body: JSON.stringify(body), signal });
   if (!project.gitBranches) throw new Error('请升级并重启目标设备连接器以启用分支管理');
@@ -16,16 +18,8 @@ export async function requestGitBranches(project: AgentProject, cwd: string, act
     if (error instanceof ApiError && error.status >= 400 && error.status < 500) sessionStorage.removeItem(key);
     throw error;
   }
-  const deadline = Date.now() + 135_000;
-  while (result.status === 'pending' || result.status === 'running') {
-    if (Date.now() > deadline) throw new Error('等待远端分支结果超时，请检查连接器；重试将查询同一请求');
-    await new Promise<void>((resolve, reject) => {
-      const abort = () => { clearTimeout(timer); reject(new DOMException('已取消读取分支', 'AbortError')); };
-      const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve(); }, 1000);
-      if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, { once: true });
-    });
-    result = await apiRequest<GitRequest>(`/api/task-center/git?requestId=${encodeURIComponent(requestId)}`, { signal });
-  }
+  result = await waitForRemoteRequest(client, 'gitRequests', requestId, result,
+    () => apiRequest<GitRequest>(`/api/task-center/git?requestId=${encodeURIComponent(requestId)}`, { signal }), 135_000, signal);
   sessionStorage.removeItem(key);
   if (result.status !== 'completed' || !result.result) throw new Error(result.message || '远端分支操作失败');
   return result.result;

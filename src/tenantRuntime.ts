@@ -6,7 +6,8 @@ import path from 'node:path';
 import { taskContent } from '../shared/taskContent.js';
 import { DEFAULT_AI_ASSIGNMENT_MODEL } from '../shared/assignmentModels.js';
 import { createHash } from 'node:crypto';
-import { publicIdentity } from './rbac.js';
+import { httpError, publicIdentity } from './rbac.js';
+import type { ExecutionFeedback, RealtimeEvent, RealtimeSubscription } from '../shared/realtime.js';
 import { createSessionDelivery } from './sessionDelivery/index.ts';
 import { createAgentHistory } from './agentHistory/index.js';
 import { createTaskCenter } from './taskCenter.js';
@@ -674,6 +675,26 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
   conversationTimer.unref();
   return {
     workspace: () => state.config.codexWorkspaceDir,
+    subscribeRealtime(input: RealtimeSubscription, userId: string, send: (event: RealtimeEvent) => void, onError: (error: unknown) => void) {
+      if (input.channel === 'task-center') return taskCenterStream.subscribe(input.since, update => send({ type: 'task-center', ...update }));
+      return deviceControl.subscribe(new URLSearchParams({ deviceId: input.deviceId }), userId, version => send({ type: 'device-control', version }), onError);
+    },
+    async reportRealtime(deviceId: string, input: ExecutionFeedback, principal: Principal) {
+      let locked = false, status = 200;
+      try {
+        const job = database.readTaskCenter(tenant.id).executions?.find(item => item.id === input.executionId);
+        if (!job || job.deviceId !== deviceId) throw httpError(403, '执行不属于此设备');
+        if (mutationPending) throw httpError(409, '当前账号正在处理其他请求，请稍后重试');
+        mutationPending = true; locked = true;
+        await codexExecution.action({ ...input, action: 'report', report: input.report as Parameters<typeof codexExecution.action>[0]['report'] }, principal.user);
+      } catch (error) {
+        status = error instanceof Error && 'statusCode' in error && typeof error.statusCode === 'number' ? error.statusCode : 500;
+        throw error;
+      } finally {
+        if (locked) mutationPending = false;
+        database.audit(tenant.id, principal.user, 'api.request', '/api/task-center/execution-action', { method: 'WEBSOCKET', status });
+      }
+    },
     closeStreams: () => { taskCenterStream.close(); deviceControl.close(); },
     async handleApi(req: IncomingMessage, res: ServerResponse, url: URL, principal: Principal) {
       const mutation = req.method !== 'GET';

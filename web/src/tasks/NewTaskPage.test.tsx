@@ -11,9 +11,12 @@ const targets = { projects: [{ id: 'project-1', deviceId: 'local', deviceName: '
 function setup(permissions = ['work.execute'], failExecute = false, remote = false) {
   location.hash = '#new-task';
   sessionStorage.setItem('bugflow.sessionToken', 'test-token');
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  const completeGit = (id: string) => client.setQueryData(['task-center', 'snapshot'], { ...snapshot, gitRequests: [{ id, status: 'completed' }] });
   const fetchMock = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     const status = path === '/api/task-center/execute' && failExecute ? 500 : 200;
+    if (path === '/api/task-center/git' && remote && body.action !== 'create') queueMicrotask(() => completeGit(body.requestId));
     const payload = path === '/api/bootstrap' ? { permissions }
       : path === '/api/task-center/codex' ? remote ? { projects: [{ ...targets.projects[0], deviceId: 'remote', deviceName: '开发机', gitBranches: true }] } : targets
         : path.startsWith('/api/task-center/git?') ? { status: 'completed', result: { repository: true, current: 'remote/main', changes: 0, branches: ['remote/main'] } }
@@ -25,9 +28,8 @@ function setup(permissions = ['work.execute'], failExecute = false, remote = fal
     return Promise.resolve(new Response(JSON.stringify(payload), { status }));
   });
   vi.stubGlobal('fetch', fetchMock);
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   render(<QueryClientProvider client={client}><NewTaskPage /></QueryClientProvider>);
-  return fetchMock;
+  return Object.assign(fetchMock, { completeGit });
 }
 
 describe('NewTaskPage', () => {
@@ -64,6 +66,7 @@ describe('NewTaskPage', () => {
     const create = fetchMock.mock.calls.find(([url, init]) => url === '/api/task-center/git' && JSON.parse(String(init?.body)).action === 'create');
     expect(JSON.parse(String(create?.[1]?.body))).toMatchObject({ deviceId: 'remote', projectId: 'project-1', branch: 'feature/remote' });
     expect(screen.getByLabelText('执行位置')).toHaveProperty('disabled', true);
+    fetchMock.completeGit(JSON.parse(String(create?.[1]?.body)).requestId);
     await waitFor(() => expect(screen.queryByText('正在处理分支…')).toBeNull(), { timeout: 4000 });
   });
 

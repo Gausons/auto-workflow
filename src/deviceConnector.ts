@@ -7,6 +7,7 @@ import { createAgentHistory } from './agentHistory/index.js';
 import { createSessionDelivery } from './sessionDelivery/index.js';
 import { RemoteCodexWorker } from './remoteCodexWorker.js';
 import { runDeviceControl, watchDeviceUpdates } from './deviceControlClient.js';
+import type { ExecutionFeedback, SendExecutionFeedback } from '../shared/realtime.js';
 import { bindDeviceConnection } from './deviceConnectionIdentity.js';
 import { normalizeRemoteHistory, REMOTE_HISTORY_LIMIT } from './remoteHistory.js';
 import type { AgentProject, RemoteHistory, TaskCenterData } from '../shared/taskTypes.js';
@@ -218,8 +219,15 @@ export async function runDeviceConnector({ environment = { ...process.env }, onc
     if (saved && typeof saved === 'object' && !Array.isArray(saved)) sessionIndex = Object.fromEntries(Object.entries(saved).filter(([key, value]) => key.length <= 500 && typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)).slice(0, 100_000));
   } catch (caught: unknown) { if (asError(caught).code !== 'ENOENT') console.warn('会话增量索引不可用，将执行一次完整同步'); }
   const deviceParams = new URLSearchParams({ deviceId });
-  const workerRequest: Request = (method, body, endpoint) => request(method, body, method === 'GET' && !endpoint ? `/api/task-center/device-state?${deviceParams}` : endpoint);
-  const worker = defaults.execute ? new RemoteCodexWorker({ request: workerRequest, signal: stopping.signal, deviceId, directory: path.join(stateDir, 'executions'), workspace: defaults.workspace, contextSource: { catalog: () => history.catalog(), delivery } }) : null;
+  let feedback: SendExecutionFeedback | undefined, wakeControls = () => {};
+  const workerRequest: Request = async (method, body, endpoint) => {
+    if (!shuttingDown && method === 'POST' && endpoint === '/api/task-center/execution-action' && record(body).action === 'report') {
+      if (!feedback) throw new Error('WebSocket 尚未连接，执行回报保留待重试');
+      return feedback(body as ExecutionFeedback);
+    }
+    return request(method, body, method === 'GET' && !endpoint ? `/api/task-center/device-state?${deviceParams}` : endpoint);
+  };
+  const worker = defaults.execute ? new RemoteCodexWorker({ request: workerRequest, signal: stopping.signal, onPending: () => wakeControls(), deviceId, directory: path.join(stateDir, 'executions'), workspace: defaults.workspace, contextSource: { catalog: () => history.catalog(), delivery } }) : null;
   const stop = () => stopping.abort();
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
@@ -254,9 +262,11 @@ export async function runDeviceConnector({ environment = { ...process.env }, onc
     if (worker) {
       try { await heartbeat(); } catch (error) { if (!stopping.signal.aborted) reportError(error); }
       loops.push(runDeviceControl({ signal: stopping.signal, work: () => worker.sync(), controls: () => worker.syncControls(), heartbeat,
+        onControlsWake: wake => { wakeControls = wake; },
         onError: reportError,
-        subscribe: (wake, signal) => watchDeviceUpdates({ url: new URL(`/api/task-center/device-updates?${deviceParams}`, base), token, signal, wake,
-          onError: () => console.warn('设备通知通道暂不可用，继续每 3 秒补查远端控制请求') }) }));
+        subscribe: (wake, signal) => watchDeviceUpdates({ url: new URL('/api/realtime', base), token, deviceId, signal, wake,
+          onFeedback: send => { feedback = send; },
+          onError: () => console.warn('设备 WebSocket 暂不可用，继续每 3 秒补查控制请求，执行回报保留待重连') }) }));
     }
     loops.push(historyLoop());
     await Promise.all(loops);

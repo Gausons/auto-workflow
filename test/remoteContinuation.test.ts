@@ -8,6 +8,7 @@ import { createCodexExecution } from '../src/codexExecution.js';
 import { createTaskCenter } from '../src/taskCenter.js';
 import { openDatabase } from '../scripts/testing/database.js';
 import { RemoteCodexWorker } from '../src/remoteCodexWorker.js';
+import { runDeviceControl } from '../src/deviceControlClient.js';
 import { remoteContinuationProject } from '../src/remoteSession.js';
 
 type Service = ReturnType<typeof createCodexExecution>;
@@ -150,6 +151,66 @@ test('stop and approval remain available while a native directory picker is wait
     assert.equal((await f.service.historyExecution(f.session.id)).execution?.status, 'interrupted');
     assert.equal(f.started.length, 1);
   } finally { release(f.root); await busy; }
+});
+
+test('feedback never overtakes a newer output that is still being journaled', { timeout: 10_000 }, async t => {
+  const f = await fixture(t);
+  await f.service.continueHistory(f.session.id, { requestId: randomUUID(), message: '继续' });
+  const worker = f.worker(); await worker.sync();
+  let releaseFirst!: () => void, releaseSecond!: () => void;
+  const first = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const second = new Promise<void>(resolve => { releaseSecond = resolve; });
+  const persist = worker.persist.bind(worker);
+  worker.persist = async job => {
+    if (job.output === '第一段') await first;
+    if (job.output === '第二段') await second;
+    await persist(job);
+  };
+  f.update({ ...f.started[0]!, threadId: f.nativeId, status: 'running', output: '第一段' });
+  const flushing = worker.flush();
+  f.update({ ...f.started[0]!, threadId: f.nativeId, status: 'running', output: '第二段' });
+  try {
+    releaseFirst(); await flushing;
+    assert.equal((await f.service.historyExecution(f.session.id)).execution?.output, '第一段');
+    const journal = JSON.parse(await readFile(path.join(f.root, 'journal', `${f.started[0]!.id}.json`), 'utf8')) as Report;
+    assert.equal(journal.output, '第一段');
+  } finally { releaseFirst(); releaseSecond(); await worker.flush(); }
+  assert.equal((await f.service.historyExecution(f.session.id)).execution?.output, '第二段');
+  assert.equal(f.started.length, 1);
+});
+
+test('persisted output wakes feedback immediately while bulk work waits for a directory picker', { timeout: 10_000 }, async t => {
+  const f = await fixture(t), stop = new AbortController();
+  await f.service.continueHistory(f.session.id, { requestId: randomUUID(), message: '继续' });
+  let wake = () => {}, enter!: () => void, release!: (cwd: string) => void, reported!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const selected = new Promise<string>(resolve => { release = resolve; });
+  const feedback = new Promise<void>(resolve => { reported = resolve; });
+  f.workerOptions.onPending = () => wake();
+  const worker = f.worker(); await worker.sync();
+  worker.directoryPicker = async () => { enter(); return selected; };
+  const original = worker.request;
+  worker.request = async (method, body, endpoint) => {
+    if (endpoint === '/api/task-center/directory-action') return f.service.directoryAction(body as Parameters<Service['directoryAction']>[0], f.owner);
+    const result = await original(method, body, endpoint);
+    if (method === 'POST' && body && typeof body === 'object' && 'report' in body && (body.report as Report).output === '即时反馈') {
+      const saved = JSON.parse(await readFile(path.join(f.root, 'journal', `${f.started[0]!.id}.json`), 'utf8')) as Report;
+      assert.equal(saved.output, '即时反馈', 'feedback follows durable journal persistence'); reported();
+    }
+    return result;
+  };
+  await f.service.pickDirectory({ deviceId: 'remote', projectId: 'p' }, f.owner);
+  const running = runDeviceControl({ signal: stop.signal, pollMs: 60_000, onControlsWake: notify => { wake = notify; },
+    work: () => worker.sync(), controls: () => worker.syncControls(), async heartbeat() {}, onError(error) { throw error; },
+    async subscribe(_wake, signal) { await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true })); }
+  });
+  try {
+    await entered;
+    f.update({ ...f.started[0]!, threadId: f.nativeId, status: 'running', output: '即时反馈' });
+    await feedback;
+    assert.equal((await f.service.historyExecution(f.session.id)).execution?.output, '即时反馈');
+    assert.equal(f.started.length, 1);
+  } finally { release(f.root); stop.abort(); await running; }
 });
 
 test('stop during preparation cancels before sending an Agent instruction and survives restart', { timeout: 10_000 }, async t => {

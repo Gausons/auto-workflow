@@ -10,6 +10,7 @@ import { historyRunConfig, runDirectoryName, runEffortLabel } from '../tasks/age
 import type { AgentProject, HistoryMessage, InteractionRequest, Session } from '../../../shared/taskTypes.js';
 import { ModelEffortMenu } from '../tasks/ModelEffortMenu.js';
 import { requestGitBranches } from '../tasks/gitBranches.js';
+import { waitForRemoteRequest } from '../tasks/remoteRequest.js';
 import overlayStyles from '../styles/Overlay.module.css';
 import styles from './HistoryComposer.module.css';
 
@@ -60,6 +61,7 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
   const [picking, setPicking] = useState(false);
   const pickerPending = useRef(false);
   const mounted = useRef(true);
+  const actions = useRef(new AbortController());
   const [responding, setResponding] = useState(false);
   const [decision, setDecision] = useState('decline');
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -69,11 +71,11 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
   const syncing = useRef(false);
   const queryClient = useQueryClient();
   const canSendNative = canContinueHistory(session);
-  useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useLayoutEffect(() => { mounted.current = true; actions.current = new AbortController(); return () => { mounted.current = false; actions.current.abort(); }; }, []);
   useLayoutEffect(() => { newSessionDrafts.set(session.id, { mode: newSessionMode, target: selectedTarget, cwd, directoryRequestId, model, effort }); }, [session.id, newSessionMode, selectedTarget, cwd, directoryRequestId, model, effort]);
   useLayoutEffect(() => { setOutputHost(document.getElementById('historyLiveOutput')); }, [session.id]);
   const targets = useQuery({ queryKey: ['history', 'targets'], queryFn: ({ signal }) => apiRequest<Targets>('/api/task-center/codex', { signal }), enabled: canEdit && newSessionMode, retry: false });
-  const status = useQuery({ queryKey: ['history', 'continue', session.id], queryFn: ({ signal }) => apiRequest<StatusResponse>(`/api/agent-sessions/${encodeURIComponent(session.id)}/continue`, { signal }), enabled: canEdit && canSendNative, refetchInterval: canEdit && canSendNative ? 2500 : false, refetchIntervalInBackground: false, retry: false });
+  const status = useQuery({ queryKey: ['history', 'continue', session.id], queryFn: ({ signal }) => apiRequest<StatusResponse>(`/api/agent-sessions/${encodeURIComponent(session.id)}/continue`, { signal }), enabled: canEdit && canSendNative, retry: false });
   const persistedExecutions = status.data?.executions || (status.data?.execution ? [status.data.execution] : []);
   const awaitingPersistence = optimistic && !persistedExecutions.some(item => item.id === optimistic.id);
   const executions = awaitingPersistence ? [...persistedExecutions, optimistic] : persistedExecutions;
@@ -93,7 +95,7 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
   const branchKey = ['task-center', 'git', project?.deviceId || '', project?.id || '', project?.cwd || '', branchCwd] as const;
   const branchQuery = useQuery({
     queryKey: branchKey,
-    queryFn: ({ signal }) => requestGitBranches(project!, branchCwd, 'list', undefined, signal),
+    queryFn: ({ signal }) => requestGitBranches(queryClient, project!, branchCwd, 'list', undefined, signal),
     enabled: canEdit && newSessionMode && Boolean(project) && !branchDirectoryPending,
     retry: false
   });
@@ -179,23 +181,17 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
     pickerPending.current = true;
     setPicking(true); setNewStatus('请在目标设备选择并确认工作目录，确认后将继续当前操作。');
     try {
-      const response = await apiRequest<DirectoryResult>('/api/task-center/directory-picker', { method: 'POST', body: JSON.stringify({ deviceId: project.deviceId, projectId: project.id }) });
-      let result = response;
-      for (let attempt = 0; attempt < 300; attempt++) {
-        if (!mounted.current) return null;
-        if (result.status === 'completed') {
-          if (!result.cwd || (project.deviceId !== 'local' && !response.requestId)) throw new Error('目录选择结果不完整，请重新选择');
-          const selected = { cwd: result.cwd, directoryRequestId: response.requestId || '' };
-          setCwd(selected.cwd); setDirectoryRequestId(selected.directoryRequestId); setNewStatus('');
-          return selected;
-        }
-        if (result.status === 'cancelled') throw new Error('已取消选择目录');
-        if (result.status === 'failed') throw new Error(result.message || '无法选择目录');
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        if (!mounted.current) return null;
-        result = await apiRequest<DirectoryResult>(`/api/task-center/directory-picker?requestId=${encodeURIComponent(response.requestId)}`);
-      }
-      throw new Error('等待目录选择超时');
+      const signal = actions.current.signal;
+      const response = await apiRequest<DirectoryResult>('/api/task-center/directory-picker', { method: 'POST', body: JSON.stringify({ deviceId: project.deviceId, projectId: project.id }), signal });
+      const result = await waitForRemoteRequest(queryClient, 'directoryRequests', response.requestId, response,
+        () => apiRequest<DirectoryResult>(`/api/task-center/directory-picker?requestId=${encodeURIComponent(response.requestId)}`, { signal }), 300_000, signal);
+      if (!mounted.current) return null;
+      if (result.status === 'cancelled') throw new Error('已取消选择目录');
+      if (result.status !== 'completed') throw new Error(result.message || '无法选择目录');
+      if (!result.cwd || (project.deviceId !== 'local' && !response.requestId)) throw new Error('目录选择结果不完整，请重新选择');
+      const selected = { cwd: result.cwd, directoryRequestId: response.requestId || '' };
+      setCwd(selected.cwd); setDirectoryRequestId(selected.directoryRequestId); setNewStatus('');
+      return selected;
     } catch (failure) { if (mounted.current) setNewStatus(errorMessage(failure)); return null; }
     finally { pickerPending.current = false; if (mounted.current) setPicking(false); }
   }
@@ -204,7 +200,7 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
     setBranchMutating(true); setBranchActionError('');
     try {
       await queryClient.cancelQueries({ queryKey: branchKey });
-      const result = await requestGitBranches(project, cwd, action, name);
+      const result = await requestGitBranches(queryClient, project, cwd, action, name, actions.current.signal);
       queryClient.setQueryData(branchKey, result);
       if (action === 'create') setNewBranch('');
     } catch (failure) { setBranchActionError(errorMessage(failure)); }
