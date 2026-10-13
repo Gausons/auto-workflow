@@ -7,18 +7,18 @@ import { DevicesPage } from './DevicesPage.js';
 const snapshot = {
   tasks: [], sessions: [], handoffs: [], executions: [],
   devices: [
-    { id: 'local', name: '测试设备', online: true, agents: ['codex'], transport: 'manual' },
+    { id: 'local', name: '测试设备', online: true, agents: [], transport: 'manual', historySources: [{ id: 'codex', label: 'Codex', status: 'unconfigured', sessionCount: 0, skipped: 0 }, { id: 'claude', label: 'Claude Code', status: 'missing', sessionCount: 0, skipped: 0 }] },
     { id: 'remote device', name: '远端开发机', online: false, agents: ['codex'], transport: 'connector', capabilities: { resumeCodex: true }, codexProjects: [{ id: 'project', name: '远端项目', cwd: '/remote/repo' }] }
   ]
 };
 
-function setup(permissions: string[], failSnapshot = false) {
+function setup(permissions: string[], failSnapshot = false, execution: unknown = { projects: [], localError: '未找到 Codex 可执行文件' }, data: unknown = snapshot) {
   sessionStorage.setItem('bugflow.sessionToken', 'test-token');
   let failed = false;
   const fetchMock = vi.fn().mockImplementation((path: string) => {
     const failure = failSnapshot && !failed && path === '/api/task-center';
     if (failure) failed = true;
-    return Promise.resolve(new Response(JSON.stringify(failure ? { message: '设备读取失败' } : path === '/api/bootstrap' ? { permissions } : snapshot), { status: failure ? 503 : 200 }));
+    return Promise.resolve(new Response(JSON.stringify(failure ? { message: '设备读取失败' } : path === '/api/bootstrap' ? { permissions } : path === '/api/task-center/codex' ? execution : data), { status: failure ? 503 : 200 }));
   });
   vi.stubGlobal('fetch', fetchMock);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -42,9 +42,11 @@ describe('DevicesPage', () => {
   });
 
   it('shows device status from the snapshot', async () => {
-    setup(['read']);
+    const fetchMock = setup(['read']);
     expect(await screen.findByText('测试设备')).toBeTruthy();
-    expect(screen.getByText('在线')).toBeTruthy();
+    expect(screen.getByText('服务运行中')).toBeTruthy();
+    expect(screen.queryByText('在线')).toBeNull();
+    expect(fetchMock.mock.calls.some(([path]) => path === '/api/task-center/codex')).toBe(false);
     expect(screen.getByText('当前账号没有接入设备和远程执行任务的权限。')).toBeTruthy();
     expect(screen.queryByLabelText('设备连接配置')).toBeNull();
     expect(screen.queryByRole('link', { name: '新建远端任务' })).toBeNull();
@@ -59,6 +61,31 @@ describe('DevicesPage', () => {
     expect(screen.getByRole('link', { name: '新建远端任务' }).getAttribute('href')).toBe('/tasks/new?deviceId=remote%20device');
     expect(screen.getByText('远端项目 · /remote/repo')).toBeTruthy();
     expect(screen.getByText(/设备离线，已提交的任务/)).toBeTruthy();
+  });
+
+  it('distinguishes service availability, missing history and unavailable execution', async () => {
+    setup(['read', 'work.execute']);
+    expect(await screen.findByText('本地执行不可用：未找到 Codex 可执行文件')).toBeTruthy();
+    expect(screen.getByText('当前账号可见会话：0 个')).toBeTruthy();
+    expect(screen.getByText('Codex · 当前账号未配置历史来源 · 0 个历史会话')).toBeTruthy();
+    expect(screen.getByText('Claude Code · 未找到历史目录 · 0 个历史会话')).toBeTruthy();
+    expect(screen.getByText(/请在开发机运行下方连接器/)).toBeTruthy();
+    expect(screen.queryByRole('link', { name: '新建本地任务' })).toBeNull();
+  });
+
+  it('shows local execution independently of whether historical sessions exist', async () => {
+    setup(['work.execute'], false, { projects: [{ id: 'codex', deviceId: 'local', name: 'Codex', cwd: '/repo' }] });
+    expect(await screen.findByText('可执行 Agent：Codex')).toBeTruthy();
+    expect(screen.getByText('当前账号可见会话：0 个')).toBeTruthy();
+    expect(screen.getByRole('link', { name: '新建本地任务' }).getAttribute('href')).toBe('/tasks/new?deviceId=local');
+  });
+
+  it('preserves visible history when there is no executable Agent', async () => {
+    setup(['work.execute'], false, { projects: [] }, { ...snapshot, sessions: [{ id: 's1', deviceId: 'local' }, { id: 's2', deviceId: 'remote device' }, { id: 's3', deviceId: 'local', missing: true }], devices: [{ ...snapshot.devices[0], historySources: [{ id: 'codex', label: 'Codex', status: 'available', sessionCount: 1, skipped: 2 }] }] });
+    expect(await screen.findByText('未发现可用的本地执行目标；历史记录可读取不代表 Agent 可执行。')).toBeTruthy();
+    expect(screen.getByText('当前账号可见会话：1 个')).toBeTruthy();
+    expect(screen.getByText('Codex · 历史目录可读取 · 1 个历史会话 · 2 项未能读取')).toBeTruthy();
+    expect(screen.queryByText(/请在开发机运行下方连接器/)).toBeNull();
   });
 
   it('retries a failed read and refreshes the device snapshot', async () => {

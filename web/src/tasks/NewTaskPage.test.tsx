@@ -8,7 +8,7 @@ const sessionId = 'a'.repeat(64);
 const snapshot = { tasks: [], sessions: [{ id: sessionId, title: '来源会话', deviceId: 'local' }], devices: [], handoffs: [], executions: [] };
 const targets = { projects: [{ id: 'project-1', deviceId: 'local', deviceName: '本机', name: 'Codex', cwd: '/repo', online: true, defaultModel: 'model-1', models: [{ id: 'model-1', name: '模型一', defaultReasoningEffort: 'low', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }] }, { id: 'gpt-6-sol', name: 'GPT-6-Sol', defaultReasoningEffort: 'low', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }] }] }] };
 
-function setup(permissions = ['work.execute'], failExecute = false, remote = false) {
+function setup(permissions = ['work.execute'], failExecute = false, remote = false, localError: string | null = null) {
   location.hash = '#new-task';
   sessionStorage.setItem('bugflow.sessionToken', 'test-token');
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -18,7 +18,7 @@ function setup(permissions = ['work.execute'], failExecute = false, remote = fal
     const status = path === '/api/task-center/execute' && failExecute ? 500 : 200;
     if (path === '/api/task-center/git' && remote && body.action !== 'create') queueMicrotask(() => completeGit(body.requestId));
     const payload = path === '/api/bootstrap' ? { permissions }
-      : path === '/api/task-center/codex' ? remote ? { projects: [{ ...targets.projects[0], deviceId: 'remote', deviceName: '开发机', gitBranches: true }] } : targets
+      : path === '/api/task-center/codex' ? remote ? { localError, projects: [{ ...targets.projects[0], deviceId: 'remote', deviceName: '开发机', gitBranches: true }] } : targets
         : path.startsWith('/api/task-center/git?') ? { status: 'completed', result: { repository: true, current: 'remote/main', changes: 0, branches: ['remote/main'] } }
         : path === '/api/task-center/git' && remote ? { id: body.requestId, status: 'pending' }
         : path === '/api/task-center/git' ? { repository: true, current: body.cwd === '/repo/work' ? 'feature/work' : 'main', changes: 0, branches: ['main', 'feature/work'] }
@@ -40,6 +40,13 @@ describe('NewTaskPage', () => {
     expect(await screen.findByText('当前账号没有创建任务权限。')).toBeTruthy();
     expect(screen.getByRole('button', { name: '创建并发送任务' })).toHaveProperty('disabled', true);
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+  });
+
+  it('explains why the workbench target is missing even when remote targets exist', async () => {
+    setup(['work.execute'], false, true, '未找到 Codex 可执行文件');
+    expect(await screen.findByText(/工作台所在设备无法提供执行目标：未找到 Codex 可执行文件/)).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: '执行位置' }).textContent).toContain('开发机');
+    expect(screen.getByRole('link', { name: '查看设备与 Agent' }).getAttribute('href')).toBe('/devices');
   });
 
   it('shows the current branch before opening the menu and refreshes it when the directory changes', async () => {

@@ -67,6 +67,14 @@ export interface AgentProject {
   gitBranches?: boolean;
 }
 
+export interface DeviceHistorySource {
+  id: string;
+  label: string;
+  status: 'unconfigured' | 'missing' | 'available' | 'error' | 'unknown';
+  sessionCount: number;
+  skipped: number;
+}
+
 export interface Device {
   id: string;
   name: string;
@@ -75,6 +83,7 @@ export interface Device {
   lastSeen: string;
   transport: 'manual' | 'connector';
   online?: boolean;
+  historySources?: DeviceHistorySource[];
   codexProjects?: AgentProject[];
   capabilities?: { resumeCodex?: boolean; gitBranches?: boolean };
 }

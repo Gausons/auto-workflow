@@ -8,10 +8,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { openDatabase, rawDatabase } from '../scripts/testing/database.js';
 import { createTaskCenter } from '../src/taskCenter.js';
+import { createAgentHistory } from '../src/agentHistory/index.js';
 import { normalizeRemoteHistory } from '../src/remoteHistory.js';
 import { syncDeviceOnce } from '../scripts/device-sync.js';
 import { createApp } from '../scripts/testing/database.js';
-import type { Actor, Task, TaskCenterData } from '../shared/taskTypes.js';
+import type { Actor, DeviceHistorySource, Task, TaskCenterData } from '../shared/taskTypes.js';
 import type { HistorySession } from '../src/agentHistory/types.js';
 
 const actor: Actor = { id: 'owner' };
@@ -28,6 +29,42 @@ function fixture(t: TestContext, filename: string | undefined = undefined) {
 }
 const handoff = (task: Task, overrides: Record<string, unknown> = {}) => ({ action: 'handoff', taskId: task.id, revision: task.revision, mode: 'continue', deviceId: 'remote', agent: 'claude', instruction: '补充回归测试', includeFiles: true, includeSources: true, ...overrides });
 const heartbeat = (sessions: unknown[] = []) => ({ action: 'heartbeat', deviceId: 'remote', name: 'Linux', agents: ['claude'], sessions });
+
+test('local service presence does not claim that unconfigured history providers are installed Agents', async t => {
+  const { database } = fixture(t);
+  const root = await mkdtemp(path.join(os.tmpdir(), 'local-history-status-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const local = createTaskCenter({ database, tenantId: 'default', history: createAgentHistory({ environment: { HOME: root }, tenantId: 'default' }) });
+  const snapshot = await local.snapshot();
+  assert.equal(snapshot.devices[0].online, true, 'the workbench service itself is reachable');
+  assert.deepEqual(snapshot.devices[0].agents, []);
+  assert.deepEqual(snapshot.devices[0].historySources?.map(source => [source.id, source.status, source.sessionCount]), [['codex', 'missing', 0], ['claude', 'missing', 0]]);
+  const isolated = createTaskCenter({ database, tenantId: 'other', history: createAgentHistory({ environment: { HOME: root }, tenantId: 'other' }) });
+  const other = await isolated.snapshot();
+  assert.deepEqual(other.devices[0].agents, []);
+  assert.ok(other.devices[0].historySources?.every(source => source.status === 'unconfigured'));
+  assert.deepEqual(other.sessions, []);
+});
+
+test('local history diagnostics refresh in deltas and preserve records without claiming execution support', async t => {
+  const { database } = fixture(t);
+  const providers: Array<{ id: string; label: string; status: DeviceHistorySource['status']; skipped: number }> = [{ id: 'codex', label: 'Codex', status: 'available', skipped: 0 }, { id: 'claude', label: 'Claude Code', status: 'missing', skipped: 0 }];
+  const sessions = [source];
+  const center = createTaskCenter({ database, tenantId: 'default', history: { catalog: async () => ({ providers, sessions }) } });
+  const snapshot = await center.snapshot();
+  assert.deepEqual(snapshot.devices[0].agents, ['codex']);
+  assert.equal(snapshot.devices[0].historySources?.[0].sessionCount, 1);
+  assert.equal(snapshot.sessions[0].id, source.id);
+  assert.equal(snapshot.devices[0].codexProjects, undefined);
+  sessions.length = 0;
+  providers[0].status = 'error'; providers[0].skipped = 1;
+  const delta = await center.changes(snapshot.syncVersion || 0);
+  assert.equal(delta.reset, false);
+  if (delta.reset) return;
+  const device = delta.changes.devices?.upsert.find(item => item.id === 'local');
+  assert.deepEqual(device?.agents, []);
+  assert.deepEqual(device?.historySources?.[0], { id: 'codex', label: 'Codex', status: 'error', sessionCount: 0, skipped: 1 });
+});
 
 test('task linking, context versions, optimistic concurrency and tenant isolation', async t => {
   const { database, center, cmd } = fixture(t);

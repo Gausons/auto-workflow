@@ -88,6 +88,13 @@ test('devices and task center have independent pages and navigation', async ({ p
   await expect(page).toHaveURL(/\/devices$/);
   await expect(taskViews).toHaveCount(0);
   await expect(page.getByRole('heading', { name: '连接本机 Agent' })).toBeVisible();
+  const localDevice = page.locator('article').filter({ has: page.getByText('工作台所在设备', { exact: true }) });
+  await expect(localDevice).toContainText('服务运行中');
+  await expect(localDevice).toContainText('当前账号可见会话：0 个');
+  await expect(localDevice).toContainText('Codex · 未找到历史目录 · 0 个历史会话');
+  await expect(localDevice).toContainText('本地执行不可用：');
+  await expect(localDevice.getByText('在线', { exact: true })).toHaveCount(0);
+  await expect(localDevice.getByRole('link', { name: '新建本地任务' })).toHaveCount(0);
   await expect(sidebar.getByRole('link', { name: '设备与 Agent', exact: true })).toHaveAttribute('aria-current', 'page');
   await page.reload();
   await expect(page.getByRole('heading', { name: '设备与 Agent', exact: true })).toBeVisible();

@@ -10,7 +10,7 @@ import { requestGitBranches } from './gitBranches.js';
 import { useTaskCenterUpdates } from './taskCenterUpdates.js';
 import { waitForRemoteRequest } from './remoteRequest.js';
 
-interface Targets { projects: AgentProject[]; localError?: string }
+interface Targets { projects: AgentProject[]; localError?: string | null }
 interface DirectoryResult { status: 'pending' | 'selecting' | 'completed' | 'cancelled' | 'failed'; requestId: string; cwd?: string; message?: string }
 interface Created { taskId: string; revision?: number }
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -176,6 +176,7 @@ export function NewTaskPage() {
           </div></DismissibleDetails>}
         </> : <p className="tc-create-hint" role="alert">{targets.data?.localError || '未发现可用 Agent，仍可创建任务。'}</p>}
       </div>
+      {project && targets.data?.localError && <p className="tc-create-hint" role="status">工作台所在设备无法提供执行目标：{targets.data.localError}。开发机上的 Agent 需通过连接器接入。<a href="/devices">查看设备与 Agent</a></p>}
       <div className="tc-composer conversation-composer">
         {sourceSessionId && <p className="tc-meta">将关联会话：{snapshot.data?.sessions.find(item => item.id === sourceSessionId)?.title || sourceSessionId}</p>}
         <textarea ref={messageInput} aria-label="任务描述" value={content} onChange={event => setContent(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder="描述任务、期望结果，或需要解决的问题…" rows={4} maxLength={64000} required disabled={blocked || !canEdit} />

@@ -4,7 +4,7 @@ import { hostname } from 'node:os';
 import { httpError } from './rbac.js';
 import { validateRemoteHistory, remoteHistorySummary } from './remoteHistory.js';
 import { sortTasks, taskCenterDelta, type TaskCenterChangeIds } from '../shared/taskCenterSync.js';
-import type { Actor, AgentProject, Device, Handoff, HandoffMode, HandoffStatus, RemoteHistory, Session, Task, TaskCenterData, TaskContext, TaskStatus } from '../shared/taskTypes.js';
+import type { Actor, AgentProject, Device, DeviceHistorySource, Handoff, HandoffMode, HandoffStatus, RemoteHistory, Session, Task, TaskCenterData, TaskContext, TaskStatus } from '../shared/taskTypes.js';
 
 const statuses: TaskStatus[] = ['waiting', 'error', 'running', 'ready', 'review', 'completed'];
 const contextKeys: Array<keyof TaskContext> = ['goal', 'constraints', 'decisions', 'next', 'files'];
@@ -16,7 +16,7 @@ interface TaskCenterDatabase {
   setRemoteSessionHistory(tenantId: string, sessionId: string, history: RemoteHistory | null): void;
 }
 interface HistoryCatalog {
-  providers: Array<{ id: string }>;
+  providers: Array<{ id: string; label?: string; status?: DeviceHistorySource['status']; skipped?: number }>;
   sessions: Array<Partial<Session> & Pick<Session, 'id' | 'agent' | 'title' | 'cwd' | 'updatedAt'>>;
 }
 interface TaskCenterHistory { catalog(): Promise<HistoryCatalog> }
@@ -69,8 +69,12 @@ const inputRecord = (value: unknown): InputRecord => isRecord(value) ? value : {
 export function createTaskCenter({ database, tenantId, history }: { database: TaskCenterDatabase; tenantId: string; history: TaskCenterHistory }) {
   async function catalog(): Promise<LocalCatalog> {
     const result = await history.catalog();
+    const historySources = result.providers.map(provider => ({
+      id: provider.id, label: provider.label || provider.id, status: provider.status || 'unknown',
+      sessionCount: result.sessions.filter(session => session.agent === provider.id).length, skipped: provider.skipped || 0
+    }));
     return {
-      device: { id: 'local', name: hostname(), agents: result.providers.map(p => p.id), lastSeen: now(), transport: 'manual' },
+      device: { id: 'local', name: hostname(), agents: historySources.filter(source => source.status === 'available' || source.sessionCount > 0).map(source => source.id), historySources, lastSeen: now(), transport: 'manual' },
       sessions: result.sessions.map(s => ({ ...s, deviceId: 'local', nativeId: s.sessionId || s.id, historyId: s.id, excerpt: '' }))
     };
   }
