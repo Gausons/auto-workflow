@@ -278,22 +278,27 @@ test('login, normal URLs, old hash links and deep refresh', async ({ page }) => 
   await expect(page.getByText('owner · E2E 用户')).toBeVisible();
 });
 
-test('remote branch selector reads and creates branches through the connector queue', async ({ page }) => {
+test('remote branch selector creates through the connector queue while its cached list refreshes', async ({ page }) => {
   let current = 'main';
+  let lists = 0, refreshId = '';
   await page.route('**/api/task-center/codex', route => route.fulfill({ json: { projects: [{ id: 'p', deviceId: 'remote', deviceName: '开发机', name: 'Codex', cwd: '/repo', online: true, gitBranches: true }] } }));
   await page.route('**/api/task-center/git*', route => {
     if (route.request().method() === 'POST') {
       const body = route.request().postDataJSON();
       expect(body.deviceId).toBe('remote');
+      if (body.action === 'list' && ++lists > 1) refreshId = body.requestId;
       if (body.action === 'create') current = body.branch;
       return route.fulfill({ json: { id: body.requestId, status: 'pending' } });
     }
+    if (new URL(route.request().url()).searchParams.get('requestId') === refreshId) return route.fulfill({ json: { status: 'running' } });
     return route.fulfill({ json: { status: 'completed', result: { repository: true, current, changes: 0, branches: ['main', ...(current !== 'main' ? [current] : [])] } } });
   });
   await login(page);
   await page.getByRole('link', { name: '新建任务', exact: true }).click();
   await expect(page.getByLabel('Git 分支')).toContainText('main');
   await page.getByLabel('Git 分支').click();
+  await expect(page.getByText('正在刷新分支…')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'main ✓', exact: true })).toBeEnabled();
   await page.getByLabel('新分支名称').fill('feature/remote');
   await page.getByRole('button', { name: '创建并切换' }).click();
   await expect(page.getByLabel('Git 分支')).toContainText('feature/remote');

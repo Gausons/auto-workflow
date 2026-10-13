@@ -94,7 +94,7 @@ describe('NewTaskPage', () => {
     expect(JSON.parse(String(create?.[1]?.body))).toMatchObject({ deviceId: 'remote', projectId: 'project-1', branch: 'feature/remote' });
     expect(screen.getByLabelText('执行位置')).toHaveProperty('disabled', true);
     fetchMock.completeGit(JSON.parse(String(create?.[1]?.body)).requestId);
-    await waitFor(() => expect(screen.queryByText('正在处理分支…')).toBeNull(), { timeout: 4000 });
+    await waitFor(() => expect(screen.queryByText('正在切换分支…')).toBeNull(), { timeout: 4000 });
   });
 
   it('creates once and executes with selected target, directory, model and effort', async () => {
