@@ -8,17 +8,23 @@ const snapshot = {
   tasks: [], sessions: [], handoffs: [], executions: [],
   devices: [
     { id: 'local', name: '测试设备', online: true, agents: [], transport: 'manual', historySources: [{ id: 'codex', label: 'Codex', status: 'unconfigured', sessionCount: 0, skipped: 0 }, { id: 'claude', label: 'Claude Code', status: 'missing', sessionCount: 0, skipped: 0 }] },
-    { id: 'remote device', name: '远端开发机', online: false, agents: ['codex'], transport: 'connector', capabilities: { resumeCodex: true }, codexProjects: [{ id: 'project', name: '远端项目', cwd: '/remote/repo' }] }
+    { id: 'remote device', name: '远端开发机', owner: 'owner', online: false, agents: ['codex'], transport: 'connector', capabilities: { resumeCodex: true }, codexProjects: [{ id: 'project', name: '远端项目', cwd: '/remote/repo' }] }
   ]
 };
 
 function setup(permissions: string[], failSnapshot = false, execution: unknown = { projects: [], localError: '未找到 Codex 可执行文件' }, data: unknown = snapshot) {
   sessionStorage.setItem('bugflow.sessionToken', 'test-token');
   let failed = false;
-  const fetchMock = vi.fn().mockImplementation((path: string) => {
+  let currentData = structuredClone(data);
+  const fetchMock = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+    if (init?.method === 'POST') {
+      const command = JSON.parse(String(init.body));
+      const state = currentData as typeof snapshot;
+      currentData = { ...state, devices: state.devices.map(device => device.id === command.deviceId ? { ...device, cardHidden: command.action === 'remove-device-card' } : device) };
+    }
     const failure = failSnapshot && !failed && path === '/api/task-center';
     if (failure) failed = true;
-    return Promise.resolve(new Response(JSON.stringify(failure ? { message: '设备读取失败' } : path === '/api/bootstrap' ? { permissions } : path === '/api/task-center/codex' ? execution : data), { status: failure ? 503 : 200 }));
+    return Promise.resolve(new Response(JSON.stringify(failure ? { message: '设备读取失败' } : path === '/api/bootstrap' ? { permissions, user: { id: 'owner', username: 'owner' } } : path === '/api/task-center/codex' ? execution : currentData), { status: failure ? 503 : 200 }));
   });
   vi.stubGlobal('fetch', fetchMock);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -31,6 +37,7 @@ describe('DevicesPage', () => {
 
   it('generates connection configuration without exposing the browser token', async () => {
     setup(['read', 'work.execute']);
+    await userEvent.click(await screen.findByRole('button', { name: '连接设备' }));
     const config = await screen.findByLabelText('设备连接配置');
     expect((config as HTMLTextAreaElement).value.split('\n')).toHaveLength(3);
     expect((config as HTMLTextAreaElement).value).toContain('WORKBENCH_USERNAME=');
@@ -44,19 +51,21 @@ describe('DevicesPage', () => {
   it('shows device status from the snapshot', async () => {
     const fetchMock = setup(['read']);
     expect(await screen.findByText('测试设备')).toBeTruthy();
-    expect(screen.getByText('服务运行中')).toBeTruthy();
-    expect(screen.queryByText('在线')).toBeNull();
+    expect(screen.getByText('在线')).toBeTruthy();
+    expect(screen.getByText('离线')).toBeTruthy();
     expect(fetchMock.mock.calls.some(([path]) => path === '/api/task-center/codex')).toBe(false);
-    expect(screen.getByText('当前账号没有接入设备和远程执行任务的权限。')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /删除 .* 卡片/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: '连接设备' })).toBeNull();
     expect(screen.queryByLabelText('设备连接配置')).toBeNull();
     expect(screen.queryByRole('link', { name: '新建远端任务' })).toBeNull();
   });
 
   it('stands alone and preserves the remote task target', async () => {
     setup(['read', 'work.execute']);
-    await screen.findByLabelText('设备连接配置');
+    await screen.findByText('远端开发机');
     expect(screen.getByRole('heading', { name: '设备与 Agent' })).toBeTruthy();
     expect(screen.queryByRole('navigation', { name: '任务中心视图' })).toBeNull();
+    expect(screen.queryByLabelText('设备连接配置')).toBeNull();
     expect(screen.queryByRole('link', { name: /全部任务|未归属会话/ })).toBeNull();
     expect(screen.getByRole('link', { name: '新建远端任务' }).getAttribute('href')).toBe('/tasks/new?deviceId=remote%20device');
     expect(screen.getByText('远端项目 · /remote/repo')).toBeTruthy();
@@ -69,13 +78,13 @@ describe('DevicesPage', () => {
     expect(screen.getByText('当前账号可见会话：0 个')).toBeTruthy();
     expect(screen.getByText('Codex · 当前账号未配置历史来源 · 0 个历史会话')).toBeTruthy();
     expect(screen.getByText('Claude Code · 未找到历史目录 · 0 个历史会话')).toBeTruthy();
-    expect(screen.getByText(/请在开发机运行下方连接器/)).toBeTruthy();
     expect(screen.queryByRole('link', { name: '新建本地任务' })).toBeNull();
   });
 
   it.each(['read', 'work.execute'])('shows service-only mode without probing local execution for %s', async permission => {
     const fetchMock = setup([permission], false, { projects: [], localExecutionEnabled: false }, { ...snapshot, devices: [{ ...snapshot.devices[0], localExecutionEnabled: false }] });
-    expect(await screen.findByText('仅运行工作台')).toBeTruthy();
+    expect(await screen.findByText('还没有设备卡片')).toBeTruthy();
+    expect(screen.queryByText('测试设备')).toBeNull();
     expect(screen.queryByText(/未找到历史目录|本地执行不可用|未配置历史来源/)).toBeNull();
     expect(screen.queryByRole('link', { name: '新建本地任务' })).toBeNull();
     expect(fetchMock.mock.calls.some(([path]) => path === '/api/task-center/codex')).toBe(false);
@@ -94,6 +103,38 @@ describe('DevicesPage', () => {
     expect(screen.getByText('当前账号可见会话：1 个')).toBeTruthy();
     expect(screen.getByText('Codex · 历史目录可读取 · 1 个历史会话 · 2 项未能读取')).toBeTruthy();
     expect(screen.queryByText(/请在开发机运行下方连接器/)).toBeNull();
+  });
+
+  it('cancels, removes and restores a card without removing the device from other views', async () => {
+    const fetchMock = setup(['work.execute']);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: '删除 远端开发机 卡片' }));
+    await user.click(screen.getByRole('button', { name: '取消' }));
+    expect(fetchMock.mock.calls.some(([, init]) => init.method === 'POST')).toBe(false);
+    await user.click(screen.getByRole('button', { name: '删除 远端开发机 卡片' }));
+    await user.click(screen.getByRole('button', { name: '确认删除' }));
+    await waitFor(() => expect(screen.queryByRole('article', { name: '远端开发机' })).toBeNull());
+    await user.click(screen.getByText('已删除的卡片 · 1'));
+    await user.click(screen.getByRole('button', { name: '恢复 远端开发机' }));
+    expect(await screen.findByRole('article', { name: '远端开发机' })).toBeTruthy();
+  });
+
+  it('retains a card on failure and allows an explicit retry', async () => {
+    const fetchMock = setup(['work.execute']);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: '删除 远端开发机 卡片' }));
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ message: '保存失败' }), { status: 503 }));
+    await user.click(screen.getByRole('button', { name: '确认删除' }));
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', '操作失败：保存失败');
+    expect(screen.getByRole('article', { name: '远端开发机' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: '确认删除' }));
+    await waitFor(() => expect(screen.queryByRole('article', { name: '远端开发机' })).toBeNull());
+  });
+
+  it('does not offer removal of another account’s device', async () => {
+    setup(['work.execute'], false, { projects: [] }, { ...snapshot, devices: [{ ...snapshot.devices[1], owner: 'another-user' }] });
+    await screen.findByText('远端开发机');
+    expect(screen.queryByRole('button', { name: /删除 .* 卡片/ })).toBeNull();
   });
 
   it('retries a failed read and refreshes the device snapshot', async () => {

@@ -4,13 +4,17 @@ import type { TaskCenterData } from '../shared/taskTypes.js';
 export const taskCenterChangeRetention = 256;
 
 export function taskCenterState(data: TaskCenterData) {
-  return new Map(taskCenterCollections.map(key => [key, new Map((data[key] || []).map(item => [item.id, JSON.stringify(item)]))]));
+  const state = new Map(taskCenterCollections.map(key => [key, new Map((data[key] || []).map(item => [item.id, JSON.stringify(item)]))]));
+  // Card visibility changes belong to the device delta, including the synthetic local device.
+  for (const id of data.hiddenDeviceIds || []) state.get('devices')!.set(id, JSON.stringify({ device: state.get('devices')!.get(id), cardHidden: true }));
+  return state;
 }
 
 export function changedTaskCenterIds(before: ReturnType<typeof taskCenterState>, data: TaskCenterData, historyIds: Set<string>): TaskCenterChangeIds {
   const changes: TaskCenterChangeIds = {};
+  const after = taskCenterState(data);
   for (const key of taskCenterCollections) {
-    const previous = before.get(key)!, current = new Map((data[key] || []).map(item => [item.id, JSON.stringify(item)]));
+    const previous = before.get(key)!, current = after.get(key)!;
     const ids = [...new Set([...previous.keys(), ...current.keys()])].filter(id => previous.get(id) !== current.get(id));
     if (key === 'sessions') {
       ids.push(...historyIds);

@@ -87,14 +87,10 @@ test('devices and task center have independent pages and navigation', async ({ p
   await sidebar.getByRole('link', { name: '设备与 Agent', exact: true }).click();
   await expect(page).toHaveURL(/\/devices$/);
   await expect(taskViews).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '连接本机 Agent' })).toHaveCount(0);
+  await expect(page.getByText('仅运行工作台', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '连接设备', exact: true }).click();
   await expect(page.getByRole('heading', { name: '连接本机 Agent' })).toBeVisible();
-  const localDevice = page.locator('article').filter({ has: page.getByText('工作台所在设备', { exact: true }) });
-  await expect(localDevice).toContainText('服务运行中');
-  await expect(localDevice).toContainText('仅运行工作台');
-  await expect(localDevice).not.toContainText('未找到历史目录');
-  await expect(localDevice).not.toContainText('本地执行不可用');
-  await expect(localDevice.getByText('在线', { exact: true })).toHaveCount(0);
-  await expect(localDevice.getByRole('link', { name: '新建本地任务' })).toHaveCount(0);
   await expect(sidebar.getByRole('link', { name: '设备与 Agent', exact: true })).toHaveAttribute('aria-current', 'page');
   await page.reload();
   await expect(page.getByRole('heading', { name: '设备与 Agent', exact: true })).toBeVisible();
@@ -110,6 +106,41 @@ test('devices and task center have independent pages and navigation', async ({ p
   await expect(page).toHaveURL(/\/devices$/);
   await expect(page.getByRole('heading', { name: '设备与 Agent', exact: true })).toBeVisible();
   await expect(taskViews).toHaveCount(0);
+});
+
+test('compact device cards remove, restore and fit desktop and mobile screens', async ({ page, request }) => {
+  const response = await request.post('/api/auth/login', { data: { username: 'owner', password } });
+  const { token } = await response.json() as { token: string };
+  const headers = { Authorization: `Bearer ${token}` };
+  const name = 'MacBook-Pro-development-device-with-a-long-name';
+  expect((await request.post('/api/task-center', { headers, data: { action: 'heartbeat', deviceId: 'card-layout', name, agents: ['codex', 'claude'], codexProjects: [{ id: 'p', name: 'Codex', cwd: '/repo' }], sessions: [] } })).ok()).toBeTruthy();
+  await login(page);
+  await page.goto('/devices');
+  const card = page.getByRole('article', { name, exact: true });
+  await expect(card).toBeVisible();
+  await expect(card.getByText('在线', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '连接本机 Agent' })).toHaveCount(0);
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const box = await card.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeLessThanOrEqual(width === 390 ? 354 : 340);
+    expect(box!.height).toBeLessThan(320);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    if (width === 1440) await page.screenshot({ path: '/tmp/auto-workflow-devices-desktop.png', fullPage: true });
+    else await page.screenshot({ path: '/tmp/auto-workflow-devices-mobile.png', fullPage: true });
+  }
+  await card.getByRole('button', { name: `删除 ${name} 卡片` }).click();
+  await card.getByRole('button', { name: '取消' }).click();
+  await expect(card).toBeVisible();
+  await card.getByRole('button', { name: `删除 ${name} 卡片` }).click();
+  await card.getByRole('button', { name: '确认删除' }).click();
+  await expect(card).toHaveCount(0);
+  await page.reload();
+  await expect(card).toHaveCount(0);
+  await page.getByText(/已删除的卡片 ·/).click();
+  await page.getByRole('button', { name: `恢复 ${name}`, exact: true }).click();
+  await expect(card).toBeVisible();
 });
 
 test('remote task setup shows the selected device state without server execution errors', async ({ page }) => {
@@ -566,14 +597,16 @@ test('device setup selects remote target and browser controls a remote original 
   await expect(page).toHaveURL(/\/devices$/);
   await expect(page.getByRole('navigation', { name: '主导航' }).getByRole('link', { name: '设备与 Agent', exact: true })).toHaveAttribute('aria-current', 'page');
   await page.reload();
+  await page.getByRole('button', { name: '连接设备', exact: true }).click();
   await expect(page.getByRole('heading', { name: '连接本机 Agent' })).toBeVisible();
   await expect(page.getByLabel('设备连接配置')).toContainText("WORKBENCH_USERNAME='owner'");
   expect(await page.getByLabel('设备连接配置').inputValue()).not.toContain(connectorToken);
   const device = page.locator('article').filter({ has: page.getByRole('heading', { name: '浏览器远端开发机' }) });
+  await device.getByText('设备详情', { exact: true }).click();
   await expect(device).toContainText('支持 Codex 原会话续聊');
   await device.getByRole('link', { name: '新建远端任务' }).click();
   await expect(page).toHaveURL(/deviceId=browser-remote/);
-  await expect(page.getByRole('combobox', { name: '执行位置' })).toHaveValue('0');
+  await expect(page.getByRole('combobox', { name: '执行位置' }).locator('option:checked')).toContainText('浏览器远端开发机');
   await expect(page.getByRole('combobox', { name: '执行位置' })).toContainText('远端项目');
   const list = await request.get('/api/agent-sessions', { headers });
   const { sessions } = await list.json() as { sessions: Array<{ id: string; deviceId: string }> };

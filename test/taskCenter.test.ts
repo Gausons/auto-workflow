@@ -66,6 +66,39 @@ test('local history diagnostics refresh in deltas and preserve records without c
   assert.deepEqual(device?.historySources?.[0], { id: 'codex', label: 'Codex', status: 'error', sessionCount: 0, skipped: 1 });
 });
 
+test('device card removal persists across heartbeats and preserves active work with tenant and owner checks', async t => {
+  const { database, center, cmd } = fixture(t);
+  await cmd(heartbeat([{ nativeId: 'remote-session', agent: 'claude', title: '保留会话' }]));
+  await cmd({ action: 'create', title: '保留任务' });
+  const task = (await center.snapshot()).tasks[0];
+  await cmd(handoff(task));
+  const before = await center.snapshot();
+  const remove = { action: 'remove-device-card', deviceId: 'remote' };
+  await assert.rejects(center.command(remove, { id: 'another-user' }), { statusCode: 403 });
+  const other = createTaskCenter({ database, tenantId: 'other', history });
+  await assert.rejects(other.command(remove, actor), { statusCode: 404 });
+  await assert.rejects(cmd({ ...remove, deviceId: '' }), { statusCode: 400 });
+  await assert.rejects(cmd({ ...remove, deviceId: 'missing' }), { statusCode: 404 });
+  await Promise.all([cmd(remove), cmd(heartbeat()), cmd(remove)]);
+  const after = await center.snapshot();
+  assert.equal(after.devices.find(device => device.id === 'remote')?.cardHidden, true);
+  assert.deepEqual(after.tasks, before.tasks);
+  assert.deepEqual(after.sessions, before.sessions);
+  assert.deepEqual(after.handoffs, before.handoffs);
+  assert.equal(after.devices.find(device => device.id === 'remote')?.owner, actor.id);
+  const delta = await center.changes(before.syncVersion || 0);
+  assert.equal(delta.reset, false);
+  if (!delta.reset) assert.equal(delta.changes.devices?.upsert.find(device => device.id === 'remote')?.cardHidden, true);
+  const restarted = createTaskCenter({ database, tenantId: 'default', history });
+  assert.equal((await restarted.snapshot()).devices.find(device => device.id === 'remote')?.cardHidden, true);
+  await cmd({ action: 'restore-device-card', deviceId: 'remote' });
+  assert.equal((await center.snapshot()).devices.find(device => device.id === 'remote')?.cardHidden, false);
+  await cmd({ action: 'remove-device-card', deviceId: 'local' });
+  assert.equal((await center.snapshot()).devices.find(device => device.id === 'local')?.cardHidden, true);
+  await cmd({ action: 'restore-device-card', deviceId: 'local' });
+  assert.equal((await center.snapshot()).devices.find(device => device.id === 'local')?.cardHidden, false);
+});
+
 test('task linking, context versions, optimistic concurrency and tenant isolation', async t => {
   const { database, center, cmd } = fixture(t);
   const { taskId } = await cmd({ action: 'create', title: '登录修复', sessionId: source.id });
@@ -180,6 +213,10 @@ test('HTTP auth, viewer write rejection, and task UI assets', async t => {
   assert.equal((await req('/api/task-center', 'GET', null, viewer.token)).data.tasks?.length, 1);
   assert.equal((await req('/api/task-center/changes?since=0', 'GET', null, viewer.token)).status, 200);
   assert.equal((await req('/api/task-center', 'POST', { action: 'create', title: 'forbidden' }, viewer.token)).status, 403);
+  for (const action of ['remove-device-card', 'restore-device-card']) {
+    assert.equal((await req('/api/task-center', 'POST', { action, deviceId: 'local' })).status, 401);
+    assert.equal((await req('/api/task-center', 'POST', { action, deviceId: 'local' }, viewer.token)).status, 403);
+  }
   const invalidPreview = heartbeat([{ nativeId: 'invalid', agent: 'claude', title: '非法预览', remoteHistory: {
     offset: 0, total: 1, sourcePartial: false, truncated: false, messages: [{ role: 'user', text: '\ud800' }]
   } }]);

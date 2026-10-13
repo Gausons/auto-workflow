@@ -83,7 +83,7 @@ export function createTaskCenter({ database, tenantId, history, environment = {}
   function snapshot(local: LocalCatalog, data = database.readTaskCenter(tenantId)): TaskCenterData {
     const synthetic = new Set(data.sessions.filter(s => ['codexExecution', 'agentExecution', 'conversation'].includes(s.source || '')).map(s => `${s.deviceId}:${s.nativeId}`));
     const sessions = [...local.sessions.filter(s => !synthetic.has(`local:${s.nativeId}`)), ...data.sessions.filter(s => ['codexExecution', 'agentExecution', 'conversation'].includes(s.source || '') || !synthetic.has(`${s.deviceId}:${s.nativeId}`)).map(s => ['codexExecution', 'agentExecution', 'conversation'].includes(s.source || '') && s.source !== 'conversation' && s.deviceId === 'local' ? { ...s, historyId: local.sessions.find(l => l.nativeId === s.nativeId)?.historyId } : s)];
-    return { ...data, devices: [local.device, ...data.devices].map(d => ({ ...d, online: online(d) })),
+    return { ...data, devices: [local.device, ...data.devices].map(d => ({ ...d, online: online(d), cardHidden: data.hiddenDeviceIds?.includes(d.id) || false })),
       sessions: sessions.map(remoteHistorySummary), tasks: sortTasks(data.tasks.map(task => ({ ...task, content: taskContent(task) }))) };
   }
   async function command(rawInput: unknown, actor: Actor) {
@@ -114,6 +114,16 @@ export function createTaskCenter({ database, tenantId, history, environment = {}
         return session;
       };
       switch (input.action) {
+        case 'remove-device-card':
+        case 'restore-device-card': {
+          const id = required(input.deviceId, 80);
+          const device = find(allDevices, id);
+          if (device.id !== 'local' && device.owner !== actor.id) throw httpError(403, '设备属于其他账号');
+          const hidden = new Set(data.hiddenDeviceIds || []);
+          if (input.action === 'remove-device-card') hidden.add(id); else hidden.delete(id);
+          data.hiddenDeviceIds = [...hidden];
+          return { deviceId: id };
+        }
         case 'create': {
           const task = saveTask(input.title, input.context, input.content);
           if (input.sessionId) attach(task, input.sessionId);

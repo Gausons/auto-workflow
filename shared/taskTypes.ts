@@ -76,6 +76,7 @@ export interface DeviceHistorySource {
 }
 
 export interface Device {
+  cardHidden?: boolean;
   id: string;
   name: string;
   owner?: string;
@@ -275,6 +276,7 @@ export interface DirectoryRequest {
 }
 
 export interface TaskCenterData {
+  hiddenDeviceIds?: string[];
   /** Monotonic tenant-local version used to reconcile realtime invalidations. */
   syncVersion?: number;
   tasks: Task[];
