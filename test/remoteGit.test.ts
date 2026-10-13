@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, writeFile, readFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile, mkdir, symlink } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
@@ -11,6 +11,7 @@ import { createTaskCenter } from '../src/taskCenter.js';
 import { createCodexExecution } from '../src/codexExecution.js';
 import { createRemoteGit } from '../src/remoteGit.js';
 import { syncRemoteGit } from '../src/remoteGitWorker.js';
+import { RemoteCodexWorker } from '../src/remoteCodexWorker.js';
 import { gitBranches, switchGitBranch } from '../src/taskWorkspace.js';
 
 async function fixture(t: import('node:test').TestContext) {
@@ -35,7 +36,7 @@ async function fixture(t: import('node:test').TestContext) {
   const input = (action: 'list' | 'create' | 'switch' = 'list', branch?: string) => ({ requestId: randomUUID(), deviceId: 'remote', projectId: 'p', action, branch });
   const sync = () => syncRemoteGit(worker, db.readTaskCenter('default'));
   t.after(async () => { execution.close(); db.close(); await rm(root, { recursive: true, force: true }); });
-  return { root, git, db, owner, actor, service, execution, input, sync, worker, loseReport: () => { loseReport = true; } };
+  return { root, git, db, owner, actor, service, execution, center, input, sync, worker, loseReport: () => { loseReport = true; } };
 }
 
 test('remote branches list, create and switch, preserving dirty files on conflict', async t => {
@@ -123,11 +124,98 @@ test('worker revalidates the published project before touching a repository', as
 
 test('only the requester who selected a remote directory may use it for Git', async t => {
   const f = await fixture(t);
-  const cwd = path.join(f.root, 'selected'); await mkdir(cwd);
+  const cwd = await mkdtemp(path.join(os.tmpdir(), 'selected-git-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  await promisify(execFile)('git', ['-C', cwd, 'init', '-b', 'main']);
   f.db.mutateTaskCenter('default', data => { data.directoryRequests = [{ id: randomUUID(), deviceId: 'remote', projectId: 'p', requestedBy: f.actor.id, status: 'completed', cwd, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }]; });
   assert.throws(() => f.service.submit({ ...f.input(), cwd }, f.owner), { statusCode: 403 });
   const request = f.service.submit({ ...f.input(), cwd }, f.actor); await f.sync();
-  assert.equal(f.service.status(request.id, f.actor).result?.current, 'main');
+  assert.equal(f.service.status(request.id, f.actor).result?.repository, true);
+});
+
+test('common directories beneath the published project need no additional picker authorization', async t => {
+  const f = await fixture(t), cwd = path.join(f.root, 'repositories', 'project');
+  await mkdir(cwd, { recursive: true });
+  await promisify(execFile)('git', ['-C', cwd, 'init', '-b', 'main']);
+  await writeFile(path.join(cwd, 'README.md'), 'nested project');
+  await promisify(execFile)('git', ['-C', cwd, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'add', '.']);
+  await promisify(execFile)('git', ['-C', cwd, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-m', 'init']);
+  f.db.mutateTaskCenter('default', data => { data.sessions.push({ id: 'common', deviceId: 'remote', agent: 'codex', cwd, title: '已有仓库', updatedAt: new Date().toISOString() }); });
+  assert.ok((await f.execution.targets()).projects[0].commonDirectories.includes(cwd));
+  assert.equal(f.db.readTaskCenter('default').directoryRequests?.length || 0, 0);
+  const list = f.service.submit({ ...f.input(), cwd: `${cwd}/` }, f.actor); await f.sync();
+  assert.equal(f.service.status(list.id, f.actor).result?.current, 'main');
+  const input = { ...f.input('create', 'feature/common'), cwd };
+  const created = f.service.submit(input, f.actor); await f.sync();
+  assert.equal(f.service.status(created.id, f.actor).result?.current, 'feature/common');
+  assert.equal(f.service.submit(input, f.actor).id, created.id);
+  const back = f.service.submit({ ...f.input('switch', 'main'), cwd }, f.actor); await f.sync();
+  assert.equal(f.service.status(back.id, f.actor).result?.current, 'main');
+});
+
+test('directory grants are reusable across agents on the same device, but never across users or devices', async t => {
+  const f = await fixture(t), cwd = await mkdtemp(path.join(os.tmpdir(), 'shared-git-grant-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  await promisify(execFile)('git', ['-C', cwd, 'init', '-b', 'main']);
+  const grant = { id: randomUUID(), deviceId: 'remote', projectId: 'another-agent', requestedBy: f.actor.id, status: 'completed' as const, cwd, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  f.db.mutateTaskCenter('default', data => { data.directoryRequests = [grant]; });
+  assert.throws(() => f.service.submit({ ...f.input(), cwd }, f.owner), { statusCode: 403 });
+  const request = f.service.submit({ ...f.input(), cwd }, f.actor); await f.sync();
+  assert.equal(f.service.status(request.id, f.actor).status, 'completed');
+  for (const patch of [{ deviceId: 'another-device' }, { status: 'pending' as const }, { status: 'failed' as const }]) {
+    f.db.mutateTaskCenter('default', data => { data.directoryRequests = [{ ...grant, ...patch }]; });
+    assert.throws(() => f.service.submit({ ...f.input(), cwd }, f.actor), { statusCode: 403 });
+  }
+});
+
+test('remote directory roots reject traversal, sibling prefixes and symlinks escaping the project', async t => {
+  const f = await fixture(t), outside = await mkdtemp(path.join(os.tmpdir(), 'outside-git-'));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  await promisify(execFile)('git', ['-C', outside, 'init', '-b', 'main']);
+  for (const cwd of [`${f.root}/../${path.basename(outside)}`, `${f.root}-sibling`, 'relative/repo']) {
+    assert.throws(() => f.service.submit({ ...f.input(), cwd }, f.actor), { statusCode: 403 });
+  }
+  // An unverified history or queued execution is not a directory grant.
+  f.db.mutateTaskCenter('default', data => { data.sessions.push({ id: 'untrusted', deviceId: 'remote', agent: 'codex', cwd: outside, title: '未授权路径', updatedAt: new Date().toISOString() }); });
+  assert.throws(() => f.service.submit({ ...f.input(), cwd: outside }, f.actor), { statusCode: 403 });
+  const link = path.join(f.root, 'escape'); await symlink(outside, link, 'dir');
+  const request = f.service.submit({ ...f.input('create', 'must-not-exist'), cwd: link }, f.actor); await f.sync();
+  assert.equal(f.service.status(request.id, f.actor).status, 'failed');
+  assert.match(f.service.status(request.id, f.actor).message!, /允许的目录范围/);
+  assert.ok(!(await gitBranches(outside)).branches.includes('must-not-exist'));
+  const recovery = f.service.submit(f.input(), f.actor); await f.sync();
+  assert.equal(f.service.status(recovery.id, f.actor).status, 'completed');
+});
+
+test('new tasks execute in project subdirectories or reusable selected directories without another picker', async t => {
+  const f = await fixture(t), nested = path.join(f.root, 'nested'), outside = await mkdtemp(path.join(os.tmpdir(), 'selected-execution-'));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  await mkdir(nested);
+  const grant = { id: randomUUID(), deviceId: 'remote', projectId: 'another-agent', requestedBy: f.actor.id, status: 'completed' as const, cwd: outside, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  f.db.mutateTaskCenter('default', data => { data.directoryRequests = [grant]; });
+  const starts: string[] = [];
+  const worker = new RemoteCodexWorker({ deviceId: 'remote', workspace: f.root, directory: path.join(f.root, 'execution-journal'),
+    request: (method, body) => method === 'GET' ? f.center.snapshot() : f.execution.action(body as Parameters<typeof f.execution.action>[0], f.owner),
+    runnerFactory: update => ({ projects: f.worker.projects, close() {}, start: async (job: { id: string; cwd: string }) => { starts.push(job.cwd); update({ ...job, status: 'completed' }); } }) });
+  t.after(() => worker.close());
+  for (const cwd of [nested, outside]) {
+    const task = await f.center.command({ action: 'create', title: '在已允许目录执行' }, f.actor);
+    const input = { taskId: task.taskId, revision: 1, projectId: 'p', deviceId: 'remote', cwd };
+    if (cwd === outside) {
+      await assert.rejects(f.execution.execute(input, f.owner), { statusCode: 403 });
+      await assert.rejects(f.execution.execute(input), { statusCode: 403 });
+    }
+    const launched = await f.execution.execute(input, f.actor);
+    assert.equal(f.db.readTaskCenter('default').executions.find(job => job.id === launched.executionId)?.directoryRequestId, cwd === outside ? grant.id : undefined);
+    await assert.rejects(f.execution.execute(input, f.actor), { statusCode: 409 });
+    await worker.sync();
+    assert.equal(f.db.readTaskCenter('default').executions.find(job => job.id === launched.executionId)?.status, 'completed');
+  }
+  await worker.sync();
+  assert.deepEqual(starts, [nested, outside]);
+  const link = path.join(f.root, 'escape-execution'); await symlink(outside, link, 'dir');
+  await assert.rejects(worker.validateTarget({ id: randomUUID(), projectId: 'p', cwd: link }, f.db.readTaskCenter('default')), /允许的目录范围/);
+  assert.equal(f.db.readTaskCenter('other').executions, undefined);
 });
 
 test('an expired claim cannot start a delayed Git mutation', async t => {

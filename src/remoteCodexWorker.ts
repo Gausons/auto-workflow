@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile, rename, realpath, stat } from 'node:fs/promises';
 import { CodexRunner, pickNativeDirectory } from './codexExecution.js';
 import { syncRemoteGit } from './remoteGitWorker.js';
+import { resolveRemoteDirectory } from './remoteDirectory.js';
 import { AcpPreferredRunner, AcpTaskRunner, AgentRunnerSet, configuredAcpAgents } from './acpAgent.js';
 import { contextPrompt, freezeContext, readContext, type ContextDelivery, type ContextEntry, type SessionContext } from './contextCompiler.js';
 import { verifyBundle, verifySnapshot } from '@auto-workflow/context-engine';
@@ -92,8 +93,10 @@ export class RemoteCodexWorker {
   async validateTarget(job: RemoteJob, snapshot: TaskCenterData) {
     const project = (await this.projects()).find(item => item.id === job.projectId && (item.agent || 'codex') === (job.agent || 'codex'));
     const selection = snapshot.directoryRequests?.find(item => item.id === job.directoryRequestId);
-    if (!project || (project.cwd !== job.cwd && (!selection || selection.status !== 'completed' || selection.deviceId !== this.deviceId || selection.projectId !== project.id || selection.cwd !== job.cwd))) throw new Error('待执行项目不在本机允许的工作目录内');
-    if (!job.cwd || !(await stat(await realpath(job.cwd))).isDirectory()) throw new Error('目标工作目录已不可用');
+    if (!project || !job.cwd) throw new Error('待执行项目不在本机允许的工作目录内');
+    const selectedRoot = selection?.status === 'completed' && selection.deviceId === this.deviceId ? selection.cwd : null;
+    const cwd = await resolveRemoteDirectory(job.cwd, [project.cwd, ...(selectedRoot ? [selectedRoot] : [])]);
+    if (!(await stat(cwd)).isDirectory()) throw new Error('目标工作目录已不可用');
     if (job.historySessionId) {
       if (job.agent !== 'codex' || !job.resumeThreadId || !this.contextSource) throw new Error('原会话恢复信息不完整');
       const source = (await this.contextSource.catalog()).sessions.find(item => item.agent === 'codex' && item.sessionId === job.resumeThreadId);

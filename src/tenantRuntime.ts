@@ -174,7 +174,7 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     }
     if (url.pathname === '/api/task-center/directory-action') { sendJson(res, 200, codexExecution.directoryAction(await readJson(req), requestIdentity.getStore()!.user)); return; }
     if (url.pathname === '/api/task-center/codex') { sendJson(res, 200, await codexExecution.targets()); return; }
-    if (url.pathname === '/api/task-center/execute') { sendJson(res, 202, await codexExecution.execute(await readJson(req, 15_000_000))); return; }
+    if (url.pathname === '/api/task-center/execute') { sendJson(res, 202, await codexExecution.execute(await readJson(req, 15_000_000), requestIdentity.getStore()!.user)); return; }
     if (url.pathname === '/api/task-center/execution-action') { sendJson(res, 200, await codexExecution.action(await readJson(req, 8_000_000), requestIdentity.getStore()!.user)); return; }
     if (url.pathname === '/api/task-center') {
       sendJson(res, 200, req.method === 'GET' ? await taskCenter.snapshot() : await taskCenter.command(await readJson(req), requestIdentity.getStore()!.user)); return;

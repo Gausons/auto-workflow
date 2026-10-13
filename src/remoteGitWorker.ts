@@ -1,7 +1,8 @@
 import path from 'node:path';
-import { mkdir, readFile, writeFile, rename, realpath } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import type { AgentProject, GitRequest, TaskCenterData } from '../shared/taskTypes.js';
 import { gitBranches, switchGitBranch } from './taskWorkspace.js';
+import { resolveRemoteDirectory, selectedRemoteDirectory } from './remoteDirectory.js';
 
 type Request = (method: string, body?: unknown, endpoint?: string) => unknown;
 export async function syncRemoteGit(options: { request: Request; deviceId: string; directory: string; projects: () => Promise<AgentProject[]> }, snapshot: TaskCenterData) {
@@ -23,8 +24,9 @@ export async function syncRemoteGit(options: { request: Request; deviceId: strin
       await writeFile(file, JSON.stringify(receipt), { flag: 'wx', mode: 0o600 });
       try {
         const project = (await options.projects()).find(p => p.id === claimed.projectId);
-        if (!project || (claimed.cwd !== project.cwd && !snapshot.directoryRequests?.some(r => r.status === 'completed' && r.deviceId === options.deviceId && r.projectId === project.id && r.requestedBy === claimed.requestedBy && r.cwd === claimed.cwd))) throw new Error('分支工作目录未经目标设备授权');
-        const cwd = await realpath(claimed.cwd);
+        if (!project) throw new Error('分支工作目录未经目标设备授权');
+        const selection = selectedRemoteDirectory(snapshot.directoryRequests, options.deviceId, claimed.requestedBy, claimed.cwd);
+        const cwd = await resolveRemoteDirectory(claimed.cwd, [project.cwd, ...(selection?.cwd ? [selection.cwd] : [])]);
         // Discovery can be slow. Recheck and renew the claim immediately before bounded Git commands.
         await options.request('POST', { requestId: candidate.id, action: 'verify' }, '/api/task-center/git-action');
         const result = claimed.action === 'list' ? await gitBranches(cwd) : await switchGitBranch(cwd, claimed.branch, claimed.action === 'create');

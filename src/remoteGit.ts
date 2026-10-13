@@ -1,5 +1,6 @@
 import type { GitBranchState, GitRequest, TaskCenterData } from '../shared/taskTypes.js';
 import { httpError } from './rbac.js';
+import { insideRemoteDirectory, selectedRemoteDirectory } from './remoteDirectory.js';
 
 interface Database {
   readTaskCenter(tenantId: string): TaskCenterData;
@@ -43,7 +44,7 @@ export function createRemoteGit(database: Database, tenantId: string) {
         if (!device.capabilities?.gitBranches) throw httpError(422, '请升级并重启目标设备连接器以启用分支管理');
         if (Date.now() - Date.parse(device.lastSeen) > 90_000) throw httpError(409, '目标设备离线，请连接后再操作分支');
         const cwd = input.cwd?.trim() || project.cwd;
-        if (cwd !== project.cwd && !data.directoryRequests?.some(r => r.deviceId === device.id && r.projectId === project.id && r.requestedBy === actor.id && r.status === 'completed' && r.cwd === cwd)) throw httpError(403, '请先在目标设备使用“选择目录”授权此工作目录');
+        if (!insideRemoteDirectory(project.cwd, cwd) && !selectedRemoteDirectory(data.directoryRequests, device.id, actor.id, cwd)) throw httpError(403, '请先在目标设备使用“选择目录”授权此工作目录');
         for (const r of data.gitRequests || []) expire(r);
         if (input.action !== 'list') {
           assertNoRemoteGitMutation(data, device.id);

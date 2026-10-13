@@ -162,6 +162,47 @@ test('remote task setup shows the selected device state without server execution
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
 });
 
+test('a common repository under the remote workspace reads branches and submits a task without another directory picker', async ({ page, request }) => {
+  const { token } = await (await request.post('/api/auth/login', { data: { username: 'owner', password } })).json() as { token: string };
+  const headers = { Authorization: `Bearer ${token}` }, deviceId = 'common-directory-device', cwd = '/remote/work/yonclaw';
+  expect((await request.post('/api/task-center', { headers, data: {
+    action: 'heartbeat', deviceId, name: '常用目录设备', agents: ['codex'], capabilities: { gitBranches: true },
+    codexProjects: [{ id: 'common-project', name: 'Codex', cwd: '/remote/work' }],
+    sessions: [{ nativeId: 'existing-common-session', agent: 'codex', title: '已有仓库', cwd }]
+  } })).ok()).toBeTruthy();
+  // A controlled connector reports Git results; no local Agent is launched.
+  const branchStatuses: number[] = [];
+  await page.route('**/api/task-center/git', async route => {
+    const response = await route.fetch();
+    branchStatuses.push(response.status());
+    const pending = await response.json() as { id: string; status?: string };
+    if (pending.status === 'pending') {
+      expect((await request.post('/api/task-center/git-action', { headers, data: { requestId: pending.id, action: 'claim' } })).ok()).toBeTruthy();
+      expect((await request.post('/api/task-center/git-action', { headers, data: { requestId: pending.id, action: 'report', status: 'completed', result: { repository: true, current: 'main', branches: ['main'], changes: 0 } } })).ok()).toBeTruthy();
+    }
+    await route.fulfill({ response });
+  });
+  let directoryPickers = 0;
+  page.on('request', req => { if (req.url().includes('/api/task-center/directory-picker') && req.method() === 'POST') directoryPickers++; });
+  await login(page);
+  await page.goto(`/tasks/new?deviceId=${deviceId}`);
+  await expect(page.getByLabel('Git 分支', { exact: true })).toContainText('main');
+  await page.getByLabel('工作目录：/remote/work', { exact: true }).click();
+  await page.getByRole('button', { name: cwd, exact: true }).click();
+  await expect(page.getByLabel(`工作目录：${cwd}`, { exact: true })).toBeVisible();
+  await expect.poll(() => branchStatuses.length).toBeGreaterThanOrEqual(2);
+  await expect(page.getByLabel('Git 分支', { exact: true })).toContainText('main');
+  await expect(page.getByText(/授权此工作目录|分支读取失败/)).toHaveCount(0);
+  await page.getByRole('textbox', { name: '任务描述' }).fill('常用目录直接执行回归');
+  const submitted = page.waitForResponse(response => response.url().endsWith('/api/task-center/execute') && response.request().method() === 'POST');
+  await page.getByRole('button', { name: '创建并发送任务' }).click();
+  expect((await submitted).status()).toBe(202);
+  const snapshot = await (await request.get('/api/task-center', { headers })).json() as { executions: Array<{ deviceId: string; cwd: string }> };
+  expect(snapshot.executions.some(job => job.deviceId === deviceId && job.cwd === cwd)).toBe(true);
+  expect(branchStatuses.every(status => status === 200)).toBe(true);
+  expect(directoryPickers).toBe(0);
+});
+
 test('auth form stays centered and usable on desktop and mobile', async ({ page }) => {
   for (const width of [1440, 375]) {
     await page.setViewportSize({ width, height: 900 });
