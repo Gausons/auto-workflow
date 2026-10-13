@@ -9,6 +9,7 @@ const marker = path.join(tmpdir(), `bugflow-e2e-root-${port}.txt`);
 await writeFile(marker, rootDir, { encoding: 'utf8', mode: 0o600 });
 const app = createApp({ rootDir, environment: {
   DEFAULT_TENANT_TOKEN: 'test-only-token-for-web-e2e-2026-long-enough',
+  LOCAL_EXECUTION_ENABLED: 'false',
   ACP_ENABLED: 'false',
   CODEX_EXECUTABLE: path.join(rootDir, 'unavailable-codex'),
   IDE_HISTORY_CODEX_DIR: path.join(rootDir, 'missing-codex-history'),

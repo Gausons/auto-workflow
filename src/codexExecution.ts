@@ -8,6 +8,7 @@ import { CodexDesktopBridge, readDesktopTerminal } from './codexDesktopBridge.js
 import { CodexAppServer } from './codexAppServer.js';
 import { AcpPreferredRunner, AcpTaskRunner, AgentRunnerSet, configuredAcpAgents } from './acpAgent.js';
 import { httpError } from './rbac.js';
+import { localExecutionEnabled } from './localExecution.js';
 import { remoteContinuationProject } from './remoteSession.js';
 import { assertNoRemoteGitMutation } from './remoteGit.js';
 import { execFile } from 'node:child_process';
@@ -397,6 +398,8 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
     if (!closing) database.mutateTaskCenter(tenantId, (data) => recordExecution(data, job));
   };
   const runnerEnvironment = { ...process.env, ...environment };
+  const canExecuteLocally = localExecutionEnabled(runnerEnvironment);
+  const requireLocalExecution = () => { if (!canExecuteLocally) throw httpError(409, '此设备仅运行工作台，请选择已连接的开发机执行'); };
   const runner = runnerFactory ? runnerFactory(update) : (() => {
     const fallback = new CodexRunner({ executable: environment.CODEX_EXECUTABLE || 'codex', environment: runnerEnvironment, onUpdate: update, desktopBridgeFactory: async (reader: ProtocolClient, threadId: string) => await CodexDesktopBridge.connect(reader, threadId, runnerEnvironment) as unknown as ProtocolClient | null, desktopOpener: async () => {} });
     const codex = new AcpTaskRunner({
@@ -417,6 +420,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
     }
   });
   const localProjects = async (fresh = false) => {
+    if (!canExecuteLocally) return [];
     if (!fresh && localProjectCache.projects.length && Date.now() - localProjectCache.at < 60_000) return localProjectCache.projects;
     const projects = (await runner.projects!(workspace())).map((project) => ({ ...project, deviceId: 'local', deviceName: '工作台所在设备', online: true, commonDirectories: [] }));
     localProjectCache = { at: Date.now(), projects };
@@ -424,6 +428,10 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
   };
   return {
     launch(job: RunnerJob) {
+      if (job.deviceId === 'local' && !canExecuteLocally) {
+        const current = database.readTaskCenter(tenantId).executions.find(item => item.id === job.id) || job;
+        update({ ...current, status: current.status === 'queued' ? 'failed' : 'unknown', message: '此设备仅运行工作台，未启动 Agent；已有执行结果请在原设备核对', updatedAt: timestamp() }); return;
+      }
       if (job.deviceId === 'local') void Promise.resolve().then(() => runner.start!(job)).catch((error: unknown) => update({ ...(database.readTaskCenter(tenantId).executions.find((item) => item.id === job.id) || job), status: 'unknown', message: `启动结果待核对：${asError(error).message}`, updatedAt: timestamp() }));
     },
     async targets() {
@@ -433,7 +441,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
       const data = database.readTaskCenter(tenantId), devices = data.devices;
       for (const d of devices) for (const p of d.codexProjects || []) projects.push({ ...p, deviceId: d.id, deviceName: d.name, online: Date.now() - Date.parse(d.lastSeen) < 90000, commonDirectories: [], gitBranches: d.capabilities?.gitBranches === true });
       projects = projects.map((project) => ({ ...project, commonDirectories: frequentDirectories(data, project.deviceId, project.cwd) }));
-      return { projects, localError };
+      return { projects, localError, localExecutionEnabled: canExecuteLocally };
     },
     async git(input: GitInput) {
       if (input.deviceId && input.deviceId !== 'local') throw httpError(422, '远端设备暂不支持网页分支管理');
@@ -539,6 +547,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
       if (!remote && !history) throw httpError(503, '历史会话服务不可用');
       const session = remote ? { ...remote, sessionId: remote.nativeId } : (await history!.detail(id, new URLSearchParams({ limit: '1' }))).session;
       const deviceId = remote?.deviceId || 'local';
+      if (deviceId === 'local') requireLocalExecution();
       if (session.agent !== 'codex' || !session.sessionId) throw httpError(422, '此会话暂不支持网页原会话续聊，请在对应 Agent 中继续');
       if (session.archived) throw httpError(409, '请先在 Codex 客户端取消归档，再继续此会话');
       // Resolve the session through the tenant history reader; never accept a native thread ID or cwd from the browser.
@@ -661,6 +670,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
           return { executionId: saved.id };
         });
       }
+      requireLocalExecution();
       if (input.action === 'stop') await runner.stop!(job.id);
       else if (input.action === 'respond') await runner.respond!(job.id, input);
       else if (input.action === 'reconcile') await runner.reconcile!(job);

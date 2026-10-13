@@ -659,7 +659,7 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
 
   const agentHistory = createAgentHistory({ environment, tenantId: tenant.id, rootDir, workspace: () => state.config.codexWorkspaceDir });
   const sessionDelivery = createSessionDelivery({ history: agentHistory, environment });
-  const taskCenter = createTaskCenter({ database, tenantId: tenant.id, history: agentHistory });
+  const taskCenter = createTaskCenter({ database, tenantId: tenant.id, history: agentHistory, environment });
   const taskCenterStream = createTaskCenterStream(database, tenant.id);
   const deviceControl = createDeviceControl(database, tenant.id);
   const codexExecution = createCodexExecution({ database, attachmentRoot: path.join(rootDir, '.workflow-data', 'attachments', createHash('sha256').update(tenant.id).digest('hex')), tenantId: tenant.id, workspace: () => state.config.codexWorkspaceDir, history: agentHistory, environment });

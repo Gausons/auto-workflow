@@ -84,6 +84,7 @@ export interface Device {
   transport: 'manual' | 'connector';
   online?: boolean;
   historySources?: DeviceHistorySource[];
+  localExecutionEnabled?: boolean;
   codexProjects?: AgentProject[];
   capabilities?: { resumeCodex?: boolean; gitBranches?: boolean };
 }

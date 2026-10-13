@@ -73,6 +73,14 @@ describe('DevicesPage', () => {
     expect(screen.queryByRole('link', { name: '新建本地任务' })).toBeNull();
   });
 
+  it.each(['read', 'work.execute'])('shows service-only mode without probing local execution for %s', async permission => {
+    const fetchMock = setup([permission], false, { projects: [], localExecutionEnabled: false }, { ...snapshot, devices: [{ ...snapshot.devices[0], localExecutionEnabled: false }] });
+    expect(await screen.findByText('仅运行工作台')).toBeTruthy();
+    expect(screen.queryByText(/未找到历史目录|本地执行不可用|未配置历史来源/)).toBeNull();
+    expect(screen.queryByRole('link', { name: '新建本地任务' })).toBeNull();
+    expect(fetchMock.mock.calls.some(([path]) => path === '/api/task-center/codex')).toBe(false);
+  });
+
   it('shows local execution independently of whether historical sessions exist', async () => {
     setup(['work.execute'], false, { projects: [{ id: 'codex', deviceId: 'local', name: 'Codex', cwd: '/repo' }] });
     expect(await screen.findByText('可执行 Agent：Codex')).toBeTruthy();

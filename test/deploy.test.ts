@@ -92,6 +92,7 @@ esac
       env: { ...process.env, COMMAND_LOG: log, REVISION: revision } });
     assert.equal(result.status, 1, result.stderr);
     const commands = (await readFile(log, 'utf8')).split('\n');
+    assert.ok(commands.some(command => command.startsWith('create ') && command.includes('--env LOCAL_EXECUTION_ENABLED=false')));
     assert.ok(commands.includes('rm -f auto-workflow'));
     assert.ok(commands.some(command => /^rename auto-workflow-previous-.* auto-workflow$/.test(command)));
     assert.ok(commands.includes('update --restart=unless-stopped auto-workflow'));

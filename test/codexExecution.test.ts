@@ -44,6 +44,50 @@ class FakeClient extends EventEmitter {
 const job = () => ({ id: 'job-1', taskId: 'task-1', title: '任务', prompt: '实现功能', cwd: '/repo', projectId: 'project-1', status: 'queued' });
 const last = <T>(values: T[]): T => { const value = values.at(-1); assert.ok(value); return value; };
 
+test('service-only mode skips local discovery, rejects local work and retains tenant-scoped remote execution', async t => {
+  const db = openDatabase(); t.after(() => db.close());
+  for (const id of ['default', 'other']) db.createTenant({ id, token: id.repeat(40) });
+  const center = createTaskCenter({ database: db, tenantId: 'default', history: { catalog: async () => ({ providers: [], sessions: [] }) }, environment: { LOCAL_EXECUTION_ENABLED: 'false' } });
+  const created = await center.command({ action: 'create', title: '远端任务' }, { id: 'owner' });
+  await center.command({ action: 'heartbeat', deviceId: 'remote', name: '开发机', agents: ['codex'], codexProjects: [{ id: 'remote-project', name: 'Codex', cwd: '/remote/repo' }], sessions: [] }, { id: 'owner' });
+  let discoveries = 0, starts = 0, picks = 0;
+  const factory: ExecutionFactory = () => ({ projects: async () => { discoveries++; throw new Error('must not discover'); }, start: async () => { starts++; }, close() {} });
+  const service = createCodexExecution({ database: db, tenantId: 'default', workspace: () => '/repo', environment: { LOCAL_EXECUTION_ENABLED: 'false' }, runnerFactory: factory, directoryPicker: async () => { picks++; return '/repo'; } });
+  const other = createCodexExecution({ database: db, tenantId: 'other', workspace: () => '/other', environment: { LOCAL_EXECUTION_ENABLED: 'false' }, runnerFactory: factory });
+  t.after(() => { service.close(); other.close(); });
+  const targets = await service.targets();
+  assert.equal(targets.localExecutionEnabled, false);
+  assert.equal(targets.localError, null);
+  assert.deepEqual(targets.projects.map(project => project.deviceId), ['remote']);
+  assert.deepEqual((await other.targets()).projects, []);
+  assert.equal((await center.snapshot()).devices[0].localExecutionEnabled, false);
+  await assert.rejects(service.execute({ taskId: created.taskId, revision: 1, projectId: 'local', deviceId: 'local' }), /请选择可用/);
+  await assert.rejects(service.git({ action: 'list', deviceId: 'local', projectId: 'local' }), /请选择本地执行目标/);
+  await assert.rejects(service.pickDirectory({ deviceId: 'local' }), /目标机器不可用/);
+  assert.equal(db.readTaskCenter('default').executions.length, 0);
+  const input = { taskId: created.taskId, revision: 1, projectId: 'remote-project', deviceId: 'remote' };
+  const result = await service.execute(input);
+  await assert.rejects(service.execute(input), /任务已更新|已有执行/);
+  assert.equal(db.readTaskCenter('default').executions[0].id, result.executionId);
+  assert.equal(db.readTaskCenter('default').executions.length, 1);
+  assert.equal(db.readTaskCenter('other').executions.length, 0);
+  assert.equal(discoveries, 0); assert.equal(starts, 0); assert.equal(picks, 0);
+});
+
+test('enabled local discovery reports real failures and can recover on refresh', async t => {
+  const db = openDatabase(); t.after(() => db.close()); db.createTenant({ id: 'default', token: 'x'.repeat(32) });
+  let failed = true;
+  const service = createCodexExecution({ database: db, tenantId: 'default', workspace: () => '/repo', environment: { LOCAL_EXECUTION_ENABLED: 'true' }, runnerFactory: () => ({
+    projects: async () => { if (failed) throw new Error('真实的启动失败'); return [{ id: 'p', cwd: '/repo' }]; }, close() {}
+  }) });
+  t.after(() => service.close());
+  assert.equal((await service.targets()).localError, '真实的启动失败');
+  failed = false;
+  const recovered = await service.targets();
+  assert.equal(recovered.localError, null);
+  assert.equal(recovered.projects[0].deviceId, 'local');
+});
+
 test('git operations reuse the recently discovered local target', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'codex-git-target-')); t.after(() => rm(root, { recursive: true, force: true }));
   await promisify(execFile)('git', ['-C', root, 'init', '-b', 'main']);

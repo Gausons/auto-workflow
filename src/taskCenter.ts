@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { taskContent, taskTitle } from '../shared/taskContent.js';
 import { hostname } from 'node:os';
+import { localExecutionEnabled } from './localExecution.js';
 import { httpError } from './rbac.js';
 import { validateRemoteHistory, remoteHistorySummary } from './remoteHistory.js';
 import { sortTasks, taskCenterDelta, type TaskCenterChangeIds } from '../shared/taskCenterSync.js';
@@ -66,7 +67,8 @@ const taskContext = (value: InputRecord | Partial<TaskContext> = {}, title = '')
 };
 const inputRecord = (value: unknown): InputRecord => isRecord(value) ? value : {};
 
-export function createTaskCenter({ database, tenantId, history }: { database: TaskCenterDatabase; tenantId: string; history: TaskCenterHistory }) {
+export function createTaskCenter({ database, tenantId, history, environment = {} }: { database: TaskCenterDatabase; tenantId: string; history: TaskCenterHistory; environment?: Record<string, string | undefined> }) {
+  const canExecuteLocally = localExecutionEnabled(environment);
   async function catalog(): Promise<LocalCatalog> {
     const result = await history.catalog();
     const historySources = result.providers.map(provider => ({
@@ -74,7 +76,7 @@ export function createTaskCenter({ database, tenantId, history }: { database: Ta
       sessionCount: result.sessions.filter(session => session.agent === provider.id).length, skipped: provider.skipped || 0
     }));
     return {
-      device: { id: 'local', name: hostname(), agents: historySources.filter(source => source.status === 'available' || source.sessionCount > 0).map(source => source.id), historySources, lastSeen: now(), transport: 'manual' },
+      device: { id: 'local', name: hostname(), agents: historySources.filter(source => source.status === 'available' || source.sessionCount > 0).map(source => source.id), historySources, localExecutionEnabled: canExecuteLocally, lastSeen: now(), transport: 'manual' },
       sessions: result.sessions.map(s => ({ ...s, deviceId: 'local', nativeId: s.sessionId || s.id, historyId: s.id, excerpt: '' }))
     };
   }

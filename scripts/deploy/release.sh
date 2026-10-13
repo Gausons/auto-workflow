@@ -112,7 +112,7 @@ docker create --name auto-workflow --restart unless-stopped --init \
   --env DATABASE_DRIVER=postgres --env PGHOST=auto-workflow-postgres \
   --env PGDATABASE=auto_workflow --env PGUSER=auto_workflow --env PGPORT=5432 \
   --env "TENANT_ENV_DIR=$data/tenants" \
-  --env "CODEX_WORKSPACE_DIR=$data/workspace" --env ACP_ENABLED=false \
+  --env "CODEX_WORKSPACE_DIR=$data/workspace" --env LOCAL_EXECUTION_ENABLED=false --env ACP_ENABLED=false \
   --env CODEX_EXECUTABLE=/nonexistent/codex \
   "$image" > /dev/null
 created=true

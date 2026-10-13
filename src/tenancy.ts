@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import type { Tenant } from './database.js';
 import type { Environment } from './issueSources/types.js';
+import { localExecutionEnabled } from './localExecution.js';
 
 interface TenantDatabase {
   getTenant(id: string): Tenant | undefined;
@@ -49,6 +50,8 @@ export function tenantEnvironment(tenant: Pick<Tenant, 'id'>, rootDir: string, e
     if (prefix.test(key) || sourceEnvironmentPrefixes().some((value) => key.startsWith(value))) result[key] = value;
   }
   if (result.CODEX_WORKSPACE_DIR) result.CODEX_WORKSPACE_DIR = path.resolve(rootDir, result.CODEX_WORKSPACE_DIR);
+  // Deployment policy applies to every tenant and cannot be overridden by a tenant file.
+  result.LOCAL_EXECUTION_ENABLED = String(localExecutionEnabled(environment));
   return result;
 }
 

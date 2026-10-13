@@ -90,9 +90,9 @@ test('devices and task center have independent pages and navigation', async ({ p
   await expect(page.getByRole('heading', { name: '连接本机 Agent' })).toBeVisible();
   const localDevice = page.locator('article').filter({ has: page.getByText('工作台所在设备', { exact: true }) });
   await expect(localDevice).toContainText('服务运行中');
-  await expect(localDevice).toContainText('当前账号可见会话：0 个');
-  await expect(localDevice).toContainText('Codex · 未找到历史目录 · 0 个历史会话');
-  await expect(localDevice).toContainText('本地执行不可用：');
+  await expect(localDevice).toContainText('仅运行工作台');
+  await expect(localDevice).not.toContainText('未找到历史目录');
+  await expect(localDevice).not.toContainText('本地执行不可用');
   await expect(localDevice.getByText('在线', { exact: true })).toHaveCount(0);
   await expect(localDevice.getByRole('link', { name: '新建本地任务' })).toHaveCount(0);
   await expect(sidebar.getByRole('link', { name: '设备与 Agent', exact: true })).toHaveAttribute('aria-current', 'page');
@@ -110,6 +110,25 @@ test('devices and task center have independent pages and navigation', async ({ p
   await expect(page).toHaveURL(/\/devices$/);
   await expect(page.getByRole('heading', { name: '设备与 Agent', exact: true })).toBeVisible();
   await expect(taskViews).toHaveCount(0);
+});
+
+test('remote task setup shows the selected device state without server execution errors', async ({ page }) => {
+  await login(page);
+  let branchRequests = 0;
+  await page.route('**/api/task-center/codex', route => route.fulfill({ json: {
+    localExecutionEnabled: false, localError: null,
+    projects: [{ id: 'remote-project', name: 'Codex', deviceId: 'remote', deviceName: '开发机', cwd: '/repo', online: false, gitBranches: true }]
+  } }));
+  page.on('request', request => { if (request.url().includes('/api/task-center/git')) branchRequests++; });
+  await page.getByRole('link', { name: '新建任务', exact: true }).click();
+  await expect(page.getByText('所选设备离线，任务提交后将等待连接器上线。', { exact: false })).toBeVisible();
+  await expect(page.getByText(/ENOENT|工作台所在设备无法提供执行目标|分支读取失败/)).toHaveCount(0);
+  await page.getByLabel('Git 分支', { exact: true }).click();
+  await expect(page.getByText('设备连接后可读取和管理分支。')).toBeVisible();
+  expect(branchRequests).toBe(0);
+  await page.setViewportSize({ width: 390, height: 900 });
+  await expect(page.getByRole('textbox', { name: '任务描述' })).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
 });
 
 test('auth form stays centered and usable on desktop and mobile', async ({ page }) => {

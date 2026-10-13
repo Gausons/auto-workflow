@@ -8,7 +8,7 @@ const sessionId = 'a'.repeat(64);
 const snapshot = { tasks: [], sessions: [{ id: sessionId, title: '来源会话', deviceId: 'local' }], devices: [], handoffs: [], executions: [] };
 const targets = { projects: [{ id: 'project-1', deviceId: 'local', deviceName: '本机', name: 'Codex', cwd: '/repo', online: true, defaultModel: 'model-1', models: [{ id: 'model-1', name: '模型一', defaultReasoningEffort: 'low', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }] }, { id: 'gpt-6-sol', name: 'GPT-6-Sol', defaultReasoningEffort: 'low', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }] }] }] };
 
-function setup(permissions = ['work.execute'], failExecute = false, remote = false, localError: string | null = null) {
+function setup(permissions = ['work.execute'], failExecute = false, remote = false, localError: string | null = null, online = true, localExecutionEnabled = true, empty = false) {
   location.hash = '#new-task';
   sessionStorage.setItem('bugflow.sessionToken', 'test-token');
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -18,7 +18,7 @@ function setup(permissions = ['work.execute'], failExecute = false, remote = fal
     const status = path === '/api/task-center/execute' && failExecute ? 500 : 200;
     if (path === '/api/task-center/git' && remote && body.action !== 'create') queueMicrotask(() => completeGit(body.requestId));
     const payload = path === '/api/bootstrap' ? { permissions }
-      : path === '/api/task-center/codex' ? remote ? { localError, projects: [{ ...targets.projects[0], deviceId: 'remote', deviceName: '开发机', gitBranches: true }] } : targets
+      : path === '/api/task-center/codex' ? empty ? { projects: [], localError, localExecutionEnabled } : remote ? { localError, localExecutionEnabled, projects: [{ ...targets.projects[0], online, deviceId: 'remote', deviceName: '开发机', gitBranches: true }] } : targets
         : path.startsWith('/api/task-center/git?') ? { status: 'completed', result: { repository: true, current: 'remote/main', changes: 0, branches: ['remote/main'] } }
         : path === '/api/task-center/git' && remote ? { id: body.requestId, status: 'pending' }
         : path === '/api/task-center/git' ? { repository: true, current: body.cwd === '/repo/work' ? 'feature/work' : 'main', changes: 0, branches: ['main', 'feature/work'] }
@@ -42,11 +42,31 @@ describe('NewTaskPage', () => {
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
   });
 
-  it('explains why the workbench target is missing even when remote targets exist', async () => {
+  it('does not show unrelated local errors while a remote target is selected', async () => {
     setup(['work.execute'], false, true, '未找到 Codex 可执行文件');
-    expect(await screen.findByText(/工作台所在设备无法提供执行目标：未找到 Codex 可执行文件/)).toBeTruthy();
-    expect(screen.getByRole('combobox', { name: '执行位置' }).textContent).toContain('开发机');
-    expect(screen.getByRole('link', { name: '查看设备与 Agent' }).getAttribute('href')).toBe('/devices');
+    expect(await screen.findByRole('combobox', { name: '执行位置' })).toHaveProperty('textContent', 'Codex · 开发机');
+    expect(screen.queryByText(/未找到 Codex 可执行文件/)).toBeNull();
+  });
+
+  it('explains an offline target without attempting to read its branches', async () => {
+    const fetchMock = setup(['work.execute'], false, true, null, false, false);
+    expect(await screen.findByText(/所选设备离线，任务提交后将等待连接器上线/)).toBeTruthy();
+    await userEvent.setup().click(screen.getByLabelText('Git 分支'));
+    expect(screen.getByText('设备连接后可读取和管理分支。')).toBeTruthy();
+    expect(fetchMock.mock.calls.some(([path]) => path.startsWith('/api/task-center/git'))).toBe(false);
+    expect(screen.queryByText(/分支读取失败/)).toBeNull();
+  });
+
+  it('offers device setup instead of an error when the server only runs the workbench', async () => {
+    setup(['work.execute'], false, false, null, true, false, true);
+    expect(await screen.findByText(/请先连接开发机；也可先创建任务/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: '连接设备' }).getAttribute('href')).toBe('/devices');
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('keeps genuine local failures visible when no targets are available', async () => {
+    setup(['work.execute'], false, false, 'Codex 登录已失效', true, true, true);
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'Codex 登录已失效');
   });
 
   it('shows the current branch before opening the menu and refreshes it when the directory changes', async () => {

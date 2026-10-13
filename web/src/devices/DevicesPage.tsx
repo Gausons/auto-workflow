@@ -13,16 +13,21 @@ const sourceLabels: Record<DeviceHistorySource['status'], string> = { available:
 function LocalDeviceDetails({ device, sessionCount, canExecute }: { device: Device; sessionCount: number; canExecute: boolean }) {
   const targets = useQuery({
     queryKey: ['task-center', 'targets'],
-    queryFn: ({ signal }) => apiRequest<{ projects: AgentProject[]; localError?: string | null }>('/api/task-center/codex', { signal }),
-    enabled: canExecute && hasSessionToken(), retry: false
+    queryFn: ({ signal }) => apiRequest<{ projects: AgentProject[]; localError?: string | null; localExecutionEnabled?: boolean }>('/api/task-center/codex', { signal }),
+    enabled: canExecute && device.localExecutionEnabled !== false && hasSessionToken(), retry: false
   });
   const projects = targets.data?.projects.filter(project => project.deviceId === device.id) || [];
+  const serviceOnly = device.localExecutionEnabled === false || targets.data?.localExecutionEnabled === false;
+  const showHistory = !serviceOnly || sessionCount > 0 || device.historySources?.some(source => source.status === 'error' || source.skipped > 0);
   return <>
-    <p className="tc-meta">这里显示运行工作台服务的环境；云端部署时通常为服务器或容器。服务运行不代表 Agent 已连接或可执行。</p>
-    <p>当前账号可见会话：{sessionCount} 个</p>
-    {device.historySources?.map(source => <p className="tc-meta" key={source.id}>{source.label} · {sourceLabels[source.status]} · {source.sessionCount} 个历史会话{source.skipped > 0 ? ` · ${source.skipped} 项未能读取` : ''}</p>)}
-    {sessionCount === 0 && <p className="tc-callout">此环境没有当前账号可见的会话。要查看开发机上的会话，请在开发机运行下方连接器，并登录同一个工作台账号。</p>}
-    {canExecute && (targets.isPending ? <p role="status">正在检查执行目标…</p> : targets.isError ? <p role="alert">执行目标读取失败：{errorMessage(targets.error)} <button className="button secondary" type="button" onClick={() => void targets.refetch()}>重试读取执行目标</button></p> : targets.data?.localError ? <p className="tc-callout">本地执行不可用：{targets.data.localError}</p> : projects.length ? <><p>可执行 Agent：{projects.map(project => project.name || project.agent || project.id).join(' · ')}</p><a className="button secondary" href="/tasks/new?deviceId=local">新建本地任务</a></> : <p className="tc-meta">未发现可用的本地执行目标；历史记录可读取不代表 Agent 可执行。</p>)}
+    {serviceOnly && <><p>仅运行工作台</p><p className="tc-meta">Agent 任务由已连接的开发机执行，请在开发机保持连接器运行。</p></>}
+    {showHistory && <>
+      <p className="tc-meta">这里显示运行工作台服务的环境；云端部署时通常为服务器或容器。服务运行不代表 Agent 已连接或可执行。</p>
+      <p>当前账号可见会话：{sessionCount} 个</p>
+      {device.historySources?.map(source => <p className="tc-meta" key={source.id}>{source.label} · {sourceLabels[source.status]} · {source.sessionCount} 个历史会话{source.skipped > 0 ? ` · ${source.skipped} 项未能读取` : ''}</p>)}
+      {sessionCount === 0 && <p className="tc-callout">此环境没有当前账号可见的会话。要查看开发机上的会话，请在开发机运行下方连接器，并登录同一个工作台账号。</p>}
+    </>}
+    {!serviceOnly && canExecute && (targets.isPending ? <p role="status">正在检查执行目标…</p> : targets.isError ? <p role="alert">执行目标读取失败：{errorMessage(targets.error)} <button className="button secondary" type="button" onClick={() => void targets.refetch()}>重试读取执行目标</button></p> : targets.data?.localError ? <p className="tc-callout">本地执行不可用：{targets.data.localError}</p> : projects.length ? <><p>可执行 Agent：{projects.map(project => project.name || project.agent || project.id).join(' · ')}</p><a className="button secondary" href="/tasks/new?deviceId=local">新建本地任务</a></> : <p className="tc-meta">未发现可用的本地执行目标；历史记录可读取不代表 Agent 可执行。</p>)}
   </>;
 }
 
