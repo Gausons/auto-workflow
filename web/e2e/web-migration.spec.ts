@@ -309,6 +309,49 @@ test('history list scrolls independently while search and filters stay visible',
   await page.screenshot({ path: testInfo.outputPath('history-fixed-filters.png') });
 });
 
+test('history conversation scroll stays inside the viewport with a docked composer', async ({ page }, testInfo) => {
+  const id = 'e'.repeat(64);
+  const session = { id, sessionId: id, agent: 'codex', agentLabel: 'Codex', deviceId: 'local', title: '长会话滚动回归', cwd: '/repo', status: 'completed', createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-05T00:00:00Z', messageCount: 40 };
+  const messages = Array.from({ length: 40 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', text: `第 ${index + 1} 条记录\n\n${'用于验证历史正文独立滚动。'.repeat(12)}` }));
+  await page.route('**/api/agent-sessions?*', route => route.fulfill({ json: { offset: 0, limit: 30, total: 1, scope: 'all', providers: [{ id: 'codex', label: 'Codex', status: 'available' }], workspaces: [], sessions: [session] } }));
+  await page.route(`**/api/agent-sessions/${id}?*`, route => route.fulfill({ json: { session, messages, total: messages.length } }));
+  await page.route(`**/api/agent-sessions/${id}/continue`, route => route.fulfill({ json: { execution: null, executions: [] } }));
+  await login(page);
+  await page.goto(`/history/${id}`);
+  const composer = page.getByRole('region', { name: '会话输入框' });
+  const transcript = page.locator('.history-chat-scroll');
+  await expect(composer).toBeVisible();
+  for (const viewport of [{ width: 1440, height: 812 }, { width: 1000, height: 700 }, { width: 800, height: 900 }]) {
+    await page.setViewportSize(viewport);
+    const before = await composer.boundingBox();
+    await transcript.evaluate(element => { element.scrollTo({ top: element.scrollHeight, behavior: 'instant' }); });
+    await expect(page.getByText('已显示 40 / 40 条记录')).toBeInViewport();
+    await transcript.hover();
+    await page.mouse.wheel(0, 800);
+    // Allow the wheel event to reach any ancestor scroll containers.
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    expect(await page.evaluate(() => ({ top: window.scrollY, height: document.documentElement.scrollHeight }))).toEqual({ top: 0, height: viewport.height });
+    expect(await composer.boundingBox()).toEqual(before);
+    expect(before!.y + before!.height).toBeCloseTo(viewport.height, 0);
+    await expect(page.getByRole('textbox', { name: '搜索会话' })).toBeInViewport();
+    await expect(page.getByRole('heading', { name: '长会话滚动回归' })).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath(`history-scroll-${viewport.width}.png`) });
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await composer.scrollIntoViewIfNeeded();
+  await transcript.evaluate(element => { element.scrollTo({ top: element.scrollHeight, behavior: 'instant' }); });
+  await expect(page.getByText('已显示 40 / 40 条记录')).toBeInViewport();
+  await expect(page.getByRole('textbox', { name: '发送消息' })).toBeInViewport();
+  const mobile = await page.evaluate(() => ({
+    height: document.documentElement.scrollHeight,
+    bottom: document.querySelector('.history-layout')!.getBoundingClientRect().bottom + window.scrollY,
+    width: document.documentElement.scrollWidth
+  }));
+  expect(mobile.height).toBeCloseTo(mobile.bottom, 0);
+  expect(mobile.width).toBe(390);
+  await page.screenshot({ path: testInfo.outputPath('history-scroll-mobile.png'), fullPage: true });
+});
+
 test('history continuation keeps the same requestId after an uncertain response', async ({ page }) => {
   const id = 'a'.repeat(64);
   const session = { id, sessionId: id, agent: 'codex', agentLabel: 'Codex', deviceId: 'local', title: '回归会话', cwd: '/repo', status: 'ready', createdAt: '2026-09-27T00:00:00Z', updatedAt: '2026-09-27T00:01:00Z', messageCount: 0 };

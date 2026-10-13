@@ -999,8 +999,8 @@ body[data-can-manage-members="false"] [data-nav="members"] {
 
 /* History-specific browsing and conversation layout. */
 
-.history-layout { display: grid; grid-template-columns: 290px minmax(0, 1fr); min-height: calc(100vh - 72px); min-width: 0; }
-.history-browser { min-width: 0; padding: 20px 12px; border-right: 1px solid #eee; height: calc(100vh - 72px); overflow: auto; }
+.history-layout { display: grid; grid-template-columns: 290px minmax(0, 1fr); min-height: calc(100dvh - 72px); min-width: 0; }
+.history-browser { min-width: 0; padding: 20px 12px; border-right: 1px solid #eee; height: calc(100dvh - 72px); overflow: auto; }
 .history-filters { display: grid; gap: 12px; padding: 0 6px; }
 .history-filters label { display: grid; min-width: 0; gap: 7px; font-size: 11px; color: #777; }
 .history-filters input, .history-filters select { width: 100%; min-width: 0; border: 1px solid #e5e5e5; border-radius: 8px; background: #fafafa; padding: 9px; font-size: 12px; color: #444; }
@@ -1027,7 +1027,7 @@ body[data-can-manage-members="false"] [data-nav="members"] {
 .history-pagination > .button { width: auto; flex: 0 0 auto; min-width: 34px; }
 .history-source-details { font-size: 11px; color: #8b8b8b; margin: 18px 6px; }
 .history-source-details summary { cursor: pointer; }
-.history-detail { min-width: 0; height: calc(100vh - 72px); overflow-y: auto; background: white; overflow-wrap: anywhere; }
+.history-detail { min-width: 0; height: calc(100dvh - 72px); overflow-y: auto; background: white; overflow-wrap: anywhere; }
 .history-empty { display: grid; justify-items: center; align-content: center; min-height: 65vh; gap: 10px; color: #999; text-align: center; }
 .history-empty > span { font-size: 40px; color: #b0b0b0; }
 .history-empty h2 { font-size: 20px; font-weight: 500; color: #555; margin: 10px 0 0; }
@@ -1051,7 +1051,8 @@ body[data-can-manage-members="false"] [data-nav="members"] {
 .history-legacy-excerpt > summary { cursor: pointer; width: fit-content; }
 .history-session-info > summary:focus-visible, .history-record-status > summary:focus-visible, .history-work summary:focus-visible { outline: 2px solid #3478eb; outline-offset: 4px; border-radius: 4px; }
 .history-messages { display: grid; gap: 32px; margin-top: 24px; }
-.history-message { min-width: 0; font-size: 16px; line-height: 1.8; color: #242628; }
+/* Keep absolute screen-reader labels inside the message's scroll container. */
+.history-message { position: relative; min-width: 0; font-size: 16px; line-height: 1.8; color: #242628; }
 .history-message.user { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 .history-message.user > div { background: #e8f3ff; border-radius: 22px; padding: 12px 18px; max-width: 88%; min-width: 0; white-space: pre-wrap; color: #203950; }
 .history-message.assistant { background: transparent; padding: 0; }
@@ -1336,7 +1337,7 @@ body[data-can-manage-members="false"] [data-settings-target="members"] { display
 /* New and resumed conversations share a viewport and a docked composer. */
 .history-detail { display: flex; flex-direction: column; overflow: hidden; }
 .history-chat-header { flex: 0 0 auto; padding: 16px 28px; }
-.history-chat-scroll { flex: 1; min-height: 0; overflow-y: auto; scroll-behavior: smooth; scrollbar-gutter: stable; }
+.history-chat-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; scroll-behavior: smooth; scrollbar-gutter: stable; }
 .history-chat-content { width: 100%; max-width: 900px; padding: 32px 32px 24px; }
 .history-composer { flex: 0 0 auto; width: 100%; max-width: 900px; margin: 0 auto; padding: 12px 32px 20px; border: 0; background: #fff; overflow: visible; }
 .history-composer .conversation-composer, .tc-composer.conversation-composer { display: block; border: 1px solid #e5e5e5; border-radius: 24px; padding: 16px; background: #fff; box-shadow: 0 4px 20px #00000006; }
@@ -1363,6 +1364,11 @@ body[data-view="new-task"] .tc-create { flex: 1; width: 100%; max-width: 900px; 
 @media (max-width: 860px) {
   .history-detail { height: 85dvh; min-height: 480px; }
   body[data-view="new-task"] .task-center { height: calc(100dvh - 64px); min-height: 480px; }
+}
+@media (min-width: 761px) and (max-width: 860px) {
+  /* Two-column history below the 62px mobile navigation and 72px page heading. */
+  .history-layout { min-height: calc(100dvh - 134px); }
+  .history-browser, .history-detail { height: calc(100dvh - 134px); min-height: 0; }
 }
 @media (max-width: 600px) {
   .history-browser { max-height: clamp(280px, 42dvh, 360px); padding: 14px 12px; }
