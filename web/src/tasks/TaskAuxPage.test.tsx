@@ -12,8 +12,7 @@ const snapshot = {
   handoffs: [], executions: []
 };
 
-function setup(route: '#inbox' | '#devices', permissions: string[], postStatus = 200) {
-  location.hash = route;
+function setup(permissions: string[], postStatus = 200) {
   sessionStorage.setItem('bugflow.sessionToken', 'test-token');
   const fetchMock = vi.fn().mockImplementation((_path: string, init?: RequestInit) => Promise.resolve(new Response(JSON.stringify(init?.method === 'POST'
     ? postStatus === 200 ? { taskId: 'task-1' } : { message: '任务版本已变化' }
@@ -30,14 +29,16 @@ describe('TaskAuxPage', () => {
   afterEach(() => { cleanup(); sessionStorage.clear(); location.hash = ''; vi.unstubAllGlobals(); });
 
   it('renders untrusted session text literally and hides mutation actions from viewers', async () => {
-    setup('#inbox', ['read']);
+    setup(['read']);
     expect(await screen.findByText('<script>不可信标题</script>')).toBeTruthy();
     expect(document.querySelector('script')).toBeNull();
+    expect(screen.queryByRole('link', { name: /设备与 Agent/ })).toBeNull();
+    expect(screen.getByRole('link', { name: /未归属会话/ }).getAttribute('aria-current')).toBe('page');
     expect(screen.queryByRole('button', { name: '关联任务' })).toBeNull();
   });
 
   it('loads expanded session records without rendering active HTML', async () => {
-    const fetchMock = setup('#inbox', ['read']);
+    const fetchMock = setup(['read']);
     const title = await screen.findByText('<script>不可信标题</script>');
     expect(fetchMock.mock.calls.some(([path]) => String(path).startsWith('/api/agent-sessions/'))).toBe(false);
     await userEvent.setup().click(title);
@@ -62,7 +63,7 @@ describe('TaskAuxPage', () => {
   });
 
   it('links one session using the selected task revision and opens the task', async () => {
-    const fetchMock = setup('#inbox', ['read', 'work.execute']);
+    const fetchMock = setup(['read', 'work.execute']);
     const user = userEvent.setup();
     const opened = vi.fn();
     window.addEventListener('bugflow:open-task', opened, { once: true });
@@ -78,7 +79,7 @@ describe('TaskAuxPage', () => {
   });
 
   it('routes from a session into new-task without creating a task prematurely', async () => {
-    const fetchMock = setup('#inbox', ['read', 'work.execute']);
+    const fetchMock = setup(['read', 'work.execute']);
     const created = vi.fn();
     window.addEventListener('bugflow:create-task-from-session', created, { once: true });
     await screen.findByText('<script>不可信标题</script>');
@@ -91,7 +92,7 @@ describe('TaskAuxPage', () => {
   });
 
   it('keeps a revision conflict visible and does not retry the link command', async () => {
-    const fetchMock = setup('#inbox', ['read', 'work.execute'], 409);
+    const fetchMock = setup(['read', 'work.execute'], 409);
     const user = userEvent.setup();
     await screen.findByText('<script>不可信标题</script>');
     await user.click(screen.getByRole('button', { name: '关联任务' }));
@@ -102,23 +103,4 @@ describe('TaskAuxPage', () => {
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
   });
 
-  it('generates connection configuration without exposing the browser token', async () => {
-    setup('#devices', ['read', 'work.execute']);
-    const config = await screen.findByLabelText('设备连接配置');
-    expect((config as HTMLTextAreaElement).value.split('\n')).toHaveLength(3);
-    expect((config as HTMLTextAreaElement).value).toContain('WORKBENCH_USERNAME=');
-    expect((config as HTMLTextAreaElement).value).not.toContain('WORKBENCH_EXECUTE_CODEX');
-    expect((config as HTMLTextAreaElement).value).not.toContain('WORKBENCH_TENANT');
-    expect((config as HTMLTextAreaElement).value).not.toContain('test-token');
-    expect(screen.getByText('npm install -g agent-workbench-connector')).toBeTruthy();
-    expect(screen.getByText('agent-workbench-connector --env-file ./agent.env')).toBeTruthy();
-  });
-
-  it('shows device status from the snapshot', async () => {
-    setup('#devices', ['read']);
-    expect(await screen.findByText('测试设备')).toBeTruthy();
-    expect(screen.getByText('在线')).toBeTruthy();
-    expect(screen.getByText('当前账号没有接入设备和远程执行任务的权限。')).toBeTruthy();
-    expect(screen.queryByLabelText('设备连接配置')).toBeNull();
-  });
 });

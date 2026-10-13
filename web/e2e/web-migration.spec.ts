@@ -75,6 +75,36 @@ test('all tabs share sidebar geometry, typography and page headings at every bre
   }
 });
 
+test('devices and task center have independent pages and navigation', async ({ page }) => {
+  await login(page);
+  const sidebar = page.getByRole('navigation', { name: '主导航' });
+  const taskViews = page.getByRole('navigation', { name: '任务中心视图' });
+  await expect(taskViews.getByRole('link')).toHaveCount(2);
+  await expect(taskViews.getByRole('link', { name: /设备与 Agent/ })).toHaveCount(0);
+  await taskViews.getByRole('link', { name: /未归属会话/ }).click();
+  await expect(page).toHaveURL(/\/inbox$/);
+  await expect(taskViews.getByRole('link')).toHaveCount(2);
+  await sidebar.getByRole('link', { name: '设备与 Agent', exact: true }).click();
+  await expect(page).toHaveURL(/\/devices$/);
+  await expect(taskViews).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '连接本机 Agent' })).toBeVisible();
+  await expect(sidebar.getByRole('link', { name: '设备与 Agent', exact: true })).toHaveAttribute('aria-current', 'page');
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '设备与 Agent', exact: true })).toBeVisible();
+  await expect(taskViews).toHaveCount(0);
+  await sidebar.getByRole('link', { name: '任务中心', exact: true }).click();
+  await expect(page).toHaveURL(/\/tasks$/);
+  await expect(taskViews.getByRole('link')).toHaveCount(2);
+  await expect(page.getByRole('heading', { name: '连接本机 Agent' })).toHaveCount(0);
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: '设备与 Agent', exact: true })).toBeVisible();
+  await expect(taskViews).toHaveCount(0);
+  await page.goto('/#devices');
+  await expect(page).toHaveURL(/\/devices$/);
+  await expect(page.getByRole('heading', { name: '设备与 Agent', exact: true })).toBeVisible();
+  await expect(taskViews).toHaveCount(0);
+});
+
 test('auth form stays centered and usable on desktop and mobile', async ({ page }) => {
   for (const width of [1440, 375]) {
     await page.setViewportSize({ width, height: 900 });

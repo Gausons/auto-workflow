@@ -10,6 +10,7 @@ import { AccountPanel } from '../account/AccountPanel.js';
 import { WorkbenchPage } from '../workbench/WorkbenchPage.js';
 import { HistoryPage } from '../history/HistoryPage.js';
 import { AssignmentPanel, ConfigPanel } from '../settings/SettingsPanels.js';
+import { DevicesPage } from '../devices/DevicesPage.js';
 import { TaskAuxPage } from '../tasks/TaskAuxPage.js';
 import { TaskPage, rememberTask } from '../tasks/TaskPage.js';
 import { NewTaskPage, rememberSourceSession } from '../tasks/NewTaskPage.js';
@@ -125,8 +126,8 @@ function createRouter() {
     { index: true, element: <Navigate to="/tasks" replace /> },
     { path: 'tasks', element: <section className="page task-center" aria-label="任务中心"><TaskPage /></section> },
     { path: 'tasks/new', element: <section className="page task-center"><NewTaskPage /></section> },
-    { path: 'inbox', element: <section className="page task-center"><TaskAuxPage key="inbox" /></section> },
-    { path: 'devices', element: <section className="page task-center"><TaskAuxPage key="devices" /></section> },
+    { path: 'inbox', element: <section className="page task-center"><TaskAuxPage /></section> },
+    { path: 'devices', element: <section className="page" aria-label="设备与 Agent"><DevicesPage /></section> },
     { path: 'workbench', element: <section className="page"><WorkbenchPage /></section> },
     { path: 'history', element: <section className="page history-page"><RouteRefresh><HistoryPage /></RouteRefresh></section> },
     { path: 'history/:id', element: <section className="page history-page"><RouteRefresh><HistoryPage /></RouteRefresh></section> },

@@ -26,6 +26,8 @@ describe('TaskPage', () => {
     setup(['read']);
     expect(await screen.findByRole('heading', { name: '<script>任务</script>' })).toBeTruthy();
     expect(document.querySelector('script')).toBeNull();
+    expect(screen.queryByRole('link', { name: /设备与 Agent/ })).toBeNull();
+    expect(screen.getByRole('link', { name: /未归属会话/ })).toBeTruthy();
     expect(screen.queryByRole('button', { name: '编辑任务' })).toBeNull();
     expect(screen.queryByRole('button', { name: '继续任务' })).toBeNull();
   });

@@ -121,7 +121,7 @@ export function TaskPage() {
   const activeJob = jobs.some(job => ['queued', 'launching', 'running', 'waiting', 'unknown'].includes(job.status));
   return <div className={styles.workspace}>
     <PageHeading title="任务中心" description="让每一件事，持续向前"><div className="tc-actions"><button className={styles.iconButton} type="button" aria-label="刷新任务" title="刷新任务" disabled={snapshot.isFetching} onClick={() => void snapshot.refetch()}><Icon name="refresh" /></button>{canEdit && <a className={`button primary ${styles.newTask}`} aria-label="创建任务" href="#new-task"><Icon name="plus" />新建任务</a>}</div></PageHeading>
-    <nav className={styles.navigation} aria-label="任务中心视图"><a href="#tasks" aria-current="page">全部任务<span>{data.tasks.length}</span></a><a href="#inbox">未归属会话<span>{unassigned.length}</span></a><a href="#devices">设备与 Agent<span>{data.devices.length}</span></a></nav>
+    <nav className={styles.navigation} aria-label="任务中心视图"><a href="#tasks" aria-current="page">全部任务<span>{data.tasks.length}</span></a><a href="#inbox">未归属会话<span>{unassigned.length}</span></a></nav>
     <div className={styles.layout} data-mobile-detail={mobileDetail}>
       <aside className={styles.list} aria-label="任务列表">
         <div className={styles.listTools}><div className={styles.search}><Icon name="search" /><input aria-label="搜索任务与会话" value={search} onChange={event => { setSearch(event.target.value); open(null); }} placeholder="搜索任务、会话或目录" maxLength={200} />{search && <button type="button" aria-label="清除搜索" onClick={() => setSearch('')}>×</button>}</div>

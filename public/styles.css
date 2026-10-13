@@ -1179,8 +1179,6 @@ body[data-can-manage-members="false"] [data-nav="members"] {
 .tc-inbox { padding: 24px; background: var(--surface); border-radius: 12px; border: 1px solid var(--line); }
 .tc-search { margin-left: auto; min-width: 0; font-size: 14px; }
 .tc-search input { max-width: 100%; width: 290px; display: block; padding: 10px; border: 1px solid var(--line); border-radius: 6px; }
-.tc-devices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 20px; }
-.tc-devices article { background: var(--surface); border: 1px solid var(--line); padding: 22px; border-radius: 10px; overflow-wrap: anywhere; }
 .tc-empty { padding: 56px 16px; text-align: center; }
 .tc-empty p { color: var(--muted); }
 .tc-dialog { width: min(680px, calc(100% - 32px)); max-height: calc(100dvh - 48px); padding: 26px; border: 1px solid var(--line); border-radius: 12px; color: var(--text); background: var(--surface); }
@@ -1237,8 +1235,7 @@ body {
 .run-list-panel,
 .task-band,
 .tc-layout,
-.tc-inbox,
-.tc-devices article {
+.tc-inbox {
   border-color: #e7e7e7;
   border-radius: 12px;
   box-shadow: none;

@@ -1,0 +1,8 @@
+.page { line-height: 1.6; }
+.page h2 { margin: 0; font-size: 20px; }
+.content { padding: 24px 28px; }
+.devices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); gap: 20px; }
+.devices > article { background: var(--surface); border: 1px solid #e7e7e7; padding: 22px; border-radius: 12px; overflow-wrap: anywhere; }
+@media (max-width: 860px) {
+  .content { padding: 20px 18px; }
+}
