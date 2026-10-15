@@ -51,6 +51,7 @@ function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) 
   const anchor = useRef<{ height: number; top: number } | null>(null);
   const loadingOlder = useRef(false);
   const positioned = useRef(false);
+  const resizeMetrics = useRef({ height: 0, contentHeight: 0 });
   const oldest = detail.data?.pages.at(-1);
   const recordOffset = (session?.syncedRange?.offset || 0) + (oldest?.offset || 0);
   const displayedTurns = detail.data?.pages.reduce((count, page) => count + (page.turnPage?.count || 0), 0) ?? 0;
@@ -60,6 +61,7 @@ function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) 
     if (anchor.current) {
       scroll.scrollTop = anchor.current.top + scroll.scrollHeight - anchor.current.height;
       anchor.current = null;
+      resizeMetrics.current = { height: scroll.clientHeight, contentHeight: scroll.scrollHeight };
     } else if (!positioned.current) {
       scroll.scrollTop = scroll.scrollHeight;
       positioned.current = true;
@@ -68,13 +70,17 @@ function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) 
   useLayoutEffect(() => {
     const scroll = scrollRef.current;
     if (!scroll || typeof ResizeObserver === 'undefined') return;
-    let height = scroll.clientHeight;
+    resizeMetrics.current = { height: scroll.clientHeight, contentHeight: scroll.scrollHeight };
     const observer = new ResizeObserver(() => {
-      const follow = scroll.scrollHeight - scroll.scrollTop - height < 100;
-      height = scroll.clientHeight;
+      // Image metadata and image bytes arrive after the transcript. Decide
+      // whether to follow using the dimensions before those insertions.
+      const { contentHeight, height } = resizeMetrics.current;
+      const follow = contentHeight - scroll.scrollTop - height < 100;
+      resizeMetrics.current = { height: scroll.clientHeight, contentHeight: scroll.scrollHeight };
       if (follow) scroll.scrollTop = scroll.scrollHeight;
     });
     observer.observe(scroll);
+    if (scroll.firstElementChild) observer.observe(scroll.firstElementChild);
     return () => observer.disconnect();
   }, [Boolean(first)]);
   const loadOlder = async () => {

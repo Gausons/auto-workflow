@@ -231,7 +231,7 @@ test('remote images appear directly outside and inside the preview window and lo
   const headers = { Authorization: `Bearer ${token}` }, deviceId = 'image-browser-source', nativeId = 'image-browser-session';
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
   const dataUrl = `data:image/png;base64,${Buffer.concat([png, Buffer.alloc(300000)]).toString('base64')}`;
-  const image = prepareSessionImage(1, 0, '这张截图来自会话开头', { dataUrl, alt: '完整原始截图' });
+  const image = prepareSessionImage(1, 0, '这张截图来自会话开头。'.repeat(40), { dataUrl, alt: '完整原始截图' });
   const inlineImage = prepareSessionImage(115, 0, '最近的截图', { dataUrl, alt: '消息中的截图' });
   const remoteHistory = { offset: 85, total: 115, sourcePartial: false, truncated: false,
     messages: [...Array.from({ length: 29 }, (_, i) => ({ role: 'assistant', text: `最近记录 ${86 + i}` })), { role: 'user', text: '最近的截图', images: [{ external: true, alt: '图片单独同步' }] }] };
@@ -244,7 +244,17 @@ test('remote images appear directly outside and inside the preview window and lo
   await login(page);
   const reads: string[] = [];
   page.on('request', req => { if (/\/images\/[a-f0-9]{64}$/.test(req.url())) reads.push(req.url()); });
+  let releaseMetadata!: () => void;
+  const metadataGate = new Promise<void>(resolve => { releaseMetadata = resolve; });
+  await page.route(`**/api/agent-sessions/${id}/images?*`, async route => { await metadataGate; await route.continue(); });
   await page.goto(`/history/${id}`);
+  const recentMessage = page.locator('.history-message.user').filter({ hasText: '最近的截图' });
+  await expect(recentMessage).toBeInViewport();
+  expect(reads).toHaveLength(0);
+  releaseMetadata();
+  await expect(page.getByText('这张截图来自会话开头')).toBeVisible();
+  await expect(recentMessage).toBeInViewport();
+  await recentMessage.scrollIntoViewIfNeeded();
   await expect(page.getByText('已同步 30 / 115 条记录', { exact: true })).toBeVisible();
   const recentPreview = page.locator('.history-message.user').getByAltText('消息中的截图');
   await expect(recentPreview).toBeVisible();
