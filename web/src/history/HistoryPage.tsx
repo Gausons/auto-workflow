@@ -1,6 +1,6 @@
 import { PageHeading } from '../components/PageHeading.js';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
 import { HistoryComposer } from './HistoryComposer.js';
 import { InheritedContext } from './InheritedContext.js';
@@ -9,9 +9,10 @@ import { canContinueHistory } from './historyCapabilities.js';
 import type { HistoryMessage, Session, TaskCenterData } from '../../../shared/taskTypes.js';
 import { useTaskCenterUpdates } from '../tasks/taskCenterUpdates.js';
 import type { InheritedContextInfo } from '../../../shared/contextPreviewTypes.js';
+import styles from './HistoryPage.module.css';
 
 interface HistorySession extends Session { createdAt: string; messageCount: number }
-interface HistoryDetailResponse { session: HistorySession; messages: HistoryMessage[]; total: number; inherited?: InheritedContextInfo }
+interface HistoryDetailResponse { session: HistorySession; messages: HistoryMessage[]; total: number; offset?: number; turnPage?: { total: number; count: number; before: number | null }; inherited?: InheritedContextInfo }
 interface HistoryProvider { id: string; label: string; status: string; skipped?: number }
 interface HistoryWorkspace { path: string; count: number }
 interface HistoryListResponse {
@@ -28,35 +29,68 @@ const directoryName = (value: string | undefined) => value?.split('/').filter(Bo
 const currentRoute = () => ({ active: /^\/history(?:\/|$)/.test(location.pathname) || /^#history(?:\/|$)/.test(location.hash), id: /^\/history\/([a-f0-9]{64})$/.exec(location.pathname)?.[1] || /^#history\/([a-f0-9]{64})$/.exec(location.hash)?.[1] || null });
 
 function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) {
-  const [synced, setSynced] = useState<HistoryDetailResponse | null>(null);
   const detail = useInfiniteQuery({
-    queryKey: ['history', 'detail', id],
-    initialPageParam: 0,
-    queryFn: ({ pageParam, signal }) => apiRequest<HistoryDetailResponse>(`/api/agent-sessions/${encodeURIComponent(id)}?offset=${pageParam}&limit=100`, { signal }),
-    getNextPageParam: (lastPage, pages) => {
-      const count = pages.reduce((total, page) => total + page.messages.length, 0);
-      return count < lastPage.total && lastPage.messages.length ? count : undefined;
-    }
+    queryKey: ['history', 'detail', id, 'turns'],
+    initialPageParam: null as number | null,
+    queryFn: ({ pageParam, signal }) => apiRequest<HistoryDetailResponse>(`/api/agent-sessions/${encodeURIComponent(id)}?turns=10${pageParam === null ? '' : `&before=${pageParam}`}`, { signal }),
+    getNextPageParam: lastPage => lastPage.turnPage?.before ?? undefined
   });
-  useEffect(() => { setSynced(null); }, [detail.dataUpdatedAt]);
-  const first = synced || detail.data?.pages[0];
+  const first = detail.data?.pages[0];
   const session = first?.session;
-  const loadedMessages = detail.data?.pages.flatMap(page => page.messages) || [];
-  const messages = synced?.messages || loadedMessages;
+  const loadedMessages = [...(detail.data?.pages || [])].reverse().flatMap(page => page.messages);
+  const messages = loadedMessages;
 
   const syncHistory = async (currentId: string) => {
-    const all: HistoryMessage[] = [];
-    let page: HistoryDetailResponse;
-    do {
-      page = await apiRequest<HistoryDetailResponse>(`/api/agent-sessions/${encodeURIComponent(currentId)}?offset=${all.length}&limit=200`);
-      all.push(...page.messages);
-    } while (all.length < page.total && page.messages.length);
-    setSynced({ ...page, messages: all });
-    return all;
+    if (currentId !== id) return null;
+    const result = await detail.refetch();
+    if (result.error) throw result.error;
+    return [...(result.data?.pages || [])].reverse().flatMap(page => page.messages);
+  };
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const anchor = useRef<{ height: number; top: number } | null>(null);
+  const loadingOlder = useRef(false);
+  const positioned = useRef(false);
+  const oldest = detail.data?.pages.at(-1);
+  const recordOffset = (session?.syncedRange?.offset || 0) + (oldest?.offset || 0);
+  const displayedTurns = detail.data?.pages.reduce((count, page) => count + (page.turnPage?.count || 0), 0) ?? 0;
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    if (anchor.current) {
+      scroll.scrollTop = anchor.current.top + scroll.scrollHeight - anchor.current.height;
+      anchor.current = null;
+    } else if (!positioned.current) {
+      scroll.scrollTop = scroll.scrollHeight;
+      positioned.current = true;
+    }
+  }, [messages.length, recordOffset]);
+  useLayoutEffect(() => {
+    const scroll = scrollRef.current;
+    if (!scroll || typeof ResizeObserver === 'undefined') return;
+    let height = scroll.clientHeight;
+    const observer = new ResizeObserver(() => {
+      const follow = scroll.scrollHeight - scroll.scrollTop - height < 100;
+      height = scroll.clientHeight;
+      if (follow) scroll.scrollTop = scroll.scrollHeight;
+    });
+    observer.observe(scroll);
+    return () => observer.disconnect();
+  }, [Boolean(first)]);
+  const loadOlder = async () => {
+    if (!detail.hasNextPage || detail.isFetching || loadingOlder.current) return;
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    loadingOlder.current = true;
+    anchor.current = { height: scroll.scrollHeight, top: scroll.scrollTop };
+    try {
+      const result = await detail.fetchNextPage();
+      if (result.isFetchNextPageError) anchor.current = null;
+    } finally { loadingOlder.current = false; }
   };
 
   if (detail.isPending) return <div className="history-detail" role="status">正在读取会话…</div>;
-  if (detail.isError || !first || !session) return <div className="history-detail" role="alert">加载失败：{errorMessage(detail.error)} <button className="button secondary" type="button" onClick={() => detail.refetch()}>重试</button></div>;
+  if (!first || !session) return <div className="history-detail" role="alert">加载失败：{errorMessage(detail.error)} <button className="button secondary" type="button" onClick={() => detail.refetch()}>重试</button></div>;
   const duration = Math.max(0, Date.parse(session.updatedAt) - Date.parse(session.createdAt));
   const durationText = Number.isFinite(duration) ? `${Math.floor(duration / 60000)} 分钟 ${Math.floor(duration / 1000) % 60} 秒` : '未知';
   const canContinue = canExecute && canContinueHistory(session);
@@ -64,7 +98,7 @@ function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) 
 
   return <div className="history-detail" aria-live="polite">
     <header className="history-chat-header"><div><h2>{session.title}</h2><span>{session.agentLabel} · {directoryName(session.cwd)}</span></div><span className="history-readonly">{canContinue ? '可续聊' : '只读'}</span></header>
-    <div className="history-chat-scroll"><div className="history-chat-content">
+    <div className={`history-chat-scroll ${styles.scroll}`} ref={scrollRef} onScroll={event => { if (event.currentTarget.scrollTop <= 80) void loadOlder(); }} onWheel={event => { if (event.deltaY < 0 && event.currentTarget.scrollTop <= 80) void loadOlder(); }}><div className="history-chat-content">
       <details className="history-session-info"><summary>会话信息<span>›</span></summary><dl className="history-info">
         <dt>会话 ID</dt><dd>{session.sessionId || session.id}</dd><dt>工作目录</dt><dd>{session.workspaces?.join('、') || session.cwd || '未知'}</dd>
         <dt>模型 / 分支</dt><dd>{session.model || '未知'} / {session.branch || '未知'}</dd><dt>记录状态</dt><dd>{statusLabel(session.status)}</dd>
@@ -75,11 +109,13 @@ function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) 
       {session.recordMode === 'excerpt'
         ? <p className="history-meta">{first.total > 0 ? '来源连接器仍在同步旧版文本摘要。更新并重启连接器，再点击“刷新会话”，即可按消息展示。' : '尚未同步远程会话正文，请确认来源设备连接器在线且已开启摘要同步，或在来源设备查看完整会话。'}</p>
         : (session.recordMode === 'synced' ? range?.sourcePartial : session.partial) && <p className="history-warning">部分记录损坏、尚未写完或超出读取上限，当前展示部分内容。</p>}
+      {detail.hasNextPage && <button className="button secondary" type="button" disabled={detail.isFetchingNextPage} onClick={() => void loadOlder()}>{detail.isFetchingNextPage ? '正在加载更早的问答…' : '加载更早的 10 轮问答'}</button>}
+      {detail.isFetchNextPageError && <p role="alert">更早的问答加载失败：{errorMessage(detail.error)}，请重试。</p>}
       {first.inherited && <InheritedContext id={id} info={first.inherited} />}
       {session.recordMode === 'excerpt' && messages.length > 0
-        ? <details className="history-legacy-excerpt"><summary>查看旧版文本摘要</summary><HistoryTranscript session={session} messages={messages} /></details>
-        : <HistoryTranscript session={session} messages={messages} />}
-      <div className="history-chat-footer"><span>{session.recordMode === 'excerpt' ? (first.total > 0 ? '已显示同步摘要 · 非完整历史' : '暂无同步摘要') : `已显示 ${messages.length} / ${synced?.total ?? first.total} 条${session.recordMode === 'synced' ? '已同步' : ''}记录`}</span>{!synced && detail.hasNextPage && <button className="button secondary" type="button" disabled={detail.isFetchingNextPage} onClick={() => void detail.fetchNextPage()}>加载更多记录</button>}</div>
+        ? <details className="history-legacy-excerpt"><summary>查看旧版文本摘要</summary><HistoryTranscript session={session} messages={messages} recordOffset={first.turnPage ? recordOffset : undefined} /></details>
+        : <HistoryTranscript session={session} messages={messages} recordOffset={first.turnPage ? recordOffset : undefined} />}
+      <div className="history-chat-footer"><span>{session.recordMode === 'excerpt' ? (first.total > 0 ? '已显示同步摘要 · 非完整历史' : '暂无同步摘要') : first.turnPage ? `已显示 ${displayedTurns} / ${first.turnPage.total} 轮问答` : `已显示 ${messages.length} / ${first.total} 条${session.recordMode === 'synced' ? '已同步' : ''}记录`}</span></div>
       <div id="historyLiveOutput" />
     </div></div>
     <HistoryComposer session={session} historyMessages={messages} canEdit={canExecute} syncHistory={syncHistory} />
@@ -146,7 +182,7 @@ export function HistoryPage() {
         {list.isError && <button className="button secondary" type="button" onClick={() => list.refetch()}>重试</button>}
         <div className="history-list">{data?.sessions.map(session => <button className="history-card" type="button" key={session.id} aria-pressed={session.id === route.id} onClick={() => { location.hash = `history/${session.id}`; }}>
           <strong>{session.title}</strong><span className="history-meta">{session.agentLabel} · {time(session.updatedAt)}</span>
-          <span>{statusLabel(session.status)} · {session.recordMode === 'excerpt' ? (session.messageCount > 0 ? '仅同步摘要' : '正文未同步') : `${session.messageCount} 条记录`}{session.managed ? ' · 已继承上下文' : ''}{session.archived ? ' · 已归档' : ''}{session.partial && session.recordMode !== 'excerpt' ? session.recordMode === 'synced' ? ' · 已同步部分记录' : ' · 部分记录' : ''}</span>
+          <span>{statusLabel(session.status)} · {session.recordMode === 'excerpt' ? (session.messageCount > 0 ? '仅同步摘要' : '正文未同步') : session.turnCount !== undefined ? `${session.turnCount} 轮问答` : `${session.messageCount} 条记录`}{session.managed ? ' · 已继承上下文' : ''}{session.archived ? ' · 已归档' : ''}{session.partial && session.recordMode !== 'excerpt' ? session.recordMode === 'synced' ? ' · 已同步部分记录' : ' · 部分记录' : ''}</span>
           <span className="history-meta">{directoryName(session.cwd)}{session.branch ? ` · ${session.branch}` : ''}</span>
         </button>)}</div>
         <div className="history-pagination"><button className="button secondary" type="button" disabled={!data || data.offset === 0} aria-label="上一页" onClick={() => setFilters(previous => ({ ...previous, offset: Math.max(0, previous.offset - 30) }))}>←</button>

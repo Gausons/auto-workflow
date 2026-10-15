@@ -19,6 +19,8 @@ export function pendingHistoryMessages(messages: HistoryMessage[], executions: P
     const start = messages.findIndex(m => m.role === 'user' && m.text === job.prompt &&
       (turnId && m.turnId ? m.turnId === turnId :
         Boolean(job.createdAt) && Number.isFinite(Date.parse(job.createdAt!)) && Date.parse(m.timestamp || '') >= Date.parse(job.createdAt!)));
+    const firstTime = Date.parse(messages[0]?.timestamp || '');
+    if (start < 0 && Number.isFinite(firstTime) && Date.parse(job.createdAt || '') < firstTime) return [];
     const end = start < 0 ? -1 : messages.findIndex((m, i) => i > start && m.role === 'user');
     const turn = start < 0 ? [] : messages.slice(start, end < 0 ? undefined : end);
     const outputSaved = job.output && turn.some(m => m.role === 'assistant' &&

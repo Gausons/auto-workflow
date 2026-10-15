@@ -55,6 +55,7 @@ export interface HistorySession {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+  turnCount?: number;
   partial: boolean;
   messages?: HistoryEntry[];
 }

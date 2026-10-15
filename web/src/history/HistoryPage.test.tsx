@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { historyTurnPage } from '../../../shared/historyTurns.js';
 import { HistoryPage } from './HistoryPage.js';
 
 const id = 'a'.repeat(64);
@@ -39,6 +40,42 @@ describe('HistoryPage', () => {
     expect(document.querySelector('img')).toBeNull();
     expect(screen.getByText('只读')).toBeTruthy();
     expect(screen.getByText('已显示 1 / 1 条记录')).toBeTruthy();
+  });
+
+  it('loads the latest ten turns, prepends ten on upward scrolling and retries without losing the transcript', async () => {
+    const messages = Array.from({ length: 23 }, (_, index) => [{ role: 'user', text: `问题 ${index}` }, { role: 'assistant', text: `回答 ${index}` }]).flat();
+    let fail = true;
+    const fetchMock = vi.fn().mockImplementation((path: string) => {
+      if (path.startsWith('/api/agent-sessions?')) return Promise.resolve(new Response(JSON.stringify(list)));
+      if (path.startsWith(`/api/agent-sessions/${id}?`)) {
+        const url = new URL(path, 'http://test');
+        expect(url.searchParams.get('turns')).toBe('10');
+        const before = url.searchParams.get('before');
+        if (before !== null && fail) { fail = false; return Promise.resolve(new Response(JSON.stringify({ error: '模拟断网' }), { status: 503 })); }
+        return Promise.resolve(new Response(JSON.stringify({ session, ...historyTurnPage(messages, before === null ? undefined : Number(before)) })));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ permissions: ['read'] })));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderHistory(`#history/${id}`);
+    await screen.findByText('问题 13');
+    expect(screen.queryByText('问题 12')).toBeNull();
+    expect(screen.getByText('回答 22')).toBeTruthy();
+    expect(screen.getByText('已显示 10 / 23 轮问答')).toBeTruthy();
+    const scroll = document.querySelector('.history-chat-scroll')!;
+    fireEvent.scroll(scroll);
+    await screen.findByRole('alert');
+    expect(screen.getByText('回答 22')).toBeTruthy();
+    await userEvent.setup().click(screen.getByRole('button', { name: '加载更早的 10 轮问答' }));
+    await screen.findByText('问题 3');
+    expect(screen.queryByText('问题 2')).toBeNull();
+    expect(screen.getByText('已显示 20 / 23 轮问答')).toBeTruthy();
+    const questions = [...document.querySelectorAll('.history-message.user')].map(node => node.textContent);
+    expect(questions).toEqual(Array.from({ length: 20 }, (_, index) => `用户问题 ${index + 3}`));
+    await userEvent.setup().click(screen.getByRole('button', { name: '加载更早的 10 轮问答' }));
+    await screen.findByText('问题 0');
+    expect(screen.getByText('已显示 23 / 23 轮问答')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '加载更早的 10 轮问答' })).toBeNull();
   });
 
   it('sends the selected agent and search text to the history endpoint', async () => {

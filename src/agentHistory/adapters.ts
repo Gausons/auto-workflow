@@ -56,7 +56,7 @@ export function imageAttachments(content: unknown): HistoryImage[] {
 }
 const entry = (role: string, content: unknown, timestamp: unknown, extra: Partial<HistoryEntry> = {}): HistoryEntry => {
   const value = role === 'user' ? cleanUserContext(text(content)) : text(content);
-  return { role, text: value.length > 24000 ? value.slice(0, 24000) + '\n[内容超过 24,000 字符，已截断]' : value, images: [], ...(typeof timestamp === 'string' ? { timestamp } : {}), ...extra };
+  return { role, text: value, images: [], ...(typeof timestamp === 'string' ? { timestamp } : {}), ...extra };
 };
 const messageEntry = (role: string, content: unknown, timestamp: unknown) => entry(role, blocksText(content), timestamp, { images: imageAttachments(content) });
 

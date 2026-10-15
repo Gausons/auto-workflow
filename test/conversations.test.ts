@@ -115,7 +115,7 @@ test('connector history renders the same structured messages as local history an
   assert.equal(f.database.readTaskCenter('default').sessions.find(session => session.id === remote.id)?.remoteHistory, undefined, 'persisted task state also excludes preview bodies');
   assert.deepEqual(f.database.readRemoteSessionHistory('default', remote.id)?.messages, detail.messages);
   assert.equal(remote.messageCount, local.total);
-  assert.deepEqual(remote.syncedRange, { offset: 0, total: local.total, sourcePartial: false, truncated: false });
+  assert.deepEqual(remote.syncedRange, { format: 2, offset: 0, total: local.total, sourcePartial: false, truncated: false });
   const list = await f.service.historyList();
   assert.doesNotMatch(JSON.stringify(list), /data:image/);
   assert.deepEqual(f.service.remoteDetail(remote.id, new URLSearchParams({ offset: '2', limit: '2' }))?.messages, detail.messages.slice(2, 4));

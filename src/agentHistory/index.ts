@@ -9,6 +9,7 @@ import { httpError } from '../rbac.js';
 import type { Environment } from '../issueSources/types.js';
 import { defaultHistoryAdapters } from './adapters.js';
 import type { HistoryAdapter, HistoryEntry, HistorySession, JsonObject } from './types.js';
+import { paginateHistoryTurns } from '../historyPagination.js';
 import { prepareSessionImage } from '../historyImages.js';
 
 interface AgentHistoryOptions {
@@ -53,6 +54,7 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
       sessionId: '', title: '', cwd: '', workspaces: [], model: '', branch: '', status: 'unknown', archived: file.split(path.sep).includes('archived_sessions'),
       createdAt: '', updatedAt: '', messageCount: 0, partial: info.size > MAX_BYTES };
     const entries: HistoryEntry[] = [], fallback: HistoryEntry[] = [];
+    let userCount = 0, fallbackUserCount = 0;
     let count = 0, fallbackCount = 0, firstPrompt = '', malformed = 0, conversationCount = 0;
     let turnId: string | undefined;
     let sourceCreatedAt: string | null = null;
@@ -94,9 +96,11 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
           if (item.role === 'user') firstPrompt ||= item.text || (item.images?.length ? '图片会话' : '');
           if (decoded.fallback) {
             fallbackCount++;
+            if (item.role === 'user') fallbackUserCount++;
             if (detail && fallback.length < MAX_ENTRIES) fallback.push(item);
           } else {
             count++;
+            if (item.role === 'user') userCount++;
             if (['user', 'assistant'].includes(item.role)) conversationCount++;
             if (detail && entries.length < MAX_ENTRIES) entries.push(item);
           }
@@ -107,6 +111,7 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
     if (!session.cwd && !session.sessionId && !count && !fallbackCount) return null;
     // Codex emits both response_item and event_msg copies of the conversation.
     session.messageCount = count + (conversationCount ? 0 : fallbackCount);
+    session.turnCount = (conversationCount ? userCount : userCount + fallbackUserCount) || (session.messageCount ? 1 : 0);
     session.title ||= firstPrompt.replace(/\s+/g, ' ').slice(0, 120) || '未命名会话';
     session.updatedAt ||= info.mtime.toISOString();
     session.createdAt = sourceCreatedAt || session.createdAt || session.updatedAt;
@@ -217,10 +222,15 @@ export function createAgentHistory({ environment = {}, tenantId = 'default', wor
       const matches = result.sessions.filter(session => (!selectedWorkspace || (selectedWorkspace === '__unknown__' ? !session.workspaces.length : session.workspaces.includes(selectedWorkspace))) && (!agent || session.agent === agent) && (!q || [session.title, session.cwd, session.sessionId, session.model, session.branch].some(value => value.toLowerCase().includes(q))));
       return { providers: result.providers, sessions: matches.slice(offset, offset + limit), total: matches.length, offset, limit, workspace: selectedWorkspace, workspaces, scope: result.allowed === '*' ? 'all' : 'workspace' };
     },
+    async snapshot(id: string) {
+      const session = await readSession(id);
+      return { session, messages: session.messages || [], total: session.messages?.length || 0 };
+    },
     async detail(id: string, params = new URLSearchParams()) {
       const { offset, limit } = pagination(params, 100);
       const session = await readSession(id);
       const { messages = [], ...summary } = session;
+      if (params.has('turns')) return { session: summary, ...paginateHistoryTurns(messages, params) };
       return { session: summary, messages: messages.slice(offset, offset + limit), total: messages.length, offset, limit };
     },
     async images(id: string) {

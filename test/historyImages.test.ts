@@ -137,8 +137,8 @@ test('connector uploads images before the preview window and retries only missin
   assert.deepEqual(uploads, [1, 82, 82]);
   const session = db.readTaskCenter('default').sessions[0];
   assert.equal(session.syncedImageCount, 2);
-  assert.equal(session.syncedRange?.offset, 85);
-  assert.equal(db.readRemoteSessionHistory('default', session.id)?.messages.length, 30);
+  assert.equal(session.syncedRange?.offset, 0);
+  assert.equal(db.readRemoteSessionHistory('default', session.id, 0, 200)?.messages.length, 115);
   const list = service.list(session.id, new URLSearchParams());
   assert.deepEqual(list.images.map(image => image.record), [1, 82]);
   assert.equal(service.read(session.id, list.images[0].id).dataUrl, dataUrl);

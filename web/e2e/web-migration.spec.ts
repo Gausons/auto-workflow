@@ -246,12 +246,16 @@ test('remote images appear directly outside and inside the preview window and lo
   page.on('request', req => { if (/\/images\/[a-f0-9]{64}$/.test(req.url())) reads.push(req.url()); });
   await page.goto(`/history/${id}`);
   await expect(page.getByText('已同步 30 / 115 条记录', { exact: true })).toBeVisible();
+  const recentPreview = page.locator('.history-message.user').getByAltText('消息中的截图');
+  await expect(recentPreview).toBeVisible();
+  expect(reads).toHaveLength(1);
   await expect(page.getByText('这张截图来自会话开头')).toBeVisible();
   const preview = page.getByAltText('完整原始截图');
+  await page.getByText('这张截图来自会话开头').scrollIntoViewIfNeeded();
   await expect(preview).toBeVisible();
   await expect.poll(() => preview.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true);
-  expect(reads).toHaveLength(1);
-  await expect(page.getByRole('link', { name: '下载原图' })).toHaveAttribute('href', dataUrl);
+  expect(reads).toHaveLength(2);
+  await expect(page.locator('figure').filter({ has: preview }).getByRole('link', { name: '下载原图' })).toHaveAttribute('href', dataUrl);
   await expect(page.getByText('以下图片来自更早的记录，完整正文未同步。')).toBeVisible();
   await page.locator('.history-message.user').filter({ hasText: '最近的截图' }).scrollIntoViewIfNeeded();
   const inlinePreview = page.locator('.history-message.user').getByAltText('消息中的截图');
@@ -794,4 +798,43 @@ test('task workspace keeps controls visible, filters consistently and uses mobil
   await expect(list).toBeVisible();
   await expect(longTask).toBeFocused();
   await expect(longTask).toHaveAttribute('aria-pressed', 'true');
+});
+
+test('history opens the latest ten turns and preserves the reading position while prepending earlier turns', async ({ page, request }) => {
+  const { token } = await (await request.post('/api/auth/login', { data: { username: 'owner', password } })).json() as { token: string };
+  const headers = { Authorization: `Bearer ${token}` };
+  const deviceId = 'turn-browser-source', nativeId = 'turn-browser-session';
+  const messages = Array.from({ length: 23 }, (_, turn) => [
+    { role: 'user', text: `分页问题 ${turn}` },
+    { role: 'assistant', phase: 'commentary', text: `检查进度 ${turn}` },
+    { role: 'tool_call', name: 'read_file', text: `读取 ${turn}` },
+    { role: 'tool_result', text: `结果 ${turn}` },
+    { role: 'assistant', phase: 'final', text: `分页回答 ${turn}\n\n${'完整问答与工具记录一起加载。'.repeat(20)}` }
+  ]).flat();
+  expect((await request.post('/api/task-center', { headers, data: { action: 'heartbeat', deviceId, name: '轮次测试设备', agents: ['codex'], sessions: [{ nativeId, agent: 'codex', title: '按轮次加载回归', remoteHistory: { format: 2, offset: 0, total: messages.length, messages, sourcePartial: false, truncated: false } }] } })).ok()).toBeTruthy();
+  const { sessions } = await (await request.get('/api/agent-sessions', { headers })).json() as { sessions: Array<{ id: string; deviceId: string }> };
+  const id = sessions.find(session => session.deviceId === deviceId)!.id;
+  await login(page);
+  await page.goto(`/history/${id}`);
+  await expect(page.getByText('已显示 10 / 23 轮问答')).toBeVisible();
+  await expect(page.getByText('已显示 10 / 23 轮问答')).toBeInViewport();
+  await expect(page.getByText('分页问题 13', { exact: true })).toHaveCount(1);
+  await expect(page.getByText('分页问题 12', { exact: true })).toHaveCount(0);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route(`**/api/agent-sessions/${id}?turns=10&before=*`, async route => { await gate; await route.continue(); });
+  const scroll = page.locator('.history-chat-scroll');
+  await scroll.evaluate(element => { element.scrollTop = 0; });
+  await expect(page.getByRole('button', { name: '正在加载更早的问答…' })).toBeVisible();
+  const anchor = await page.getByText('分页问题 13', { exact: true }).boundingBox();
+  release();
+  await expect(page.getByText('已显示 20 / 23 轮问答')).toBeVisible();
+  await expect(page.getByText('分页问题 3', { exact: true })).toHaveCount(1);
+  await expect(page.getByText('分页问题 2', { exact: true })).toHaveCount(0);
+  const after = await page.getByText('分页问题 13', { exact: true }).boundingBox();
+  expect(Math.abs(after!.y - anchor!.y)).toBeLessThan(3);
+  await scroll.evaluate(element => { element.scrollTop = 0; });
+  await expect(page.getByText('已显示 23 / 23 轮问答')).toBeVisible();
+  await expect(page.getByText('分页问题 0', { exact: true })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: '加载更早的 10 轮问答' })).toHaveCount(0);
 });

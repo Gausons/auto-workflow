@@ -48,10 +48,11 @@ test('PostgreSQL initializes new schemas, upgrades version 1, preserves data and
   assert.equal(upgraded.getTenant('default')?.id, 'default');
   upgraded.close();
   const check = rawDatabase(key);
-  assert.equal(Number(check.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()?.version), 5);
+  assert.equal(Number(check.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()?.version), 6);
   assert.equal(check.prepare("SELECT to_regclass(current_schema() || '.import_receipts') AS table_name").get()?.table_name, null);
   assert.equal(Number(check.prepare('SELECT count(*) AS count FROM remote_session_history').get()?.count), 0);
   assert.equal(Number(check.prepare('SELECT count(*) AS count FROM remote_session_images').get()?.count), 0);
+  assert.equal(Number(check.prepare('SELECT count(*) AS count FROM remote_history_uploads').get()?.count), 0);
   check.prepare('INSERT INTO schema_migrations VALUES (999)').run();
   assert.throws(() => openDatabase(key), /PostgreSQL/);
   check.prepare('DELETE FROM schema_migrations WHERE version = 999').run();
@@ -119,7 +120,7 @@ test('version 5 upgrades existing task snapshots without inventing prior change 
   const before = database.readTaskCenter('default'); database.close();
   const raw = rawDatabase(key);
   raw.prepare('DROP TABLE task_center_changes').run();
-  raw.prepare('DELETE FROM schema_migrations WHERE version = 5').run(); raw.close();
+  raw.prepare('DELETE FROM schema_migrations WHERE version >= 5').run(); raw.close();
   const upgraded = openDatabase(key);
   try {
     assert.deepEqual(upgraded.readTaskCenter('default'), before);

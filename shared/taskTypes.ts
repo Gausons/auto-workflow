@@ -91,6 +91,7 @@ export interface Device {
 }
 
 export interface Session {
+  turnCount?: number;
   id: string;
   nativeId?: string | null;
   sessionId?: string | null;
@@ -308,6 +309,7 @@ export interface HistoryMessage {
 }
 
 export interface RemoteHistory {
+  format?: 2;
   messages: HistoryMessage[];
   offset: number;
   total: number;

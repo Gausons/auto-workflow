@@ -482,3 +482,72 @@ test('single Markdown body supports creation, editing, legacy conversion and han
   const migrated = database.readTaskCenter('default').tasks.find(item => item.id === oldTask.id);
   assert.equal(migrated?.content, oldTask.content); assert.equal(migrated?.context, undefined);
 });
+
+test('full history uploads atomically, retries chunks and preserves complete turns beyond thirty records', async t => {
+  const { center, cmd, database } = fixture(t);
+  const session = { ...source, sessionId: 'full-history' };
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'task-full-history-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const messages = Array.from({ length: 23 }, (_, turn) => [
+    { role: 'user', text: `完整问题 ${turn}`, images: [] },
+    ...Array.from({ length: 10 }, (_, index) => ({ role: index % 2 ? 'tool_result' : 'tool_call', text: '中文😀'.repeat(2000), images: [] })),
+    { role: 'assistant', text: `完整回答 ${turn}`, images: [] }
+  ]).flat();
+  session.messageCount = messages.length;
+  await cmd({ action: 'heartbeat', deviceId: 'remote', name: 'Linux', agents: ['codex'], sessions: [{ nativeId: session.sessionId, agent: 'codex', title: '旧内容', remoteHistory: { offset: 0, total: 1, sourcePartial: false, truncated: false, messages: [{ role: 'user', text: '旧完整正文' }] } }] });
+  const id = database.readTaskCenter('default').sessions[0].id;
+  let fail = true, chunks = 0;
+  let firstBody: unknown;
+  const request = async (method: string, body?: unknown) => {
+    if (method === 'GET') return center.snapshot();
+    assert.ok(Buffer.byteLength(JSON.stringify(body)) < 900000);
+    if (++chunks === 1) firstBody = body;
+    if (chunks === 2 && fail) { fail = false; throw new Error('分片断网'); }
+    return cmd(body);
+  };
+  const index: Record<string, string> = {};
+  const options = { request, history: { catalog: async () => ({ providers: [{ id: 'codex' }], sessions: [session] }), snapshot: async () => ({ session, messages, total: messages.length }), detail: async () => ({ session, messages, total: messages.length }) }, deviceId: 'remote', name: 'Linux', outputDir: dir, includeExcerpts: true, sessionIndex: index };
+  await assert.rejects(syncDeviceOnce(options), /分片断网/);
+  assert.deepEqual(index, {});
+  assert.equal(database.readRemoteSessionHistory('default', id)?.messages[0].text, '旧完整正文');
+  await assert.rejects(center.command(firstBody, { id: 'other-owner' }), { statusCode: 403 });
+  assert.equal(database.readRemoteSessionHistory('other', id), null);
+  const bad = structuredClone(firstBody) as { sessions: Array<{ historyUpload: { chunk: string } }> };
+  bad.sessions[0].historyUpload.chunk = bad.sessions[0].historyUpload.chunk.replace('完整问题', '篡改问题');
+  await assert.rejects(cmd(bad), { statusCode: 409 });
+  await syncDeviceOnce(options);
+  const saved = database.readRemoteSessionHistory('default', id, 0, 10000)!;
+  assert.equal(saved.total, messages.length);
+  assert.equal(saved.range.offset, 0);
+  assert.equal(saved.range.truncated, false);
+  assert.deepEqual(saved.messages, messages);
+  assert.equal(Object.keys(index).length, 1);
+  // A lost acknowledgement of the final write must not repeat or erase content.
+  await cmd(firstBody);
+  assert.deepEqual(database.readRemoteSessionHistory('default', id, 0, 10000)?.messages, messages);
+});
+
+test('history chunk conflicts and checksum failures roll back while duplicate concurrent completion is idempotent', async t => {
+  const { database, cmd } = fixture(t);
+  const history = { format: 2, offset: 0, total: 2, sourcePartial: false, truncated: false, messages: [{ role: 'user', text: '问题' }, { role: 'assistant', text: '回答' }] };
+  const payload = JSON.stringify(history), digest = createHash('sha256').update(payload).digest('hex');
+  const split = Math.floor(payload.length / 2);
+  const chunk = (offset: number, content = payload.slice(offset, offset === 0 ? split : undefined), hash = digest) => heartbeat([{ nativeId: 'chunks', agent: 'claude', title: '分片冲突', historyUpload: { digest: hash, size: payload.length, offset, chunk: content } }]);
+  await cmd(chunk(0));
+  const id = database.readTaskCenter('default').sessions[0].id;
+  assert.equal(database.readRemoteSessionHistory('default', id), null);
+  await assert.rejects(cmd(chunk(split + 1)), { statusCode: 409 });
+  await assert.rejects(cmd(chunk(split, payload.slice(split).replace('回答', '篡改'))), { statusCode: 400 });
+  assert.equal(database.readRemoteSessionHistory('default', id), null);
+  const completions = await Promise.allSettled([cmd(chunk(split)), cmd(chunk(split))]);
+  assert.ok(completions.every(result => result.status === 'fulfilled'));
+  assert.deepEqual(database.readRemoteSessionHistory('default', id)?.messages, history.messages);
+  await cmd(chunk(0, payload.slice(0, split), 'f'.repeat(64)));
+  await assert.rejects(cmd(chunk(split)), { statusCode: 409 });
+  assert.deepEqual(database.readRemoteSessionHistory('default', id)?.messages, history.messages);
+  const invalid = '{broken}';
+  await assert.rejects(cmd(heartbeat([{ nativeId: 'chunks', agent: 'claude', title: '无效正文', historyUpload: {
+    digest: createHash('sha256').update(invalid).digest('hex'), size: invalid.length, offset: 0, chunk: invalid
+  } }])), { statusCode: 400 });
+  assert.deepEqual(database.readRemoteSessionHistory('default', id)?.messages, history.messages);
+});

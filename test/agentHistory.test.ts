@@ -143,7 +143,7 @@ test('supports additional adapters without changing the service contract', async
   assert.throws(() => createAgentHistory({ workspace: () => f.workspace, adapters: [adapter, adapter] }));
 });
 
-test('reads archived event-only logs and marks long text truncation explicitly', async (t) => {
+test('reads archived event-only logs without truncating long answers', async (t) => {
   const f = await fixture(t);
   await f.save(path.join(f.codexDir, 'archived_sessions', 'old.jsonl'), [
     { type: 'session_meta', timestamp, payload: { id: 'old', cwd: f.workspace } },
@@ -156,8 +156,7 @@ test('reads archived event-only logs and marks long text truncation explicitly',
   assert.equal(list.sessions[0].status, 'interrupted');
   const detail = await f.history.detail(list.sessions[0].id);
   assert.equal(detail.total, 2);
-  assert.match(detail.messages[1].text, /已截断/);
-  assert.ok(detail.messages[1].text.length < 25000);
+  assert.equal(detail.messages[1].text, 'x'.repeat(25000));
 });
 
 test('history HTTP API requires member authentication and supports viewer read access', async (t) => {
@@ -336,4 +335,24 @@ test('Codex keeps explicit commentary and final phases without guessing legacy m
   ]);
   const detail = await f.history.detail((await f.history.catalog()).sessions[0].id);
   assert.deepEqual(detail.messages.map(message => message.phase), ['commentary', 'final', undefined, undefined]);
+});
+
+test('local history loads the last ten whole turns and then earlier turns', async t => {
+  const f = await fixture(t);
+  await f.save(path.join(f.codexDir, 'turns.jsonl'), [
+    { type: 'session_meta', timestamp, payload: { id: 'turn-pagination', cwd: f.workspace } },
+    ...Array.from({ length: 21 }, (_, index) => [
+      { type: 'response_item', timestamp, payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `问题 ${index}` }] } },
+      { type: 'response_item', timestamp, payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: `回答 ${index}` }] } }
+    ]).flat()
+  ]);
+  const session = (await f.history.catalog()).sessions[0];
+  const latest = await f.history.detail(session.id, new URLSearchParams({ turns: '10' }));
+  assert.equal(latest.messages[0].text, '问题 11');
+  assert.equal(latest.messages.at(-1)?.text, '回答 20');
+  assert.ok('turnPage' in latest);
+  assert.equal(latest.turnPage.count, 10);
+  const older = await f.history.detail(session.id, new URLSearchParams({ turns: '10', before: String(latest.turnPage.before) }));
+  assert.equal(older.messages[0].text, '问题 1');
+  assert.equal(older.messages.at(-1)?.text, '回答 10');
 });

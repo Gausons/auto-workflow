@@ -14,6 +14,7 @@ interface TaskCenterDatabase {
   readTaskCenter(tenantId: string): TaskCenterData;
   readTaskCenterChanges?(tenantId: string, since: number): { data: TaskCenterData; reset: boolean; changes: TaskCenterChangeIds };
   mutateTaskCenter<T>(tenantId: string, update: (data: TaskCenterData) => T): T;
+  stageRemoteSessionHistory(tenantId: string, sessionId: string, value: unknown): RemoteHistory | null;
   setRemoteSessionHistory(tenantId: string, sessionId: string, history: RemoteHistory | null): void;
 }
 interface HistoryCatalog {
@@ -200,14 +201,17 @@ export function createTaskCenter({ database, tenantId, history, environment = {}
             const id = sessionKey(device.id, `${agent}:${nativeId}`);
             const createdAt = typeof s.createdAt === 'string' && Number.isFinite(Date.parse(s.createdAt)) ? new Date(s.createdAt).toISOString() : undefined;
             const updatedAt = typeof s.updatedAt === 'string' && Number.isFinite(Date.parse(s.updatedAt)) ? new Date(s.updatedAt).toISOString() : now();
-            const remoteHistory = s.remoteHistory === undefined ? undefined : validateRemoteHistory(s.remoteHistory);
+            if (s.historyUpload !== undefined && s.remoteHistory !== undefined) throw httpError(400, '历史上传格式冲突');
+            const staged = s.historyUpload === undefined ? null : database.stageRemoteSessionHistory(tenantId, id, s.historyUpload);
+            const old = data.sessions.findIndex(session => session.id === id);
+            if (s.historyUpload !== undefined && !staged && old >= 0) continue;
+            const remoteHistory = staged || (s.remoteHistory === undefined ? undefined : validateRemoteHistory(s.remoteHistory));
             const item: Session = { id, nativeId, deviceId: device.id, agent, agentLabel: text(s.agentLabel ?? agent, 120), title: required(s.title, 120), cwd: text(s.cwd ?? '', 2000), createdAt,
               model: text(s.model ?? '', 500), branch: text(s.branch ?? '', 500), remoteHistory,
               status: text(s.status ?? 'unknown', 80), archived: s.archived === true, updatedAt,
               excerpt: text(s.excerpt ?? '', 23000), partial: true };
-            database.setRemoteSessionHistory(tenantId, id, remoteHistory ?? null);
+            if (s.historyUpload === undefined || staged) database.setRemoteSessionHistory(tenantId, id, remoteHistory ?? null);
             const summary = remoteHistorySummary(item);
-            const old = data.sessions.findIndex(session => session.id === id);
             if (remoteHistory && old >= 0) summary.syncedImageCount = data.sessions[old].syncedImageCount;
             if (old < 0) data.sessions.push(summary); else data.sessions[old] = summary;
           }

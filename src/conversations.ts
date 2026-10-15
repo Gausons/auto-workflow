@@ -10,6 +10,7 @@ import type { Environment } from './issueSources/types.js';
 import { deliverRecord } from './sessionDelivery/records.js';
 import { httpError } from './rbac.js';
 import { remoteContinuationProject } from './remoteSession.js';
+import { paginateHistoryTurns } from './historyPagination.js';
 import { remoteHistorySummary } from './remoteHistory.js';
 import { verifyBundle, verifySnapshot } from '@auto-workflow/context-engine';
 import { detachSnapshot, restoreDetachedSnapshot, verifyDetachedManifest, type DetachedManifest } from '@auto-workflow/context-engine/detached-bundle';
@@ -189,11 +190,13 @@ export function createConversations({ database, tenantId, history, delivery, exe
       const offset = Number(params.get('offset') || 0), limit = Number(params.get('limit') || 100);
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw httpError(400, '分页参数无效');
       if (s.recordMode === 'synced') {
-        const preview = database.readRemoteSessionHistory(tenantId, s.id, offset, limit);
+        const preview = database.readRemoteSessionHistory(tenantId, s.id, params.has('turns') ? 0 : offset, params.has('turns') ? 10000 : limit);
         if (!preview) throw httpError(503, '远程会话正文暂不可用，请重新同步来源设备历史');
+        if (params.has('turns')) return { session: { ...s, sessionId: s.nativeId, canContinue: Boolean(remoteContinuationProject(data, s)), syncedRange: preview.range }, ...paginateHistoryTurns(preview.messages, params) };
         return { session: { ...s, sessionId: s.nativeId, canContinue: Boolean(remoteContinuationProject(data, s)), syncedRange: preview.range }, messages: preview.messages, total: preview.total, offset, limit };
       }
       const messages = s.excerpt ? [{ role: 'assistant', text: s.excerpt, timestamp: s.updatedAt }] : [];
+      if (params.has('turns')) return { session: { ...s, recordMode: 'excerpt' as const, sessionId: s.nativeId, partial: true }, ...paginateHistoryTurns(messages, params) };
       return { session: { ...s, recordMode: 'excerpt' as const, sessionId: s.nativeId, canContinue: Boolean(remoteContinuationProject(data, s)), partial: true }, messages: messages.slice(offset, offset + limit), total: messages.length, offset, limit };
     },
     detail(id: string, params = new URLSearchParams()) {
@@ -213,6 +216,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
         availability: session.status === 'preparing' ? 'pending' : !session.contextTransferred && (session.contextSourceDeviceId || session.deviceId) !== 'local' ? 'remote' : 'ready',
         ...(session.contextCoverage ? { coverage: session.contextCoverage } : {})
       };
+      if (params.has('turns')) return { session: { ...session, managed: true, sessionId: session.nativeId }, inherited, ...paginateHistoryTurns(messages, params) };
       return { session: { ...session, managed: true, sessionId: session.nativeId }, messages: messages.slice(offset, offset + limit), total: messages.length, offset, limit,
         inherited };
     },

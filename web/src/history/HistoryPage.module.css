@@ -1,0 +1,4 @@
+.scroll {
+  scroll-behavior: auto;
+  overflow-anchor: none;
+}

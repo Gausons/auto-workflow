@@ -32,3 +32,7 @@ test('managed conversation display identity does not duplicate turns with a nati
   const messages = [{ role: 'user', text: 'continue', turnId: 'execution-1' }, { role: 'assistant', text: 'done', turnId: 'execution-1' }];
   assert.deepEqual(pendingHistoryMessages(messages, [{ id: 'execution-1', conversationId: 'managed', turnId: 'native-turn', prompt: 'continue', output: 'done', status: 'completed' }]), []);
 });
+
+test('older execution outputs stay outside a paginated transcript window', () => {
+  assert.deepEqual(pendingHistoryMessages([{ role: 'user', text: '更晚的问题', timestamp: '2026-09-21T01:00:00Z' }], [job]), []);
+});

@@ -10,6 +10,7 @@ import type { WorkIssue } from './issueSources/types.js';
 import type { HistoryMessage, RemoteHistory, TaskCenterData } from '../shared/taskTypes.js';
 import type { SessionImage, SessionImageInfo, SessionImageList } from '../shared/historyImageTypes.js';
 import { httpError } from './rbac.js';
+import { FULL_HISTORY_BYTES, validateRemoteHistory } from './remoteHistory.js';
 import { taskCenterCollections, type TaskCenterChangeIds } from '../shared/taskCenterSync.js';
 import { changedTaskCenterIds, taskCenterChangeRetention, taskCenterState } from './taskCenterChanges.js';
 import type { SessionContext } from './contextCompiler.js';
@@ -264,8 +265,50 @@ export function openDatabase(environment: Record<string, string | undefined>) {
         ON CONFLICT (tenant_id, session_id) DO UPDATE SET payload = excluded.payload`).run(tenantId, sessionId, JSON.stringify(history));
       else {
         db.prepare('DELETE FROM remote_session_history WHERE tenant_id = ? AND session_id = ?').run(tenantId, sessionId);
+        db.prepare('DELETE FROM remote_history_uploads WHERE tenant_id = ? AND session_id = ?').run(tenantId, sessionId);
         db.prepare('DELETE FROM remote_session_images WHERE tenant_id = ? AND session_id = ?').run(tenantId, sessionId);
       }
+    },
+    // The heartbeat transaction serializes uploads with device ownership checks.
+    // Readers keep the previous snapshot until the complete digest is verified.
+    stageRemoteSessionHistory: (tenantId: string, sessionId: string, value: unknown): RemoteHistory | null => {
+      const input = record(value);
+      const { digest, offset, size, chunk } = input;
+      if (typeof digest !== 'string' || !/^[a-f0-9]{64}$/.test(digest) ||
+          !Number.isSafeInteger(offset) || Number(offset) < 0 || !Number.isSafeInteger(size) || Number(size) < 1 || Number(size) > FULL_HISTORY_BYTES ||
+          typeof chunk !== 'string' || !chunk.length || chunk.length > 100000 || Number(offset) + chunk.length > Number(size) || /[\u0000\uD800-\uDFFF]/u.test(chunk)) throw httpError(400, '历史上传分片无效');
+      let saved = db.prepare('SELECT digest, payload, size, complete FROM remote_history_uploads WHERE tenant_id = ? AND session_id = ?')
+        .get(tenantId, sessionId) as { digest: string; payload: string; size: number; complete: boolean } | undefined;
+      if (!saved || saved.digest !== digest) {
+        if (offset !== 0) throw httpError(409, '历史上传已变化，请从头同步');
+        saved = { digest, payload: '', size: Number(size), complete: false };
+      }
+      if (saved.size !== size) throw httpError(409, '历史上传长度不一致');
+      if (saved.complete) {
+        const published = db.prepare('SELECT payload FROM remote_session_history WHERE tenant_id = ? AND session_id = ?').get(tenantId, sessionId) as { payload: RemoteHistory } | undefined;
+        if (!published) throw httpError(409, '已上传历史不可用，请重新同步');
+        return published.payload;
+      }
+      if (Number(offset) < saved.payload.length) {
+        if (saved.payload.slice(Number(offset), Number(offset) + chunk.length) !== chunk) throw httpError(409, '历史上传分片冲突');
+        return null;
+      }
+      if (offset !== saved.payload.length) throw httpError(409, '历史上传缺少前序分片');
+      const payload = saved.payload + chunk;
+      if (Buffer.byteLength(payload) > FULL_HISTORY_BYTES) throw httpError(413, '会话正文超过 64 MiB 同步上限');
+      const complete = payload.length === size;
+      let history: RemoteHistory | null = null;
+      if (complete) {
+        if (createHash('sha256').update(payload).digest('hex') !== digest) throw httpError(400, '历史上传校验失败');
+        let parsed: unknown;
+        try { parsed = JSON.parse(payload); } catch { throw httpError(400, '历史上传正文不是有效 JSON'); }
+        history = validateRemoteHistory(parsed);
+        if (history.format !== 2 || history.offset !== 0) throw httpError(400, '历史上传必须包含从头读取的正文');
+      }
+      db.prepare(`INSERT INTO remote_history_uploads VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (tenant_id, session_id) DO UPDATE SET digest = excluded.digest, payload = excluded.payload, size = excluded.size, complete = excluded.complete`)
+        .run(tenantId, sessionId, digest, complete ? '' : payload, size, complete ? 'true' : 'false');
+      return history;
     },
     readTaskCenter,
     readTaskCenterChanges: (tenantId: string, since: number) => transaction(() => {

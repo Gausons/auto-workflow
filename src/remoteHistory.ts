@@ -1,8 +1,10 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { HistoryMessage, RemoteHistory, Session } from '../shared/taskTypes.js';
+import { historyTurnStarts } from '../shared/historyTurns.js';
 import { httpError } from './rbac.js';
 
 export const REMOTE_HISTORY_LIMIT = 30;
+export const FULL_HISTORY_BYTES = 64 * 1024 * 1024;
 const TEXT_LIMIT = 23000;
 const IMAGE_BUDGET = 256 * 1024;
 const object = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -11,11 +13,13 @@ const object = (value: unknown): Record<string, unknown> => value && typeof valu
 // remains visible as an explicit gap in the bounded preview.
 export function normalizeRemoteHistory(value: unknown): RemoteHistory {
   const input = object(value);
-  if (!Array.isArray(input.messages) || input.messages.length > REMOTE_HISTORY_LIMIT ||
+  if (!Array.isArray(input.messages) || input.messages.length > (input.format === 2 ? 10000 : REMOTE_HISTORY_LIMIT) ||
       !Number.isSafeInteger(input.offset) || Number(input.offset) < 0 ||
       !Number.isSafeInteger(input.total) || Number(input.total) < Number(input.offset) + input.messages.length ||
       typeof input.sourcePartial !== 'boolean' || typeof input.truncated !== 'boolean') throw httpError(400, '远程历史记录范围无效');
-  let textBudget = TEXT_LIMIT, imageBudget = IMAGE_BUDGET, truncated = input.truncated;
+  if (input.format !== undefined && input.format !== 2) throw httpError(400, '远程历史格式无效');
+  if (input.format === 2 && Buffer.byteLength(JSON.stringify(value)) > FULL_HISTORY_BYTES) throw httpError(413, '会话正文超过 64 MiB 同步上限');
+  let textBudget = input.format === 2 ? Infinity : TEXT_LIMIT, imageBudget = IMAGE_BUDGET, truncated = input.truncated;
   function previewText(value: string, limit = value.length) {
     // JSONB rejects NUL and unpaired UTF-16 surrogates. In Unicode mode the
     // surrogate range leaves complete pairs intact; never split one at a limit.
@@ -61,7 +65,7 @@ export function normalizeRemoteHistory(value: unknown): RemoteHistory {
     });
     messages.unshift(message);
   }
-  return { messages, offset: Number(input.offset), total: Number(input.total), sourcePartial: input.sourcePartial, truncated };
+  return { ...(input.format === 2 ? { format: 2 as const } : {}), messages, offset: Number(input.offset), total: Number(input.total), sourcePartial: input.sourcePartial, truncated };
 }
 
 // The server accepts the current wire format without repairing uploaded data.
@@ -77,6 +81,6 @@ export function remoteHistorySummary(session: Session): Session {
   const { remoteHistory, ...summary } = session;
   if (!remoteHistory) return summary;
   const { messages, ...syncedRange } = remoteHistory;
-  return { ...summary, recordMode: 'synced', syncedRange, messageCount: remoteHistory.total,
+  return { ...summary, ...(remoteHistory.format === 2 ? { turnCount: historyTurnStarts(messages).length } : {}), recordMode: 'synced', syncedRange, messageCount: remoteHistory.total,
     partial: remoteHistory.sourcePartial || remoteHistory.truncated || remoteHistory.offset > 0 || messages.length < remoteHistory.total };
 }

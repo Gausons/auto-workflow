@@ -38,7 +38,7 @@ function Messages({ sessionId, messages, offset, images }: { sessionId: string; 
   return <><div className="history-messages" data-history-transcript ref={host} />{slots.map(({ node, image }) => createPortal(<ImagePreview sessionId={sessionId} image={image} />, node, image.id))}</>;
 }
 
-export function HistoryTranscript({ session, messages }: { session: Session; messages: HistoryMessage[] }) {
+export function HistoryTranscript({ session, messages, recordOffset }: { session: Session; messages: HistoryMessage[]; recordOffset?: number }) {
   const query = useQuery({
     queryKey: ['history', 'detail', session.id, 'image-metadata', session.syncedImageCount],
     enabled: session.recordMode === 'synced' && Boolean(session.syncedImageCount),
@@ -56,8 +56,8 @@ export function HistoryTranscript({ session, messages }: { session: Session; mes
     }
   });
   const images = query.data || noImages;
-  const offset = session.recordMode === 'synced' ? session.syncedRange?.offset || 0 : 0;
-  const earlier = images.filter(image => image.record <= offset);
+  const offset = recordOffset ?? (session.recordMode === 'synced' ? session.syncedRange?.offset || 0 : 0);
+  const earlier = images.filter(image => session.syncedRange?.format !== 2 && image.record <= (session.syncedRange?.offset || 0));
   const groups = new Map<number, SessionImageInfo[]>();
   for (const image of earlier) groups.set(image.record, [...(groups.get(image.record) || []), image]);
   return <>

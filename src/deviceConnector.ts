@@ -9,7 +9,7 @@ import { RemoteCodexWorker } from './remoteCodexWorker.js';
 import { runDeviceControl, watchDeviceUpdates } from './deviceControlClient.js';
 import type { ExecutionFeedback, SendExecutionFeedback } from '../shared/realtime.js';
 import { bindDeviceConnection } from './deviceConnectionIdentity.js';
-import { normalizeRemoteHistory, REMOTE_HISTORY_LIMIT } from './remoteHistory.js';
+import { normalizeRemoteHistory, FULL_HISTORY_BYTES } from './remoteHistory.js';
 import type { AgentProject, RemoteHistory, TaskCenterData } from '../shared/taskTypes.js';
 import type { Environment } from './issueSources/types.js';
 import type { HistoryEntry, HistorySession } from './agentHistory/types.js';
@@ -18,6 +18,7 @@ import type { SessionImage } from '../shared/historyImageTypes.js';
 interface History {
   catalog(): Promise<{ providers: Array<{ id: string }>; sessions: HistorySession[] }>;
   detail?(id: string, params?: URLSearchParams): Promise<{ messages: HistoryEntry[]; total?: number; session?: HistorySession }>;
+  snapshot?(id: string): Promise<{ messages: HistoryEntry[]; total: number; session: HistorySession }>;
   images?(id: string): Promise<SessionImage[]>;
 }
 type Request = (method: string, body?: unknown, endpoint?: string) => Promise<unknown>;
@@ -25,7 +26,7 @@ interface SyncOptions {
   request: Request; history: History; deviceId: string; name: string; outputDir: string;
   includeExcerpts?: boolean; codexProjects?: AgentProject[]; resumeCodex?: boolean; sessionIndex?: Record<string, string>;
 }
-interface DeviceSession { nativeId: string; agent: string; agentLabel: string; title: string; cwd: string; status: string; createdAt: string; updatedAt: string; excerpt: string; archived: boolean; model: string; branch: string; remoteHistory?: RemoteHistory }
+interface DeviceSession { nativeId: string; agent: string; agentLabel: string; title: string; cwd: string; status: string; createdAt: string; updatedAt: string; excerpt: string; archived: boolean; model: string; branch: string; remoteHistory?: RemoteHistory; historyUpload?: { digest: string; offset: number; size: number; chunk: string } }
 type ErrorLike = Error & { code?: string; status?: number };
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const asError = (value: unknown): ErrorLike => value instanceof Error ? value as ErrorLike : new Error(String(value));
@@ -59,15 +60,21 @@ export function deviceConnectorDefaults(environment: Environment) {
 
 // A transport only: receiving a packet never launches a process or marks it started.
 const sessionFingerprint = (session: HistorySession, includeExcerpts: boolean) => createHash('sha256').update(JSON.stringify({
-  format: 4, messageCount: session.messageCount, partial: session.partial, model: session.model, branch: session.branch,
+  format: 5, messageCount: session.messageCount, partial: session.partial, model: session.model, branch: session.branch,
   nativeId: session.sessionId || session.id, agent: session.agent, title: session.title, cwd: session.cwd,
   status: session.status, createdAt: session.createdAt, updatedAt: session.updatedAt, archived: session.archived === true, includeExcerpts
 })).digest('hex');
 
+function historyChunk(payload: string, offset: number, digest = createHash('sha256').update(payload).digest('hex')) {
+  let end = Math.min(payload.length, offset + 100000);
+  if (end < payload.length && /[\uD800-\uDBFF]/.test(payload[end - 1])) end--;
+  return { digest, offset, size: payload.length, chunk: payload.slice(offset, end) };
+}
+
 export async function syncDeviceOnce({ request, history, deviceId, name, outputDir, includeExcerpts = false, codexProjects, resumeCodex = false, sessionIndex }: SyncOptions) {
   const catalog = await history.catalog();
   const agents = catalog.providers.map(provider => provider.id);
-  const sessions: Array<{ value: DeviceSession; key: string; fingerprint: string; historyId: string }> = [];
+  const sessions: Array<{ value: DeviceSession; key: string; fingerprint: string; historyId: string; upload?: string; historyTotal?: number; source: HistorySession; prepared?: boolean }> = [];
   const currentKeys = new Set<string>();
   // A native session can have multiple rollout files. Use the newest source
   // consistently for both the preview and images, including unchanged sessions.
@@ -78,25 +85,39 @@ export async function syncDeviceOnce({ request, history, deviceId, name, outputD
     currentKeys.add(key);
     const fingerprint = sessionFingerprint(s, includeExcerpts);
     if (sessionIndex?.[key] === fingerprint) continue;
+    sessions.push({ key, fingerprint, historyId: s.id, source: s, value: { nativeId, agent: s.agent, agentLabel: s.agentLabel, title: s.title.slice(0, 120), cwd: s.cwd, status: s.status, createdAt: s.createdAt, updatedAt: s.updatedAt, excerpt: '', archived: s.archived === true, model: s.model, branch: s.branch } });
+  }
+  // Prepare only the next bounded request, rather than retaining every full
+  // session in memory during an initial backfill.
+  async function prepare(item: typeof sessions[number]) {
+    const s = item.source;
     let excerpt = '';
     let remoteHistory: RemoteHistory | undefined;
     if (includeExcerpts) {
       if (!history.detail) throw new Error('历史服务不支持读取会话详情');
-      let offset = Math.max(0, s.messageCount - REMOTE_HISTORY_LIMIT);
-      let result = await history.detail(s.id, new URLSearchParams({ offset: String(offset), limit: String(REMOTE_HISTORY_LIMIT) }));
-      // The parser may expose fewer records than the source count after hitting
-      // its safety limit, or the file may have changed since catalog scanning.
-      if (result.total !== undefined && offset !== Math.max(0, result.total - REMOTE_HISTORY_LIMIT)) {
-        offset = Math.max(0, result.total - REMOTE_HISTORY_LIMIT);
-        result = await history.detail(s.id, new URLSearchParams({ offset: String(offset), limit: String(REMOTE_HISTORY_LIMIT) }));
+      let result = history.snapshot ? await history.snapshot(s.id) : await history.detail(s.id, new URLSearchParams({ offset: '0', limit: '200' }));
+      const records = [...result.messages];
+      while (!history.snapshot && result.total !== undefined && records.length < result.total) {
+        const next = await history.detail(s.id, new URLSearchParams({ offset: String(records.length), limit: '200' }));
+        if (!next.messages.length || next.total !== result.total || next.session?.updatedAt !== result.session?.updatedAt) throw new Error('历史记录在同步期间变化，请重新同步');
+        records.push(...next.messages);
+        if (records.length > 10000) throw new Error('会话记录超过同步读取上限');
       }
-      const messages = history.images ? result.messages.map(message => ({ ...message, images: message.images.map(image => image.dataUrl
-        ? { external: true, alt: '图片单独同步，可在「会话图片」中查看。' } : image) })) : result.messages;
-      remoteHistory = normalizeRemoteHistory({ messages, offset, total: Math.max(result.session?.messageCount ?? result.total ?? s.messageCount, offset + result.messages.length), sourcePartial: result.session?.partial ?? s.partial, truncated: false });
+      result = { ...result, messages: records };
+      const messages = history.images ? records.map(message => ({ ...message, images: message.images.map(image => image.dataUrl
+        ? { external: true, alt: '图片单独同步，可在「会话图片」中查看。' } : image) })) : records;
+      remoteHistory = normalizeRemoteHistory({ format: 2, messages, offset: 0, total: Math.max(result.session?.messageCount ?? result.total ?? records.length, records.length), sourcePartial: result.session?.partial ?? s.partial, truncated: false });
       excerpt = result.messages.filter(message => ['user', 'assistant'].includes(message.role)).map(message => `${message.role}: ${message.text || ''}`).join('\n\n').slice(-23000);
     }
-    sessions.push({ key, fingerprint, historyId: s.id, value: { nativeId, agent: s.agent, agentLabel: s.agentLabel, title: s.title.slice(0, 120), cwd: s.cwd, status: s.status, createdAt: s.createdAt, updatedAt: s.updatedAt, excerpt, archived: s.archived === true, model: s.model, branch: s.branch, remoteHistory } });
+    const serialized = remoteHistory && JSON.stringify(remoteHistory);
+    if (serialized && Buffer.byteLength(serialized) > FULL_HISTORY_BYTES) throw new Error('会话正文超过 64 MiB 同步上限');
+    const upload = serialized && Buffer.byteLength(serialized) > 700000 ? serialized : undefined;
+    const historyTotal = remoteHistory?.total;
+    const historyUpload = upload ? historyChunk(upload, 0) : undefined;
+    Object.assign(item, { upload, historyTotal, prepared: true });
+    Object.assign(item.value, { excerpt, remoteHistory: upload ? undefined : remoteHistory, historyUpload });
   }
+
   let firstHeartbeat = true;
   for (let i = 0; i < sessions.length || firstHeartbeat;) {
     const batch: typeof sessions = [];
@@ -105,6 +126,8 @@ export async function syncDeviceOnce({ request, history, deviceId, name, outputD
     do {
       const item = sessions[i + batch.length];
       if (!item) break;
+      if (!item.prepared) await prepare(item);
+      if (batch.length && item.upload) break;
       body.sessions.push(item.value);
       if (Buffer.byteLength(JSON.stringify(body)) > 900000) {
         body.sessions.pop();
@@ -112,12 +135,20 @@ export async function syncDeviceOnce({ request, history, deviceId, name, outputD
         break;
       }
       batch.push(item);
+      if (item.upload) break;
     } while (batch.length < 20);
     await request('POST', body);
     for (const item of batch) {
+      if (item.upload) {
+        let offset = item.value.historyUpload!.chunk.length;
+        while (offset < item.upload.length) {
+          const historyUpload = historyChunk(item.upload, offset, item.value.historyUpload!.digest);
+          await request('POST', { action: 'heartbeat', deviceId, name, agents, capabilities: { resumeCodex, gitBranches: resumeCodex }, sessions: [{ ...item.value, historyUpload }] });
+          offset += historyUpload.chunk.length;
+        }
+      }
       if (includeExcerpts && history.images) {
-        // Do not bump the preview fingerprint format or backfill unchanged
-        // sessions. Images from changed sessions outlive the 30-record window.
+        // Original image bytes are synchronized separately from text records.
         const sessionId = createHash('sha256').update(`${deviceId}\0${item.value.agent}:${item.value.nativeId}`).digest('hex');
         const images = await history.images(item.historyId);
         const saved = new Set<string>();
@@ -131,13 +162,15 @@ export async function syncDeviceOnce({ request, history, deviceId, name, outputD
         for (const image of images) {
           // The source can grow after its heartbeat. Publish those new records
           // on the next sync before uploading their images; keep this boundary.
-          if (image.record > item.value.remoteHistory!.total) continue;
+          if (image.record > item.historyTotal!) continue;
           if (!saved.has(image.id)) await request('POST', { deviceId, nativeId: item.value.nativeId, agent: item.value.agent, image }, '/api/task-center/history-images');
         }
       }
       // Only acknowledge after all image writes succeed. Retrying a partial
       // upload lists the saved objects and sends only the missing images.
       if (sessionIndex) sessionIndex[item.key] = item.fingerprint;
+      item.upload = undefined;
+      item.value = { ...item.value, remoteHistory: undefined, historyUpload: undefined };
     }
     firstHeartbeat = false;
     i += batch.length;
