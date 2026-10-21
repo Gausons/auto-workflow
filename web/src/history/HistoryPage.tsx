@@ -16,6 +16,7 @@ interface HistoryDetailResponse { session: HistorySession; messages: HistoryMess
 interface HistoryProvider { id: string; label: string; status: string; skipped?: number }
 interface HistoryWorkspace { path: string; count: number }
 interface HistoryListResponse {
+  search?: { mode: 'keyword' | 'hybrid'; warning?: string };
   offset: number; limit: number; total: number; scope: string; providers: HistoryProvider[];
   workspaces: HistoryWorkspace[]; sessions: HistorySession[];
 }
@@ -184,7 +185,8 @@ export function HistoryPage() {
           </div>
           <button className="button secondary" type="submit">刷新会话</button>
         </form>
-        <p role={list.isError ? 'alert' : 'status'} aria-live="polite">{list.isPending ? '正在读取历史会话，首次索引可能需要一些时间…' : list.isError ? `加载失败：${errorMessage(list.error)}` : data?.total ? `共 ${data.total} 个会话，按最近更新时间排序` : '没有匹配的会话，试试其他工作区或搜索词。'}</p>
+        {data?.search?.warning && <p role="alert">{data.search.warning}</p>}
+        <p role={list.isError ? 'alert' : 'status'} aria-live="polite">{list.isPending ? '正在读取历史会话，首次索引可能需要一些时间…' : list.isError ? `加载失败：${errorMessage(list.error)}` : data?.total ? `共 ${data.total} 个会话，${data.search?.mode === 'hybrid' ? '关键词优先，包含语义相关结果' : '按最近更新时间排序'}` : '没有匹配的会话，试试其他工作区或搜索词。'}</p>
         {list.isError && <button className="button secondary" type="button" onClick={() => list.refetch()}>重试</button>}
         <div className="history-list">{data?.sessions.map(session => <button className="history-card" type="button" key={session.id} aria-pressed={session.id === route.id} onClick={() => { location.hash = `history/${session.id}`; }}>
           <strong>{session.title}</strong><span className="history-meta">{session.agentLabel} · {time(session.updatedAt)}</span>

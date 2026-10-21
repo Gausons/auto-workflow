@@ -1,3 +1,5 @@
+import { createVectorSearch, searchQuery } from './vectorSearch.js';
+import { bugSearchDocuments, taskSearchDocuments } from './searchDocuments.js';
 import { readJson, readBytes } from './http/body.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createTaskCenterStream, taskCenterSince } from './taskCenterStream.js';
@@ -122,6 +124,17 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
   }
 
   async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
+    if (url.pathname === '/api/search' && req.method === 'GET') {
+      const q = searchQuery(url.searchParams), scope = url.searchParams.get('scope');
+      if (scope !== 'tasks' && scope !== 'bugs') { sendJson(res, 400, { error: 'invalid_search_scope', message: '搜索范围必须为 tasks 或 bugs' }); return; }
+      const documents = () => scope === 'tasks' ? taskSearchDocuments(database.readTaskCenter(tenant.id)) : bugSearchDocuments(state.bugs);
+      const before = documents(), context = state.storageUserKey;
+      const result = await vectorSearch.search(scope, q, before);
+      // Recheck visibility after model I/O; config/sync/delete requests can run meanwhile.
+      const current = new Map(documents().map(doc => [doc.id, doc.text]));
+      const unchanged = new Set(before.filter(doc => current.get(doc.id) === doc.text).map(doc => doc.id));
+      sendJson(res, 200, { ...result, ids: scope === 'bugs' && context !== state.storageUserKey ? [] : result.ids.filter(id => unchanged.has(id)) }); return;
+    }
     if (url.pathname === '/api/task-center/device-state' && req.method === 'GET') {
       sendJson(res, 200, deviceControl.snapshot(url.searchParams, requestIdentity.getStore()!.user.id)); return;
     }
@@ -257,6 +270,7 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     return {
       ...(principal ? publicIdentity(principal) : {}),
       tenant: { id: tenant.id, name: tenant.name }, storage: { driver: 'postgres', schemaVersion: 3 },
+      search: { vectorEnabled: environment.VECTOR_SEARCH_ENABLED === 'true' },
       config: { ...state.config, workspaceManaged: Boolean(environment.CODEX_WORKSPACE_DIR) || database.listTenants().length > 1, issueSourceLabel: issueSource().label, issueSourceConfigured: issueSource().configured },
       scheduler: state.scheduler, assignmentPeople: state.assignmentPeople, storageUserKey: state.storageUserKey,
       bugs: state.bugs, metrics: buildMetrics()
@@ -657,6 +671,7 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
   }
   function hasBackgroundWork() { return assignmentJobsPending > 0 || Boolean(assignmentBatchPromise) || activeAssignmentBugIds.size > 0; }
 
+  const vectorSearch = createVectorSearch({ store: database.searchVectors, tenantId: tenant.id, environment });
   const agentHistory = createAgentHistory({ environment, tenantId: tenant.id, rootDir, workspace: () => state.config.codexWorkspaceDir });
   const sessionDelivery = createSessionDelivery({ history: agentHistory, environment });
   const taskCenter = createTaskCenter({ database, tenantId: tenant.id, history: agentHistory, environment });
@@ -669,7 +684,7 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
     ? createContextModelSummarizer({ apiKey: environment.OPENAI_API_KEY, baseUrl: state.config.openaiBaseUrl, model: environment.CONTEXT_SUMMARY_MODEL || state.config.aiAssignmentModel, timeoutMs: state.config.openaiTimeoutMs })
     : undefined;
   const conversations = createConversations({ database, tenantId: tenant.id, history: agentHistory, delivery: sessionDelivery, execution: codexExecution, environment,
-    summarize,
+    summarize, vectorSearch,
     contextRoot: path.join(rootDir, '.workflow-data', 'context', createHash('sha256').update(tenant.id).digest('hex')) });
   const conversationTimer = setInterval(() => { void conversations.preparePending().catch(() => {}); }, 1500);
   conversationTimer.unref();
@@ -707,6 +722,7 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
     async close() {
       taskCenterStream.close();
       deviceControl.close();
+      await vectorSearch.close();
       clearInterval(conversationTimer); conversations.close(); codexExecution.close(); configureScheduler(false); assignmentJobSeq++; await persistIssueState(); closing = true;
     }
   };

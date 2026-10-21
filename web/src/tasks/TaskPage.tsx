@@ -1,3 +1,4 @@
+import { useVectorSearch } from '../search/useVectorSearch.js';
 import { PageHeading } from '../components/PageHeading.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
@@ -96,11 +97,13 @@ export function TaskPage() {
   useEffect(() => { const open = (event: Event) => { const id = (event as CustomEvent<{ taskId?: string }>).detail?.taskId; if (id) { rememberTask(id); setSearch(''); setFilter('all'); setMobileDetail(true); setSelected(id); location.hash = 'tasks'; } }; window.addEventListener('bugflow:open-task', open); return () => window.removeEventListener('bugflow:open-task', open); }, []);
   const snapshot = useQuery({ queryKey: ['task-center', 'snapshot'], queryFn: ({ signal }) => apiRequest<TaskCenterData>('/api/task-center', { signal }), enabled: active && hasSessionToken() });
   useTaskCenterUpdates(active, snapshot.data?.syncVersion);
-  const identity = useQuery({ queryKey: ['task-center', 'identity'], queryFn: ({ signal }) => apiRequest<{ permissions: string[] }>('/api/bootstrap', { signal }), enabled: active && hasSessionToken() });
+  const identity = useQuery({ queryKey: ['task-center', 'identity'], queryFn: ({ signal }) => apiRequest<{ permissions: string[]; search?: { vectorEnabled: boolean } }>('/api/bootstrap', { signal }), enabled: active && hasSessionToken() });
   const targets = useQuery({ queryKey: ['task-center', 'targets'], queryFn: ({ signal }) => apiRequest<Targets>('/api/task-center/codex', { signal }), enabled: active && dialog?.kind === 'execute', retry: false });
   const data = snapshot.data;
   const needle = search.trim().toLowerCase();
-  const visible = (data?.tasks || []).filter(item => matchesFilter(item, filter) && (!needle || [item.title, taskContent(item), ...(data?.sessions || []).filter(session => item.sessionIds.includes(session.id)).flatMap(session => [session.title, session.cwd, session.agent])].join(' ').toLowerCase().includes(needle))).sort((a, b) => Number(b.status === 'waiting') - Number(a.status === 'waiting') || taskActivity(b, data!) - taskActivity(a, data!));
+  const semantic = useVectorSearch('tasks', search, active && identity.data?.search?.vectorEnabled === true, snapshot.dataUpdatedAt);
+  const ranks = new Map(semantic.ids.map((id, index) => [id, index]));
+  const visible = (data?.tasks || []).filter(item => matchesFilter(item, filter) && (!needle || ranks.has(item.id) || [item.title, taskContent(item), ...(data?.sessions || []).filter(session => item.sessionIds.includes(session.id)).flatMap(session => [session.title, session.cwd, session.agent])].join(' ').toLowerCase().includes(needle))).sort((a, b) => (needle ? (ranks.get(a.id) ?? -1) - (ranks.get(b.id) ?? -1) : 0) || Number(b.status === 'waiting') - Number(a.status === 'waiting') || taskActivity(b, data!) - taskActivity(a, data!));
   const task = visible.find(item => item.id === selected) || visible[0];
   useLayoutEffect(() => {
     if (detailScroll.current) detailScroll.current.scrollTop = 0;
@@ -125,6 +128,7 @@ export function TaskPage() {
     <div className={styles.layout} data-mobile-detail={mobileDetail}>
       <aside className={styles.list} aria-label="任务列表">
         <div className={styles.listTools}><div className={styles.search}><Icon name="search" /><input aria-label="搜索任务与会话" value={search} onChange={event => { setSearch(event.target.value); open(null); }} placeholder="搜索任务、会话或目录" maxLength={200} />{search && <button type="button" aria-label="清除搜索" onClick={() => setSearch('')}>×</button>}</div>
+          {semantic.message && <p role={semantic.warning ? 'alert' : 'status'}>{semantic.message}</p>}
           <div className={styles.filters} role="group" aria-label="任务状态筛选">{filters.map(item => <button key={item.id} type="button" aria-pressed={filter === item.id} onClick={() => { setFilter(item.id); open(null); }}>{item.label}</button>)}</div>
         </div>
         <div className={styles.listSummary}><span>{filter === 'all' ? '最近任务' : filters.find(item => item.id === filter)?.label}</span><span aria-live="polite">{visible.length} 个任务</span></div>

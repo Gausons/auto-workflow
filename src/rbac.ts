@@ -40,6 +40,7 @@ export function permissionForRoute(method: string | undefined, pathname: string)
   if (pathname === '/api/task-center' && ['GET', 'POST'].includes(method || '')) return method === 'GET' ? 'read' : 'work.execute';
   if (method === 'GET' && (pathname === '/api/sessions' || /^\/api\/sessions\/[a-f0-9]{64}(?:\/(events|records))?$/.test(pathname))) return 'read';
   if (method === 'GET' && (pathname === '/api/agent-sessions' || /^\/api\/agent-sessions\/[a-f0-9]{64}$/.test(pathname))) return 'read';
+  if (method === 'GET' && pathname === '/api/search') return 'read';
   if (method === 'GET' && ['/api/bootstrap', '/api/assignment/people'].includes(pathname)) return 'read';
   if (method === 'GET' && /^\/api\/bugs\/[^/]+\/attachments$/.test(pathname)) return 'read';
   if (method === 'GET' && pathname === '/api/issues/diagnostics') return 'config.manage';

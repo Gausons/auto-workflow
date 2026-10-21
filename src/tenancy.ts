@@ -39,7 +39,7 @@ export function tenantEnvironment(tenant: Pick<Tenant, 'id'>, rootDir: string, e
   for (const key of ['PATH', 'HOME', 'USER', 'SHELL', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL', 'SYSTEMROOT']) {
     if (environment[key] !== undefined) result[key] = environment[key];
   }
-  const prefix = /^(ISSUE_|JIRA_|CODEX_|CLAUDE_|ACP_|IDE_|OPENAI_|ANTHROPIC_|AI_|ENABLE_|POLL_)/;
+  const prefix = /^(ISSUE_|JIRA_|CODEX_|CLAUDE_|ACP_|IDE_|OPENAI_|ANTHROPIC_|AI_|ENABLE_|POLL_|VECTOR_SEARCH_)/;
   if (tenant.id === 'default') {
     for (const [key, value] of Object.entries(environment)) {
       if (prefix.test(key) || sourceEnvironmentPrefixes().some((value) => key.startsWith(value))) result[key] = value;

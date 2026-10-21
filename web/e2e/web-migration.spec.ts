@@ -848,3 +848,46 @@ test('history opens the latest ten turns and preserves the reading position whil
   await expect(page.getByText('分页问题 0', { exact: true })).toHaveCount(1);
   await expect(page.getByRole('button', { name: '加载更早的 10 轮问答' })).toHaveCount(0);
 });
+
+test('semantic results work through task, defect and history search controls', async ({ page }) => {
+  await login(page);
+  const timestamp = '2026-10-01T00:00:00Z';
+  const task = { id: 'semantic-task', title: '修复登录流程', content: '修复登录失败', status: 'ready', revision: 1, contextVersion: 1, sessionIds: [], events: [], createdAt: timestamp, updatedAt: timestamp };
+  await page.route('**/api/bootstrap', async route => {
+    const response = await route.fetch();
+    await route.fulfill({ json: { ...await response.json(), search: { vectorEnabled: true },
+      bugs: [{ id: 'semantic-bug', code: 'BUG-SEMANTIC', title: '登录异常', description: '无法进入系统' }] } });
+  });
+  await page.route('**/api/task-center', route => route.fulfill({ json: { tasks: [task], sessions: [], devices: [], executions: [], handoffs: [] } }));
+  await page.route('**/api/search?*', route => {
+    const scope = new URL(route.request().url()).searchParams.get('scope');
+    return route.fulfill({ json: { ids: [scope === 'tasks' ? task.id : 'semantic-bug'], mode: 'hybrid' } });
+  });
+  await page.reload();
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    if (width === 390) await page.getByRole('button', { name: '返回任务列表' }).click();
+    const input = page.getByRole('textbox', { name: '搜索任务与会话' });
+    await input.fill('身份认证');
+    await expect(page.getByText('已包含语义相关结果')).toBeVisible();
+    await page.getByRole('button', { name: /修复登录流程/ }).click();
+    await expect(page.getByRole('heading', { name: task.title, exact: true })).toBeVisible();
+    if (width === 390) await page.getByRole('button', { name: '返回任务列表' }).click();
+    await input.clear();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+  }
+  await page.goto('/workbench');
+  await page.getByRole('searchbox', { name: '搜索缺陷' }).fill('身份认证');
+  await expect(page.getByText('已包含语义相关结果')).toBeVisible();
+  await expect(page.getByRole('button', { name: /BUG-SEMANTIC/ })).toBeVisible();
+  const session = { id: 'f'.repeat(64), title: '处理登录异常', agent: 'codex', agentLabel: 'Codex', cwd: '/repo', updatedAt: timestamp };
+  await page.route('**/api/agent-sessions?*', route => {
+    const searched = new URL(route.request().url()).searchParams.get('q') === '身份认证';
+    return route.fulfill({ json: { sessions: searched ? [session] : [], total: searched ? 1 : 0, offset: 0, limit: 30, providers: [], workspaces: [], scope: 'all', search: { mode: 'hybrid' } } });
+  });
+  await page.goto('/history');
+  await page.getByRole('textbox', { name: '搜索会话' }).fill('身份认证');
+  await page.getByRole('button', { name: '刷新会话', exact: true }).click();
+  await expect(page.getByText('共 1 个会话，关键词优先，包含语义相关结果')).toBeVisible();
+  await expect(page.getByText('处理登录异常', { exact: true })).toBeVisible();
+});

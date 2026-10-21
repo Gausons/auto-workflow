@@ -636,9 +636,25 @@ PostgreSQL 初始化验证完成后创建 `/var/lib/auto-workflow/POSTGRES_MIGRA
 
 PostgreSQL 的建表位于 `migrations/postgres/`，使用事务和 advisory lock 执行迁移，拒绝未知新版本；通过数据库事务锁保留既有串行写入语义。当前仍使用工作线程维持同步数据库接口，每次查询最多等待 30 秒，连接失效后不自动重复写入，核对结果后重启应用恢复。`GET /api/health` 检查数据库，失败返回 503。
 
-### 向量搜索准备情况
+### 向量搜索
 
-pgvector 扩展已启用，集成测试覆盖向量写入、余弦距离排序、HNSW 索引及带租户条件的查询。业务向量表、文本切分、embedding 模型和维度尚未选定，因此本次不创建固定维度的业务向量列，也不新增搜索 HTTP 接口。后续应按租户及模型版本隔离向量，并在查询中检查业务授权；有 HNSW 索引并不自动提供租户权限隔离。可参考 [pgvector 官方文档](https://github.com/pgvector/pgvector)。
+任务、缺陷和历史会话的现有搜索入口支持“关键词 + 向量”混合检索。关键词匹配优先，随后追加余弦相似度达标的前 50 个语义结果。默认保留关键词搜索；配置兼容 OpenAI `/embeddings` 协议的服务并重启后开启：
+
+```dotenv
+VECTOR_SEARCH_ENABLED=true
+VECTOR_SEARCH_BASE_URL=https://api.openai.com/v1
+VECTOR_SEARCH_API_KEY=
+VECTOR_SEARCH_MODEL=text-embedding-3-small
+VECTOR_SEARCH_DIMENSIONS=1536
+VECTOR_SEARCH_MIN_SCORE=0.4
+```
+
+- 配置沿用账号隔离规则：根 `.env` 只用于 `default` 账号；注册的个人账号请写入 `.workflow-data/tenants/<账号ID>.env`（账号 ID 可从 `/api/bootstrap` 的 `tenant.id` 获取），并重启服务。其他账号不会继承默认账号的模型密钥。
+- 服务地址和密钥留空时分别复用 `OPENAI_BASE_URL`、`OPENAI_API_KEY`，没有密钥时允许访问无需认证的自托管服务。服务必须接受 `model`、`dimensions`、`input`、`encoding_format=float`，并返回带 `index` 的浮点向量。维度支持 1–4096，相似度阈值支持 0–1；更换模型版本时应修改模型标识。
+- 开启后会将搜索词和当前账号的待索引文本发送到指定 embedding 服务。索引范围：任务标题、正文及关联会话标题/目录/Agent；缺陷编号、标题、经办人、描述、产品和分类；历史会话标题、目录、会话编号、模型和分支。历史会话全文、附件和图片不在本次索引范围内。
+- 首次搜索按需创建索引，后续只更新文本变化的文档。每项最多索引前 12000 个 UTF-16 代码单元，按最多 1500 个 Unicode 字符分块；关键词搜索仍使用原有完整字段。每次最多索引 100 项，未完成时显示提示，再次搜索会继续；模型请求共用 30 秒截止时间。搜索框防抖 350 毫秒，历史会话仍通过“刷新会话”按钮或回车提交。
+- PostgreSQL 迁移 7 新增 `search_vectors`，按账号、搜索范围、服务地址、模型及维度隔离缓存。查询先限定当前可见文档及内容哈希，再计算精确余弦距离；历史会话的 Agent/目录过滤先于向量检索，结果分页后置。该版本使用精确扫描，尚未建立业务 HNSW 索引；超大集合需后续引入后台索引和近似检索。已删除或失去可见性的文档不会返回，历史向量缓存随账号删除级联清理。
+- 任务与缺陷使用需 `read` 权限的 `GET /api/search?scope=tasks|bugs&q=...`，返回 `{ ids, mode, warning? }`；搜索词最多 200 字符。历史会话沿用 `/api/agent-sessions`，响应附加 `search.mode` 和可选 `search.warning`。模型超时、异常或维度不符时保留关键词结果并明确显示警告，不会静默声称已完成语义检索。
 
 pnpm test 和 pnpm test:e2e 自动启动临时 PostgreSQL 容器，测试结束后移除容器及其数据卷；本地需要 Docker。CI 复用工作流的 PostgreSQL 服务。所有测试仅允许 workflow_test 库，各测试使用独立 schema，并发和重连均在真实数据库上验证。运行指定测试：
 

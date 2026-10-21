@@ -1,3 +1,4 @@
+import { useVectorSearch } from '../search/useVectorSearch.js';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -13,6 +14,7 @@ interface Bug {
   attachments?: Attachment[]; attachmentsLoaded?: boolean; assignmentRecommendation?: Recommendation;
 }
 interface Bootstrap {
+  search?: { vectorEnabled: boolean };
   bugs: Bug[];
   metrics: { total?: number; pending?: number; processing?: number; resolved?: number };
   scheduler: { lastRunMessage?: string };
@@ -63,7 +65,9 @@ export function WorkbenchPage() {
     refetchIntervalInBackground: false
   });
   const bugs = query.data?.bugs || [];
-  const filtered = bugs.filter(bug => `${bug.code || bug.id} ${bug.title} ${bug.assignee || ''}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
+  const semantic = useVectorSearch('bugs', search, active && query.data?.search?.vectorEnabled === true, query.dataUpdatedAt);
+  const ranks = new Map(semantic.ids.map((id, index) => [id, index]));
+  const filtered = bugs.filter(bug => ranks.has(bug.id) || `${bug.code || bug.id} ${bug.title} ${bug.assignee || ''}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())).sort((a, b) => (ranks.get(a.id) ?? -1) - (ranks.get(b.id) ?? -1));
   const selected = filtered.find(bug => bug.id === selectedId) || filtered[0] || null;
   const canExecute = query.data?.permissions.includes('work.execute') === true;
 
@@ -121,7 +125,8 @@ export function WorkbenchPage() {
       <section className="workbench" id="workbench">
         <div className="bug-list-panel">
           <div className="panel-title"><h2>个人缺陷</h2><span>{filtered.length} 项</span></div>
-          <label className={styles.search}><span aria-hidden="true">⌕</span><input type="search" aria-label="搜索缺陷" placeholder="搜索标题、编号或经办人" value={search} onChange={event => setSearch(event.target.value)} /></label>
+          <label className={styles.search}><span aria-hidden="true">⌕</span><input type="search" aria-label="搜索缺陷" placeholder="搜索标题、编号或经办人" maxLength={200} value={search} onChange={event => setSearch(event.target.value)} /></label>
+          {semantic.message && <p role={semantic.warning ? 'alert' : 'status'}>{semantic.message}</p>}
           <details className={styles.sync}><summary>同步信息{/failed|error|失败|异常|超时/i.test(query.data?.scheduler.lastRunMessage || '') && <span className={styles.syncError}> · 同步异常</span>}</summary><p>{query.data?.scheduler.lastRunMessage || '尚未同步'}</p></details>
           <div className="bug-list">{filtered.length ? filtered.map(bug => <button className={`bug-item ${bug.id === selected?.id ? 'active' : ''}`} key={bug.id} aria-pressed={bug.id === selected?.id} type="button" onClick={() => { setSelectedId(bug.id); setMessage(''); setPreview(null); }}>
             <strong>{bug.code || bug.id}</strong><span>{bug.title}</span><small>{bug.status || '未知'} · {bug.priority || bug.severity || '未定级'}</small>

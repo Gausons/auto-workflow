@@ -1,3 +1,4 @@
+import type { VectorSearch } from './vectorSearch.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { taskContent } from '../shared/taskContent.js';
@@ -46,6 +47,7 @@ interface ConversationServices {
   contextRoot: string;
   summarize?: (snapshot: SessionContext, entries: ContextEntry[], root: string) => Promise<SummaryResult>;
   environment?: Environment;
+  vectorSearch?: VectorSearch;
 }
 interface ConversationInput {
   requestId?: unknown;
@@ -78,7 +80,7 @@ const messageText = (value: unknown, optional = false) => {
   return value.trim();
 };
 
-export function createConversations({ database, tenantId, history, delivery, execution, contextRoot, summarize, environment = {} }: ConversationServices) {
+export function createConversations({ database, tenantId, history, delivery, execution, contextRoot, summarize, vectorSearch, environment = {} }: ConversationServices) {
   const read = () => database.readTaskCenter(tenantId);
   const managed = (id: string, data = read()) => data.sessions.find((session): session is ManagedSession => session.id === id && session.source === 'conversation');
   const remoteSource = (session: ManagedSession, data: TaskCenterData): RemoteContextHandoff => {
@@ -179,9 +181,21 @@ export function createConversations({ database, tenantId, history, delivery, exe
       if (agent && !providers.some(provider => provider.id === agent)) throw httpError(400, '不支持的 Agent');
       const counts = new Map<string, number>();
       for (const session of sessions.filter(session => !agent || session.agent === agent)) for (const cwd of session.workspaces?.length ? session.workspaces : ['__unknown__']) counts.set(cwd, (counts.get(cwd) || 0) + 1);
-      const matches = sessions.filter(session => (!agent || session.agent === agent) && (!workspace || (workspace === '__unknown__' ? !session.workspaces?.length : session.workspaces?.includes(workspace))) && (!q || [session.title, session.cwd, session.nativeId, session.sessionId, session.model, session.branch].some(value => String(value || '').toLowerCase().includes(q))))
+      const candidates = sessions.filter(session => (!agent || session.agent === agent) && (!workspace || (workspace === '__unknown__' ? !session.workspaces?.length : session.workspaces?.includes(workspace))))
         .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)) || left.id.localeCompare(right.id));
-      return { sessions: matches.slice(offset, offset + limit), total: matches.length, offset, limit, providers, scope: catalog.scope, workspace, workspaces: [...counts].map(([path, count]) => ({ path, count })).sort((a, b) => a.path.localeCompare(b.path)) };
+      const text = (session: typeof candidates[number]) => [session.title, session.cwd, session.nativeId, session.sessionId, session.model, session.branch].filter(Boolean).join(' ');
+      const search = vectorSearch && q ? await vectorSearch.search('history', q, candidates.map(session => ({ id: session.id, text: text(session) }))) : undefined;
+      const byId = new Map(candidates.map(session => [session.id, session]));
+      let matches = search ? search.ids.flatMap(id => byId.get(id) || []) : candidates.filter(session => !q || text(session).toLowerCase().includes(q));
+      if (search) {
+        const current = await history.catalog(), saved = read();
+        const visible = new Map([...current.sessions, ...saved.sessions.filter(session => session.source === 'conversation' || session.deviceId !== 'local')].map(session => [session.id, session]));
+        matches = matches.filter(session => {
+          const live = visible.get(session.id);
+          return live && live.title === session.title && live.cwd === session.cwd && live.updatedAt === session.updatedAt;
+        });
+      }
+      return { ...(search ? { search: { mode: search.mode, warning: search.warning } } : {}), sessions: matches.slice(offset, offset + limit), total: matches.length, offset, limit, providers, scope: catalog.scope, workspace, workspaces: [...counts].map(([path, count]) => ({ path, count })).sort((a, b) => a.path.localeCompare(b.path)) };
     },
     remoteDetail(id: string, params = new URLSearchParams()) {
       const data = read();

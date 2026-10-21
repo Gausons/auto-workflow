@@ -40,6 +40,24 @@ describe('WorkbenchPage', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('shows semantic defect matches and an explicit provider failure warning', async () => {
+    const data = { ...bootstrap(['read']), search: { vectorEnabled: true } };
+    const fetchMock = vi.fn().mockImplementation((url: string) => Promise.resolve(Response.json(url.startsWith('/api/search?')
+      ? new URL(url, 'http://test').searchParams.get('q') === '身份认证'
+        ? { ids: ['BUG-1'], mode: 'hybrid' }
+        : { ids: [], mode: 'keyword', warning: '向量搜索暂不可用，当前仅显示关键词匹配结果。' }
+      : data)));
+    vi.stubGlobal('fetch', fetchMock); renderWorkbench();
+    await screen.findByRole('heading', { name: '登录失败' });
+    const user = userEvent.setup(), search = screen.getByRole('searchbox', { name: '搜索缺陷' });
+    await user.type(search, '身份认证');
+    expect(await screen.findByText('已包含语义相关结果')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: '登录失败' })).toBeTruthy();
+    await user.clear(search); await user.type(search, '登录');
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', '向量搜索暂不可用，当前仅显示关键词匹配结果。');
+    expect(screen.getByRole('heading', { name: '登录失败' })).toBeTruthy();
+  });
+
   it('formats source HTML and timestamps without trusting attributes or executable markup', async () => {
     const data = bootstrap(['read']);
     const bug = { ...data.bugs[0], updatedAt: '1790155034256', description: '<p onclick="alert(1)">环境：日常<br>第二行 <strong>重点</strong></p><p><img src="x" onerror="alert(1)"><script>alert(1)</script></p>' };

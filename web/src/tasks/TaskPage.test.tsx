@@ -7,12 +7,12 @@ import { TaskPage } from './TaskPage.js';
 const task = { id: 'task-1', title: '<script>任务</script>', status: 'ready', revision: 7, contextVersion: 3, content: '修复登录', sessionIds: [], events: [], createdAt: '2026-09-27T00:00:00.000Z', updatedAt: '2026-09-27T00:00:00.000Z' };
 const snapshot = { tasks: [task], sessions: [], devices: [], handoffs: [], executions: [] };
 
-function setup(permissions = ['work.execute'], data: unknown = snapshot, postStatus = 200) {
+function setup(permissions = ['work.execute'], data: unknown = snapshot, postStatus = 200, searchResult?: { ids: string[]; mode: string; warning?: string }) {
   location.hash = '#tasks';
   sessionStorage.setItem('bugflow.sessionToken', 'test-token');
   const fetchMock = vi.fn().mockImplementation((path: string, init?: RequestInit) => Promise.resolve(new Response(JSON.stringify(init?.method === 'POST'
     ? postStatus === 200 ? {} : { message: '任务版本已变化' }
-    : path === '/api/bootstrap' ? { permissions } : data), { status: init?.method === 'POST' ? postStatus : 200 })));
+    : path.startsWith('/api/search?') ? searchResult : path === '/api/bootstrap' ? { permissions, search: { vectorEnabled: Boolean(searchResult) } } : data), { status: init?.method === 'POST' ? postStatus : 200 })));
   vi.stubGlobal('fetch', fetchMock);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   render(<QueryClientProvider client={client}><TaskPage /></QueryClientProvider>);
@@ -117,5 +117,27 @@ describe('TaskPage browsing', () => {
     await user.click(await screen.findByRole('button', { name: '标记任务完成' }));
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', '任务版本已变化');
     expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+  });
+});
+
+
+describe('TaskPage semantic search', () => {
+  afterEach(() => { cleanup(); sessionStorage.clear(); location.hash = ''; vi.unstubAllGlobals(); });
+  it('adds semantic matches, retains status filtering and clears results as the query changes', async () => {
+    const fetchMock = setup(['read'], { ...snapshot, tasks: [task, { ...task, id: 'done', title: '归档事项', status: 'completed' }] }, 200,
+      { ids: ['task-1', 'done'], mode: 'hybrid' });
+    const user = userEvent.setup();
+    await screen.findByRole('heading', { name: task.title });
+    await user.type(screen.getByRole('textbox', { name: '搜索任务与会话' }), '身份认证');
+    expect(await screen.findByText('已包含语义相关结果')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: task.title })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: '已完成' }));
+    expect(screen.getByRole('heading', { name: '归档事项' })).toBeTruthy();
+    expect(screen.getByText('1 个任务')).toBeTruthy();
+    await user.type(screen.getByRole('textbox', { name: '搜索任务与会话' }), '其他');
+    expect(screen.queryByRole('heading', { name: '归档事项' })).toBeNull();
+    const calls = fetchMock.mock.calls.filter(([url]) => String(url).startsWith('/api/search?'));
+    expect(calls).toHaveLength(1);
+    expect(new URL(calls[0][0], 'http://test').searchParams.get('q')).toBe('身份认证');
   });
 });

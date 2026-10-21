@@ -1,3 +1,4 @@
+import { createSearchVectorStore } from './searchVectorStore.js';
 import { openPostgres, postgresConfig } from './storage/postgres.js';
 import type { Connection } from './storage/connection.js';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
@@ -127,6 +128,7 @@ export function openDatabase(environment: Record<string, string | undefined>) {
     return { skipped: false, users: snapshots.size };
   }
   return {
+    searchVectors: createSearchVectorStore(db, transaction),
     ping: () => { db.prepare('SELECT 1 FROM tenants LIMIT 1').get(); },
     ...createIdentityStore(db, transaction),
     readSessionContext: (tenantId: string, id: string): SessionContext | null => {

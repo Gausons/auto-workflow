@@ -775,3 +775,39 @@ test('history listing merges, filters and paginates managed conversations withou
   assert.equal((await f.service.historyList(new URLSearchParams({ offset: '1', limit: '1' }))).sessions.length, 1);
   await assert.rejects(f.service.historyList(new URLSearchParams({ limit: '0' })), { statusCode: 400 });
 });
+
+test('history semantic search applies agent/workspace filters before ranking and pagination', async t => {
+  const f = await fixture(t);
+  const { createVectorSearch } = await import('../src/vectorSearch.js');
+  f.database.mutateTaskCenter('default', data => data.sessions.push(
+    { id: 'semantic', deviceId: 'remote', agent: 'claude', title: '修复登录失败', cwd: '/login', updatedAt: '2026-10-01T00:00:00Z' },
+    { id: 'literal', deviceId: 'remote', agent: 'claude', title: '身份验证', cwd: '/login', updatedAt: '2026-10-02T00:00:00Z' },
+    { id: 'excluded', deviceId: 'remote', agent: 'codex', title: '绝不发送', cwd: '/private', updatedAt: '2026-10-03T00:00:00Z' }
+  ));
+  const inputs: string[] = [];
+  const vectorSearch = createVectorSearch({ store: f.database.searchVectors, tenantId: 'default',
+    environment: { VECTOR_SEARCH_ENABLED: 'true', VECTOR_SEARCH_DIMENSIONS: '2' },
+    fetch: async (_url, init) => {
+      const { input } = JSON.parse(String(init?.body)) as { input: string[] }; inputs.push(...input);
+      return Response.json({ data: input.map((_, index) => ({ index, embedding: [1, 0] })) });
+    } });
+  t.after(() => vectorSearch.close());
+  const service = createConversations({ ...f.options, vectorSearch });
+  const params = new URLSearchParams({ q: '身份验证', agent: 'claude', workspace: '/login', limit: '1' });
+  const first = await service.historyList(params);
+  assert.equal(first.total, 2); assert.equal(first.sessions[0].id, 'literal'); assert.equal(first.search?.mode, 'hybrid');
+  params.set('offset', '1');
+  assert.equal((await service.historyList(params)).sessions[0].id, 'semantic');
+  assert.ok(inputs.every(text => !text.includes('绝不发送')));
+});
+
+test('history search rechecks local visibility after embedding I/O', async t => {
+  const f = await fixture(t);
+  let visible = true;
+  const catalog = await f.history.catalog();
+  const service = createConversations({ ...f.options,
+    history: { catalog: async () => ({ ...catalog, sessions: visible ? catalog.sessions : [] }) },
+    vectorSearch: { search: async () => { visible = false; return { ids: [f.source], mode: 'hybrid' }; }, close: async () => {} }
+  });
+  assert.equal((await service.historyList(new URLSearchParams({ q: '接口' }))).total, 0);
+});
