@@ -1,7 +1,7 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDatabase, rawDatabase } from '../scripts/testing/database.js';
-import { createVectorSearch, searchQuery } from '../src/vectorSearch.js';
+import { createVectorSearch, searchQuery, vectorSearchEnabled } from '../src/vectorSearch.js';
 import { randomUUID } from 'node:crypto';
 
 const environment = { VECTOR_SEARCH_ENABLED: 'true', VECTOR_SEARCH_DIMENSIONS: '3', VECTOR_SEARCH_BASE_URL: 'http://embedding.test/v1', VECTOR_SEARCH_MIN_SCORE: '0.8' };
@@ -83,7 +83,7 @@ test('invalid embedding responses cannot poison the index', async t => {
 test('empty and disabled searches never call a provider and reject excessive input', async t => {
   const f = fixture(t);
   assert.deepEqual((await f.service.search('tasks', '', docs)).ids, docs.map(doc => doc.id));
-  const disabled = createVectorSearch({ store: f.database.searchVectors, tenantId: 'a', environment: {}, fetch: f.fetch });
+  const disabled = createVectorSearch({ store: f.database.searchVectors, tenantId: 'a', environment: { VECTOR_SEARCH_ENABLED: 'false' }, fetch: f.fetch });
   assert.deepEqual(await disabled.search('tasks', '身份验证', docs), { ids: ['literal'], mode: 'keyword' });
   assert.equal(f.calls.length, 0);
   assert.throws(() => searchQuery(new URLSearchParams({ q: 'x'.repeat(201) })), { statusCode: 400 });
@@ -128,7 +128,7 @@ test('defect descriptions participate in semantic retrieval without changing key
   const documents = bugSearchDocuments([{ id: 'bug', aid: '1', code: 'BUG-1', title: '无法进入工作台', description: '登录失败',
     status: 'open', priority: '', severity: '', assignee: '', assigneeId: '', product: '', category: '', createdAt: '', updatedAt: '' }]);
   assert.deepEqual((await f.service.search('bugs', '身份验证', documents)).ids, ['bug']);
-  const disabled = createVectorSearch({ store: f.database.searchVectors, tenantId: 'a', environment: {}, fetch: f.fetch });
+  const disabled = createVectorSearch({ store: f.database.searchVectors, tenantId: 'a', environment: { VECTOR_SEARCH_ENABLED: 'false' }, fetch: f.fetch });
   assert.deepEqual((await disabled.search('bugs', '登录', documents)).ids, []);
   await disabled.close();
 });
@@ -156,4 +156,21 @@ test('embedding configuration follows tenant environment isolation', async t => 
   await writeFile(path.join(root, 'other.env'), 'VECTOR_SEARCH_ENABLED=true\nVECTOR_SEARCH_API_KEY=other-only\nVECTOR_SEARCH_MODEL=other-model\n');
   const other = tenantEnvironment({ id: 'other' }, root, env);
   assert.equal(other.VECTOR_SEARCH_API_KEY, 'other-only'); assert.equal(other.VECTOR_SEARCH_MODEL, 'other-model');
+});
+
+
+test('vector search defaults on, supports explicit opt-out, and reports missing service configuration', async t => {
+  const f = fixture(t);
+  assert.equal(vectorSearchEnabled({}), true);
+  for (const value of ['false', '0', 'no', 'off', ' FALSE ']) assert.equal(vectorSearchEnabled({ VECTOR_SEARCH_ENABLED: value }), false);
+  const { VECTOR_SEARCH_ENABLED: _flag, ...defaults } = environment;
+  const service = createVectorSearch({ store: f.database.searchVectors, tenantId: 'a', environment: defaults, fetch: f.fetch });
+  assert.equal((await service.search('tasks', '身份验证', docs)).mode, 'hybrid');
+  await service.close();
+  const unconfigured = createVectorSearch({ store: f.database.searchVectors, tenantId: 'a', environment: {}, fetch: f.fetch });
+  const calls = f.calls.length;
+  const result = await unconfigured.search('tasks', '身份验证', docs);
+  assert.equal(result.mode, 'keyword'); assert.match(result.warning!, /暂不可用/);
+  assert.equal(f.calls.length, calls);
+  await unconfigured.close();
 });

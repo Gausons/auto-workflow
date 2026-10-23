@@ -8,6 +8,10 @@ type Store = ReturnType<typeof createSearchVectorStore>;
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const warning = '向量搜索暂不可用，当前仅显示关键词匹配结果。';
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+export function vectorSearchEnabled(environment: Environment): boolean {
+  return !['false', '0', 'no', 'off'].includes((environment.VECTOR_SEARCH_ENABLED || '').trim().toLowerCase());
+}
+
 export function searchQuery(params: URLSearchParams): string {
   const q = (params.get('q') || '').trim().toLowerCase();
   if (q.length > 200) throw httpError(400, '搜索词不能超过 200 字符');
@@ -17,7 +21,7 @@ export function searchQuery(params: URLSearchParams): string {
 export function createVectorSearch({ store, tenantId, environment, fetch: request = globalThis.fetch }: {
   store: Store; tenantId: string; environment: Environment; fetch?: typeof globalThis.fetch;
 }) {
-  const enabled = environment.VECTOR_SEARCH_ENABLED === 'true';
+  const enabled = vectorSearchEnabled(environment);
   const base = (environment.VECTOR_SEARCH_BASE_URL || environment.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
   const model = environment.VECTOR_SEARCH_MODEL || 'text-embedding-3-small';
   const dimensions = Number(environment.VECTOR_SEARCH_DIMENSIONS || 1536);
@@ -58,6 +62,7 @@ export function createVectorSearch({ store, tenantId, environment, fetch: reques
       if (q.length > 200) throw httpError(400, '搜索词不能超过 200 字符');
       const lexical = documents.filter(doc => !q || (doc.keywordText ?? doc.text).toLowerCase().includes(q)).map(doc => doc.id);
       if (!enabled || !q || !documents.length) return { ids: lexical, mode: 'keyword' };
+      if (!apiKey && !environment.VECTOR_SEARCH_BASE_URL && !environment.OPENAI_BASE_URL) return { ids: lexical, mode: 'keyword', warning };
       if (abort.signal.aborted || queued >= 8) return { ids: lexical, mode: 'keyword', warning };
       queued++;
       const deadline = Date.now() + 30_000;

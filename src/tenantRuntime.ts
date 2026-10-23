@@ -1,4 +1,4 @@
-import { createVectorSearch, searchQuery } from './vectorSearch.js';
+import { createVectorSearch, searchQuery, vectorSearchEnabled } from './vectorSearch.js';
 import { bugSearchDocuments, taskSearchDocuments } from './searchDocuments.js';
 import { readJson, readBytes } from './http/body.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -270,7 +270,7 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     return {
       ...(principal ? publicIdentity(principal) : {}),
       tenant: { id: tenant.id, name: tenant.name }, storage: { driver: 'postgres', schemaVersion: 3 },
-      search: { vectorEnabled: environment.VECTOR_SEARCH_ENABLED === 'true' },
+      search: { vectorEnabled: vectorSearchEnabled(environment) },
       config: { ...state.config, workspaceManaged: Boolean(environment.CODEX_WORKSPACE_DIR) || database.listTenants().length > 1, issueSourceLabel: issueSource().label, issueSourceConfigured: issueSource().configured },
       scheduler: state.scheduler, assignmentPeople: state.assignmentPeople, storageUserKey: state.storageUserKey,
       bugs: state.bugs, metrics: buildMetrics()

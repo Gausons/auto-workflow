@@ -786,7 +786,7 @@ test('history semantic search applies agent/workspace filters before ranking and
   ));
   const inputs: string[] = [];
   const vectorSearch = createVectorSearch({ store: f.database.searchVectors, tenantId: 'default',
-    environment: { VECTOR_SEARCH_ENABLED: 'true', VECTOR_SEARCH_DIMENSIONS: '2' },
+    environment: { VECTOR_SEARCH_ENABLED: 'true', VECTOR_SEARCH_DIMENSIONS: '2', VECTOR_SEARCH_BASE_URL: 'http://embedding.test/v1' },
     fetch: async (_url, init) => {
       const { input } = JSON.parse(String(init?.body)) as { input: string[] }; inputs.push(...input);
       return Response.json({ data: input.map((_, index) => ({ index, embedding: [1, 0] })) });
