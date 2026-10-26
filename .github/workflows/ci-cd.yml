@@ -183,7 +183,7 @@ jobs:
     timeout-minutes: 20
     environment:
       name: production
-      url: https://autoworkflow.top
+      url: https://www.autoworkflow.top
     permissions:
       contents: read
       packages: write
@@ -232,9 +232,12 @@ jobs:
             ssh "${ssh_args[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "deploy $GITHUB_SHA" < release.tar.gz
           fi
       - name: Verify public HTTPS
-        # 域名备案期间默认跳过；备案完成后将 production 变量设为 true 恢复。
-        if: steps.revision.outputs.current == 'true' && vars.DEPLOY_VERIFY_PUBLIC_HTTPS == 'true'
-        run: curl --fail --silent --show-error --retry 3 --max-time 20 https://autoworkflow.top/devices > /dev/null
+        if: steps.revision.outputs.current == 'true'
+        run: >-
+          curl --fail --silent --show-error --location --max-redirs 5
+          --proto '=https' --proto-redir '=https'
+          --retry 3 --connect-timeout 10 --max-time 20
+          https://www.autoworkflow.top/devices > /dev/null
       - name: Log in to GHCR for promotion
         if: steps.revision.outputs.current == 'true'
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
