@@ -88,8 +88,10 @@ export function NewTaskPage() {
   const canEdit = identity.data?.permissions.includes('work.execute') === true;
   const branchDirectoryPending = cwd.trim() !== branchCwd;
   const branchKey = ['task-center', 'git', project?.deviceId || '', project?.id || '', project?.cwd || '', branchCwd] as const;
+  function selectDirectory(value: string) { setCwd(value); setBranchCwd(value.trim()); }
   const branchQuery = useQuery({
     queryKey: branchKey,
+    staleTime: 15_000,
     queryFn: ({ signal }) => requestGitBranches(queryClient, project!, branchCwd, 'list', undefined, signal),
     enabled: active && canEdit && Boolean(project) && project?.online !== false && !branchDirectoryPending, retry: false
   });
@@ -147,7 +149,7 @@ export function NewTaskPage() {
   async function chooseDirectory() {
     if (!project || picking) return;
     setPicking(true); setError('');
-    try { setCwd(await pickDirectory(queryClient, project, actions.current.signal)); }
+    try { selectDirectory(await pickDirectory(queryClient, project, actions.current.signal)); }
     catch (failure) { setError(errorMessage(failure)); }
     finally { setPicking(false); }
   }
@@ -167,8 +169,8 @@ export function NewTaskPage() {
         {targets.isPending ? <p className="tc-create-hint" role="status">正在读取运行配置…</p> : targets.isError ? <p role="alert">{errorMessage(targets.error)}</p> : project ? <>
           <DismissibleDetails className="tc-config-menu tc-directory-menu" name="create-config"><summary aria-label={`工作目录：${cwd || project.cwd || '默认目录'}`}>▱ <span>{runDirectoryName(cwd || project.cwd || '')}</span><span className="tc-config-chevron" aria-hidden="true">⌄</span></summary><div className="tc-config-panel">
             <label className="tc-create-setting">工作目录<input aria-label="工作目录" value={cwd} onChange={event => setCwd(event.target.value)} placeholder={project.cwd || '输入工作目录'} maxLength={2000} disabled={blocked} /></label>
-            <div className="tc-actions"><button className="button secondary" type="button" disabled={blocked} onClick={() => void chooseDirectory()}>选择目录</button><button className="button ghost" type="button" disabled={blocked} onClick={() => setCwd('')}>使用默认目录</button></div>
-            {!!project.commonDirectories?.length && <><p className="tc-create-hint">常用目录</p><div className="tc-directory-options">{project.commonDirectories.slice(0, 4).map(path => <button key={path} type="button" title={path} aria-label={path} aria-pressed={path === cwd} disabled={blocked} onClick={() => setCwd(path)}>▱ <span>{runDirectoryName(path)}<small>{path}</small></span></button>)}</div></>}
+            <div className="tc-actions"><button className="button secondary" type="button" disabled={blocked} onClick={() => void chooseDirectory()}>选择目录</button><button className="button ghost" type="button" disabled={blocked} onClick={() => selectDirectory('')}>使用默认目录</button></div>
+            {!!project.commonDirectories?.length && <><p className="tc-create-hint">常用目录</p><div className="tc-directory-options">{project.commonDirectories.slice(0, 4).map(path => <button key={path} type="button" title={path} aria-label={path} aria-pressed={path === cwd} disabled={blocked} onClick={() => selectDirectory(path)}>▱ <span>{runDirectoryName(path)}<small>{path}</small></span></button>)}</div></>}
           </div></DismissibleDetails>
           <label className="tc-target-control" title="执行位置">▣ <select aria-label="执行位置" value={projectIndex} disabled={blocked} onChange={event => { setProjectIndex(Number(event.target.value)); setCwd(''); setModel(''); setEffort(''); }}>{targets.data?.projects.map((item, index) => <option key={`${item.deviceId}:${item.id}`} value={index}>{item.name} · {item.deviceName}{item.online ? '' : '（离线）'}</option>)}</select></label>
           {<DismissibleDetails className="tc-config-menu tc-branch-menu" name="create-config" onToggle={event => { if (event.currentTarget.open && !branchBusy && !branchQuery.isFetching && project.online !== false) void branchQuery.refetch(); }}><summary aria-label="Git 分支">⑂ <span>{project.online === false ? '设备离线' : branch?.repository ? branch.current || '分离 HEAD' : branchBusy ? '读取分支…' : branchError ? '分支读取失败' : branch ? '非 Git 目录' : 'Git 分支'}</span><span aria-hidden="true">⌄</span></summary><div className="tc-config-panel">

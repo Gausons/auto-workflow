@@ -6,7 +6,7 @@ import { NewTaskPage } from './NewTaskPage.js';
 
 const sessionId = 'a'.repeat(64);
 const snapshot = { tasks: [], sessions: [{ id: sessionId, title: '来源会话', deviceId: 'local' }], devices: [], handoffs: [], executions: [] };
-const targets = { projects: [{ id: 'project-1', deviceId: 'local', deviceName: '本机', name: 'Codex', cwd: '/repo', online: true, defaultModel: 'model-1', models: [{ id: 'model-1', name: '模型一', defaultReasoningEffort: 'low', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }] }, { id: 'gpt-6-sol', name: 'GPT-6-Sol', defaultReasoningEffort: 'low', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }] }] }] };
+const targets = { projects: [{ id: 'project-1', deviceId: 'local', deviceName: '本机', name: 'Codex', cwd: '/repo', commonDirectories: ['/repo/work', '/repo/other'], online: true, defaultModel: 'model-1', models: [{ id: 'model-1', name: '模型一', defaultReasoningEffort: 'low', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }] }, { id: 'gpt-6-sol', name: 'GPT-6-Sol', defaultReasoningEffort: 'low', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }] }] }] };
 
 function setup(permissions = ['work.execute'], failExecute = false, remote = false, localError: string | null = null, online = true, localExecutionEnabled = true, empty = false) {
   location.hash = '#new-task';
@@ -79,6 +79,20 @@ describe('NewTaskPage', () => {
     const lists = fetchMock.mock.calls.filter(([path]) => path === '/api/task-center/git').map(([, init]) => JSON.parse(String(init?.body)));
     expect(lists).toContainEqual({ action: 'list', projectId: 'project-1', deviceId: 'local', cwd: '' });
     expect(lists).toContainEqual({ action: 'list', projectId: 'project-1', deviceId: 'local', cwd: '/repo/work' });
+  });
+
+  it('switches known directories immediately and reuses fresh per-directory branches', async () => {
+    const fetchMock = setup();
+    await screen.findByText('main');
+    await userEvent.setup().click(screen.getByLabelText('工作目录：/repo'));
+    fireEvent.click(screen.getByRole('button', { name: '/repo/work' }));
+    await screen.findByText('feature/work');
+    fireEvent.click(screen.getByRole('button', { name: '使用默认目录' }));
+    expect(screen.getByLabelText('Git 分支').textContent).toContain('main');
+    fireEvent.click(screen.getByRole('button', { name: '/repo/work' }));
+    expect(screen.getByLabelText('Git 分支').textContent).toContain('feature/work');
+    const reads = fetchMock.mock.calls.filter(([path]) => path === '/api/task-center/git');
+    expect(reads).toHaveLength(2);
   });
 
   it('shows remote branches and sends create operations to the selected device', async () => {
