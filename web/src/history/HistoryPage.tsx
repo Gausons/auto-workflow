@@ -2,6 +2,7 @@ import { PageHeading } from '../components/PageHeading.js';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
+import { preferenceRecord, useBrowserPreference } from '../api/browserPreference.js';
 import { HistoryComposer } from './HistoryComposer.js';
 import { InheritedContext } from './InheritedContext.js';
 import { HistoryTranscript } from './HistoryTranscript.js';
@@ -21,6 +22,10 @@ interface HistoryListResponse {
   workspaces: HistoryWorkspace[]; sessions: HistorySession[];
 }
 interface HistoryFilters { offset: number; agent: string; query: string; workspace: string }
+function historyPreference(value: unknown) {
+  const record = preferenceRecord(value);
+  return { agent: typeof record.agent === 'string' && record.agent.length <= 100 ? record.agent : '', workspace: typeof record.workspace === 'string' && record.workspace.length <= 2000 ? record.workspace : '' };
+}
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 const statusLabels: Record<string, string> = { ready: '等待输入', preparing: '正在准备上下文', queued: '等待执行', launching: '正在连接', running: '正在回复', waiting: '等待处理', failed: '执行失败', completed: '本轮结束', interrupted: '已中断', error: '发生错误', unknown: '运行状态未知' };
 const sourceLabels: Record<string, string> = { available: '可读取', missing: '未找到历史目录', unconfigured: '未配置', error: '无法读取目录' };
@@ -132,7 +137,8 @@ function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) 
 export function HistoryPage() {
   const queryClient = useQueryClient();
   const [route, setRoute] = useState(currentRoute);
-  const [filters, setFilters] = useState<HistoryFilters>({ offset: 0, agent: '', query: '', workspace: '' });
+  const [selection, setSelection] = useBrowserPreference('history-filters', { agent: '', workspace: '' }, historyPreference);
+  const [filters, setFilters] = useState<HistoryFilters>(() => ({ offset: 0, query: '', ...selection }));
   const [draft, setDraft] = useState('');
   useEffect(() => {
     const update = () => setRoute(currentRoute());
@@ -161,6 +167,7 @@ export function HistoryPage() {
   const data = list.data;
   const changeFilters = (next: Partial<HistoryFilters>) => {
     setFilters(previous => ({ ...previous, ...next, offset: 0 }));
+    if (next.agent !== undefined || next.workspace !== undefined) setSelection(previous => ({ ...previous, ...(next.agent !== undefined ? { agent: next.agent } : {}), ...(next.workspace !== undefined ? { workspace: next.workspace } : {}) }));
     if (route.id) location.hash = 'history';
   };
   const sourceText = data && `${data.scope === 'all' ? '全部本地工作区' : '仅配置的工作目录'} · ${data.providers.map(provider => `${provider.label}：${sourceLabels[provider.status] || provider.status}${provider.skipped ? `（${provider.skipped} 项未能读取）` : ''}`).join(' · ')}`;
@@ -180,7 +187,7 @@ export function HistoryPage() {
         }}>
           <label className="history-search">搜索会话<input value={draft} onChange={event => setDraft(event.target.value)} placeholder="搜索会话…" maxLength={200} /></label>
           <div className="history-selects">
-            <label>Agent<select value={filters.agent} onChange={event => changeFilters({ agent: event.target.value })}><option value="">全部 Agent</option>{data?.providers.map(provider => <option key={provider.id} value={provider.id}>{provider.label}</option>)}</select></label>
+            <label>Agent<select value={filters.agent} onChange={event => changeFilters({ agent: event.target.value })}><option value="">全部 Agent</option>{data?.providers.map(provider => <option key={provider.id} value={provider.id}>{provider.label}</option>)}{filters.agent && !data?.providers.some(provider => provider.id === filters.agent) && <option value={filters.agent}>{filters.agent}</option>}</select></label>
             <label>工作区<select value={filters.workspace} onChange={event => changeFilters({ workspace: event.target.value })}><option value="">全部工作区</option>{workspaceOptions.map(workspace => <option key={workspace.path} value={workspace.path}>{workspace.path === '__unknown__' ? '未知工作区' : workspace.path} ({workspace.count})</option>)}{filters.workspace && !workspaceOptions.some(item => item.path === filters.workspace) && <option value={filters.workspace}>{filters.workspace} (0)</option>}</select></label>
           </div>
           <button className="button secondary" type="submit">刷新会话</button>

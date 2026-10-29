@@ -3,24 +3,27 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NewTaskPage } from './NewTaskPage.js';
+import type { AgentProject } from '../../../shared/taskTypes.js';
 
 const sessionId = 'a'.repeat(64);
 const snapshot = { tasks: [], sessions: [{ id: sessionId, title: '来源会话', deviceId: 'local' }], devices: [], handoffs: [], executions: [] };
 const targets = { projects: [{ id: 'project-1', deviceId: 'local', deviceName: '本机', name: 'Codex', cwd: '/repo', commonDirectories: ['/repo/work', '/repo/other'], online: true, defaultModel: 'model-1', models: [{ id: 'model-1', name: '模型一', defaultReasoningEffort: 'low', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }] }, { id: 'gpt-6-sol', name: 'GPT-6-Sol', defaultReasoningEffort: 'low', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }] }] }] };
 
-function setup(permissions = ['work.execute'], failExecute = false, remote = false, localError: string | null = null, online = true, localExecutionEnabled = true, empty = false) {
+function setup(permissions = ['work.execute'], failExecute = false, remote = false, localError: string | null = null, online = true, localExecutionEnabled = true, empty = false, projects?: AgentProject[]) {
   location.hash = '#new-task';
   sessionStorage.setItem('bugflow.sessionToken', 'test-token');
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  client.setQueryData(['app', 'bootstrap'], { tenant: { id: 'tenant-1' }, user: { id: 'user-1', username: 'owner' } });
   const completeGit = (id: string) => client.setQueryData(['task-center', 'snapshot'], { ...snapshot, gitRequests: [{ id, status: 'completed' }] });
   const fetchMock = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     const status = path === '/api/task-center/execute' && failExecute ? 500 : 200;
     if (path === '/api/task-center/git' && remote && body.action !== 'create') queueMicrotask(() => completeGit(body.requestId));
     const payload = path === '/api/bootstrap' ? { permissions }
-      : path === '/api/task-center/codex' ? empty ? { projects: [], localError, localExecutionEnabled } : remote ? { localError, localExecutionEnabled, projects: [{ ...targets.projects[0], online, deviceId: 'remote', deviceName: '开发机', gitBranches: true }] } : targets
+      : path === '/api/task-center/codex' ? projects ? { projects } : empty ? { projects: [], localError, localExecutionEnabled } : remote ? { localError, localExecutionEnabled, projects: [{ ...targets.projects[0], online, deviceId: 'remote', deviceName: '开发机', gitBranches: true }] } : targets
         : path.startsWith('/api/task-center/git?') ? { status: 'completed', result: { repository: true, current: 'remote/main', changes: 0, branches: ['remote/main'] } }
         : path === '/api/task-center/git' && remote ? { id: body.requestId, status: 'pending' }
+        : path === '/api/task-center/git' && projects && body.deviceId !== 'local' ? { id: body.requestId, status: 'completed', result: { repository: true, current: 'main', changes: 0, branches: ['main'] } }
         : path === '/api/task-center/git' ? { repository: true, current: body.cwd === '/repo/work' ? 'feature/work' : 'main', changes: 0, branches: ['main', 'feature/work'] }
         : path === '/api/task-center' && init?.method !== 'POST' ? snapshot
           : path === '/api/task-center' && body.action === 'create' ? { taskId: 'task-1', revision: 1 }
@@ -33,7 +36,75 @@ function setup(permissions = ['work.execute'], failExecute = false, remote = fal
 }
 
 describe('NewTaskPage', () => {
-  afterEach(() => { cleanup(); sessionStorage.clear(); location.hash = ''; vi.unstubAllGlobals(); });
+  afterEach(() => { cleanup(); sessionStorage.clear(); localStorage.clear(); history.replaceState(null, '', '/'); vi.unstubAllGlobals(); });
+
+  it('restores the target by identity when targets reorder, with directory, model and effort', async () => {
+    const other = { ...targets.projects[0], id: 'other', deviceId: 'other-device', deviceName: '另一设备' };
+    setup(['work.execute'], false, false, null, true, true, false, [other, ...targets.projects]);
+    const user = userEvent.setup();
+    await screen.findByLabelText('执行位置');
+    await user.selectOptions(screen.getByLabelText('执行位置'), '1');
+    await user.click(screen.getByLabelText('工作目录：/repo'));
+    await user.click(screen.getByRole('button', { name: '/repo/work' }));
+    await user.click(screen.getByLabelText('模型与思考强度'));
+    await user.selectOptions(screen.getByLabelText('模型'), 'gpt-6-sol');
+    fireEvent.change(screen.getByRole('slider', { name: '思考强度' }), { target: { value: '1' } });
+    cleanup();
+    const fetchMock = setup(['work.execute'], false, false, null, true, true, false, [...targets.projects, other]);
+    await screen.findByText('feature/work');
+    expect(screen.getByLabelText('执行位置')).toHaveProperty('value', '0');
+    expect(screen.getByLabelText('工作目录：/repo/work')).toBeTruthy();
+    await user.click(screen.getByLabelText('模型与思考强度'));
+    expect(screen.getByLabelText('模型')).toHaveProperty('value', 'gpt-6-sol');
+    expect(screen.getByRole('slider', { name: '思考强度' }).getAttribute('aria-valuetext')).toBe('高');
+    expect(fetchMock.mock.calls.filter(([path]) => path === '/api/task-center/git').every(([, init]) => JSON.parse(String(init?.body)).action === 'list')).toBe(true);
+    await user.type(screen.getByLabelText('任务描述'), '保存执行配置');
+    await user.click(screen.getByRole('button', { name: '创建并发送任务' }));
+    await screen.findByText('任务已创建并提交 Agent。');
+    expect(screen.getByLabelText('工作目录：/repo/work')).toBeTruthy();
+  });
+
+  it('requires an explicit replacement when the remembered target disappears', async () => {
+    setup();
+    await screen.findByText('main');
+    cleanup();
+    const other = { ...targets.projects[0], deviceId: 'other-device', deviceName: '另一设备', gitBranches: true };
+    const fetchMock = setup(['work.execute'], false, false, null, true, true, false, [other]);
+    await screen.findByText('上次选择的执行位置已不可用，请重新选择。');
+    expect(fetchMock.mock.calls.some(([path]) => path === '/api/task-center/git')).toBe(false);
+    await userEvent.setup().selectOptions(screen.getByLabelText('执行位置'), '0');
+    await screen.findByText('main');
+    expect(screen.getByLabelText('工作目录：/repo')).toBeTruthy();
+  });
+
+  it('lets an explicit device link override the remembered target and directory', async () => {
+    setup();
+    await screen.findByText('main');
+    await userEvent.setup().click(screen.getByLabelText('工作目录：/repo'));
+    fireEvent.click(screen.getByRole('button', { name: '/repo/work' }));
+    await screen.findByText('feature/work');
+    cleanup();
+    history.replaceState(null, '', '/?deviceId=other-device');
+    const other = { ...targets.projects[0], deviceId: 'other-device', deviceName: '另一设备', gitBranches: true };
+    const fetchMock = setup(['work.execute'], false, false, null, true, true, false, [...targets.projects, other]);
+    await screen.findByText('main');
+    expect(screen.getByLabelText('执行位置')).toHaveProperty('value', '1');
+    expect(screen.getByLabelText('工作目录：/repo')).toBeTruthy();
+    const reads = fetchMock.mock.calls.filter(([path]) => path === '/api/task-center/git').map(([, init]) => JSON.parse(String(init?.body)));
+    expect(reads).toEqual([expect.objectContaining({ action: 'list', projectId: 'project-1', deviceId: 'other-device', cwd: '' })]);
+  });
+
+  it('does not fall back to the remembered device when an explicit device link is unavailable', async () => {
+    setup();
+    await screen.findByText('main');
+    cleanup();
+    history.replaceState(null, '', '/?deviceId=missing-device');
+    const fetchMock = setup();
+    await screen.findByText('该设备暂未提供可执行项目，请先检查连接器。');
+    expect(screen.getByLabelText('执行位置')).toHaveProperty('value', '-1');
+    expect(fetchMock.mock.calls.some(([path]) => path === '/api/task-center/git')).toBe(false);
+    expect(screen.getByRole('button', { name: '创建并发送任务' })).toHaveProperty('disabled', true);
+  });
 
   it('denies viewers a create action', async () => {
     const fetchMock = setup(['read']);

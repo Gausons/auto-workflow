@@ -18,6 +18,47 @@ async function login(page: import('@playwright/test').Page) {
   await expect(page.getByRole('heading', { name: '任务中心', exact: true })).toBeVisible();
 }
 
+test('page configuration survives navigation and reload without changing Git branches', async ({ page }) => {
+  const projects = ['first', 'selected'].map(id => ({ id, deviceId: 'local', deviceName: '本机', name: id === 'first' ? 'Codex' : 'Claude Code', cwd: '/repo', online: true,
+    models: [{ id: 'model', name: '测试模型', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }] }], defaultModel: 'model' }));
+  const gitActions: string[] = [];
+  await page.route('**/api/task-center/codex', route => route.fulfill({ json: { projects } }));
+  await page.route('**/api/task-center/git', route => {
+    const body = route.request().postDataJSON() as { action: string; cwd: string };
+    gitActions.push(body.action);
+    return route.fulfill({ json: { repository: true, current: body.cwd === '/repo/remembered' ? 'feature/remembered' : 'main', branches: ['main', 'feature/remembered'], changes: 0 } });
+  });
+  await page.route('**/api/agent-sessions?*', route => route.fulfill({ json: { offset: 0, limit: 30, total: 0, scope: 'all', sessions: [], providers: [{ id: 'codex', label: 'Codex', status: 'available' }], workspaces: [{ path: '/repo/history', count: 0 }] } }));
+  await login(page);
+  const sidebar = page.getByRole('navigation', { name: '主导航' });
+  await sidebar.getByRole('link', { name: 'Agent 历史会话' }).click();
+  await page.getByRole('combobox', { name: 'Agent', exact: true }).selectOption('codex');
+  await page.getByRole('combobox', { name: '工作区', exact: true }).selectOption('/repo/history');
+  await sidebar.getByRole('link', { name: '新建任务' }).click();
+  await page.getByLabel('执行位置', { exact: true }).selectOption('1');
+  await page.getByLabel('工作目录：/repo', { exact: true }).click();
+  await page.getByLabel('工作目录', { exact: true }).fill('/repo/remembered');
+  await expect(page.getByLabel('Git 分支', { exact: true })).toContainText('feature/remembered');
+  await page.getByLabel('模型与思考强度').click();
+  await page.getByLabel('模型', { exact: true }).selectOption('model');
+  await page.getByRole('slider', { name: '思考强度' }).fill('1');
+  await sidebar.getByRole('link', { name: '任务中心', exact: true }).click();
+  await sidebar.getByRole('link', { name: '新建任务' }).click();
+  await page.reload();
+  await expect(page.getByLabel('执行位置', { exact: true })).toHaveValue('1');
+  await expect(page.getByLabel('工作目录：/repo/remembered', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Git 分支', { exact: true })).toContainText('feature/remembered');
+  await page.getByLabel('模型与思考强度').click();
+  await expect(page.getByLabel('模型', { exact: true })).toHaveValue('model');
+  await expect(page.getByRole('slider', { name: '思考强度' })).toHaveAttribute('aria-valuetext', '高');
+  await sidebar.getByRole('link', { name: 'Agent 历史会话' }).click();
+  await page.reload();
+  await expect(page.getByRole('combobox', { name: 'Agent', exact: true })).toHaveValue('codex');
+  await expect(page.getByRole('combobox', { name: '工作区', exact: true })).toHaveValue('/repo/history');
+  expect(gitActions.length).toBeGreaterThan(0);
+  expect(gitActions.every(action => action === 'list')).toBe(true);
+});
+
 test('all tabs share sidebar geometry, typography and page headings at every breakpoint', async ({ page }, testInfo) => {
   await login(page);
   for (const width of [1440, 1000, 800, 390]) {

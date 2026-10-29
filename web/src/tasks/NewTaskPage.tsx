@@ -2,6 +2,8 @@ import { PageHeading } from '../components/PageHeading.js';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
+import { useBrowserPreference } from '../api/browserPreference.js';
+import { defaultNewTaskPreference, parseNewTaskPreference } from './newTaskPreference.js';
 import { runDirectoryName } from './agentRunConfig.js';
 import type { AgentProject, TaskCenterData } from '../../../shared/taskTypes.js';
 import { ModelEffortMenu } from './ModelEffortMenu.js';
@@ -43,11 +45,12 @@ export function NewTaskPage() {
   const [sourceSessionId, setSourceSessionId] = useState<string | null>(() => requestedSourceId);
   const [content, setContent] = useState('');
   const [files, setFiles] = useState<File[]>([]);
-  const [projectIndex, setProjectIndex] = useState(() => new URLSearchParams(location.search).has('deviceId') ? -1 : 0);
-  const [cwd, setCwd] = useState('');
-  const [branchCwd, setBranchCwd] = useState('');
-  const [model, setModel] = useState('');
-  const [effort, setEffort] = useState('');
+  const [config, setConfig] = useBrowserPreference('new-task', defaultNewTaskPreference, parseNewTaskPreference);
+  const { cwd, model, effort } = config;
+  const setCwd = (value: string) => setConfig(previous => ({ ...previous, cwd: value }));
+  const setModel = (value: string) => setConfig(previous => ({ ...previous, model: value }));
+  const setEffort = (value: string) => setConfig(previous => ({ ...previous, effort: value }));
+  const [branchCwd, setBranchCwd] = useState(() => cwd.trim());
   const [branchActionError, setBranchActionError] = useState('');
   const [branchMutating, setBranchMutating] = useState(false);
   const [branchSearch, setBranchSearch] = useState('');
@@ -75,13 +78,28 @@ export function NewTaskPage() {
   useTaskCenterUpdates(active, snapshot.data?.syncVersion);
   const identity = useQuery({ queryKey: ['task-center', 'identity'], queryFn: ({ signal }) => apiRequest<{ permissions: string[] }>('/api/bootstrap', { signal }), enabled: active && hasSessionToken() });
   const appliedDevice = useRef(false);
+  const projects = targets.data?.projects || [];
+  const savedProjectIndex = projects.findIndex(item => item.id === config.projectId && (item.deviceId || 'local') === config.deviceId);
+  const projectIndex = !appliedDevice.current && new URLSearchParams(location.search).has('deviceId') ? -1
+    : config.projectId ? savedProjectIndex : 0;
+  function selectProject(index: number) {
+    const selected = projects[index];
+    if (!selected) return;
+    appliedDevice.current = true;
+    setConfig({ ...defaultNewTaskPreference, projectId: selected.id, deviceId: selected.deviceId || 'local' });
+    setBranchCwd('');
+  }
   useEffect(() => {
     if (appliedDevice.current || !targets.data) return;
-    appliedDevice.current = true;
     const deviceId = new URLSearchParams(location.search).get('deviceId');
-    if (!deviceId) return;
+    if (!deviceId) {
+      const first = targets.data.projects[0];
+      appliedDevice.current = Boolean(first);
+      if (!config.projectId && first) setConfig(previous => ({ ...previous, projectId: first.id, deviceId: first.deviceId || 'local' }));
+      return;
+    }
     const index = targets.data.projects.findIndex(item => item.deviceId === deviceId);
-    if (index >= 0) setProjectIndex(index);
+    if (index >= 0) selectProject(index);
     else setError('该设备暂未提供可执行项目，请先检查连接器。');
   }, [targets.data]);
   const project = targets.data?.projects[projectIndex];
@@ -120,7 +138,7 @@ export function NewTaskPage() {
     onSuccess: result => {
       setCreated(previous => [...previous, result]);
       setError(result.executionError);
-      setContent(''); setFiles([]); setSourceSessionId(null); requestedSourceId = null; setCwd('');
+      setContent(''); setFiles([]); setSourceSessionId(null); requestedSourceId = null;
       void queryClient.invalidateQueries({ queryKey: ['task-center', 'snapshot'] });
       window.dispatchEvent(new CustomEvent('bugflow:open-task', { detail: { taskId: result.taskId, source: 'create', warning: result.executionError } }));
     },
@@ -155,7 +173,7 @@ export function NewTaskPage() {
   }
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (!create.isPending && !busy && identity.data?.permissions.includes('work.execute')) { setError(''); create.mutate(); }
+    if (!create.isPending && !busy && !(projects.length && !project) && identity.data?.permissions.includes('work.execute')) { setError(''); create.mutate(); }
   }
   if (!active) return null;
   const blocked = create.isPending || busy;
@@ -172,11 +190,11 @@ export function NewTaskPage() {
             <div className="tc-actions"><button className="button secondary" type="button" disabled={blocked} onClick={() => void chooseDirectory()}>选择目录</button><button className="button ghost" type="button" disabled={blocked} onClick={() => selectDirectory('')}>使用默认目录</button></div>
             {!!project.commonDirectories?.length && <><p className="tc-create-hint">常用目录</p><div className="tc-directory-options">{project.commonDirectories.slice(0, 4).map(path => <button key={path} type="button" title={path} aria-label={path} aria-pressed={path === cwd} disabled={blocked} onClick={() => selectDirectory(path)}>▱ <span>{runDirectoryName(path)}<small>{path}</small></span></button>)}</div></>}
           </div></DismissibleDetails>
-          <label className="tc-target-control" title="执行位置">▣ <select aria-label="执行位置" value={projectIndex} disabled={blocked} onChange={event => { setProjectIndex(Number(event.target.value)); setCwd(''); setModel(''); setEffort(''); }}>{targets.data?.projects.map((item, index) => <option key={`${item.deviceId}:${item.id}`} value={index}>{item.name} · {item.deviceName}{item.online ? '' : '（离线）'}</option>)}</select></label>
+          <label className="tc-target-control" title="执行位置">▣ <select aria-label="执行位置" value={projectIndex} disabled={blocked} onChange={event => selectProject(Number(event.target.value))}>{targets.data?.projects.map((item, index) => <option key={`${item.deviceId}:${item.id}`} value={index}>{item.name} · {item.deviceName}{item.online ? '' : '（离线）'}</option>)}</select></label>
           {<DismissibleDetails className="tc-config-menu tc-branch-menu" name="create-config" onToggle={event => { if (event.currentTarget.open && !branchBusy && !branchQuery.isFetching && project.online !== false) void branchQuery.refetch(); }}><summary aria-label="Git 分支">⑂ <span>{project.online === false ? '设备离线' : branch?.repository ? branch.current || '分离 HEAD' : branchBusy ? '读取分支…' : branchError ? '分支读取失败' : branch ? '非 Git 目录' : 'Git 分支'}</span><span aria-hidden="true">⌄</span></summary><div className="tc-config-panel">
             {project.online === false ? <p className="tc-create-hint">设备连接后可读取和管理分支。</p> : <>{branchError && <p role="alert">{branchActionError || !branch ? branchError : `分支刷新失败：${branchError}；当前显示上次读取结果。`}</p>}{!branchBusy && branch && branchQuery.isFetching && <p className="tc-create-hint" role="status">正在刷新分支…</p>}{branchBusy ? <p role="status">{branchMutating ? '正在切换分支…' : '正在读取分支…'}</p> : branchActionError ? null : branch?.repository ? <><input aria-label="搜索分支" value={branchSearch} onChange={event => setBranchSearch(event.target.value)} placeholder="搜索分支" /><p className="tc-create-hint">当前：{branch.current || '分离 HEAD'} · 未提交：{branch.changes} 项</p><div className="tc-branch-options">{branch.branches.filter(name => name.toLowerCase().includes(branchSearch.toLowerCase())).map(name => <button key={name} type="button" disabled={blocked} aria-pressed={name === branch.current} onClick={() => void loadBranches('switch', name)}>{name}{name === branch.current ? ' ✓' : ''}</button>)}</div><label className="tc-create-setting">新分支<input aria-label="新分支名称" value={newBranch} onChange={event => setNewBranch(event.target.value)} maxLength={200} /></label><button type="button" className="button secondary" disabled={blocked || !newBranch.trim()} onClick={() => void loadBranches('create', newBranch.trim())}>创建并切换</button></> : branch && !branchError ? <p className="tc-create-hint">当前目录不是 Git 仓库。</p> : null}</>}
           </div></DismissibleDetails>}
-        </> : targets.data?.localExecutionEnabled === false ? <p className="tc-create-hint" role="status">请先连接开发机；也可先创建任务。<a href="/devices">连接设备</a></p> : <p className="tc-create-hint" role="alert">{targets.data?.localError || '未发现可用 Agent，仍可创建任务。'}</p>}
+        </> : projects.length ? <><p className="tc-create-hint" role="status">上次选择的执行位置已不可用，请重新选择。</p><label>执行位置<select aria-label="执行位置" value={-1} disabled={blocked} onChange={event => selectProject(Number(event.target.value))}><option value={-1} disabled>请选择执行位置</option>{projects.map((item, index) => <option key={`${item.deviceId}:${item.id}`} value={index}>{item.name} · {item.deviceName}{item.online ? '' : '（离线）'}</option>)}</select></label></> : targets.data?.localExecutionEnabled === false ? <p className="tc-create-hint" role="status">请先连接开发机；也可先创建任务。<a href="/devices">连接设备</a></p> : <p className="tc-create-hint" role="alert">{targets.data?.localError || '未发现可用 Agent，仍可创建任务。'}</p>}
       </div>
       {project?.online === false && <p className="tc-create-hint" role="status">所选设备离线，任务提交后将等待连接器上线。<a href="/devices">查看设备</a></p>}
       <div className="tc-composer conversation-composer">
@@ -186,7 +204,7 @@ export function NewTaskPage() {
         <input ref={fileInput} type="file" multiple hidden onChange={event => { const next = [...files, ...Array.from(event.target.files || [])]; if (next.length > 10 || next.some(file => file.size > 5 * 1024 * 1024) || next.reduce((total, file) => total + file.size, 0) > 10 * 1024 * 1024) setError('最多 10 个附件，单个不超过 5 MB，总计不超过 10 MB'); else { setFiles(next); setError(''); } event.target.value = ''; }} />
         <footer><div className="tc-create-tools"><button className="tc-attach-button" type="button" aria-label="附加文件" disabled={blocked || project?.deviceId !== 'local'} onClick={() => fileInput.current?.click()}>＋</button><span className="tc-create-shortcut">⌘ / Ctrl + Enter 发送</span></div><div className="tc-create-send">
           {project && <ModelEffortMenu project={project} model={model} effort={effort} disabled={blocked} onModelChange={setModel} onEffortChange={setEffort} />}
-          <button className="button primary" type="submit" aria-label="创建并发送任务" disabled={blocked || !canEdit || !content.trim()}>{create.isPending ? '…' : '↑'}</button>
+          <button className="button primary" type="submit" aria-label="创建并发送任务" disabled={blocked || !canEdit || !content.trim() || Boolean(projects.length && !project)}>{create.isPending ? '…' : '↑'}</button>
         </div></footer>{error && <p className="tc-form-error" role="alert">{error}</p>}
       </div>
     </form></section>

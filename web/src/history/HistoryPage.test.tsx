@@ -13,11 +13,34 @@ function renderHistory(route = '#history') {
   location.hash = route;
   sessionStorage.setItem('bugflow.sessionToken', 'test-token');
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  client.setQueryData(['app', 'bootstrap'], { tenant: { id: 'tenant-1' }, user: { id: 'user-1', username: 'owner' } });
   render(<QueryClientProvider client={client}><HistoryPage /></QueryClientProvider>);
 }
 
 describe('HistoryPage', () => {
-  afterEach(() => { cleanup(); sessionStorage.clear(); location.hash = ''; vi.unstubAllGlobals(); vi.clearAllMocks(); });
+  afterEach(() => { cleanup(); sessionStorage.clear(); localStorage.clear(); location.hash = ''; vi.unstubAllGlobals(); vi.clearAllMocks(); });
+
+  it('restores agent and workspace after remounting without persisting search or pagination', async () => {
+    const fetchMock = vi.fn().mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(path.startsWith('/api/agent-sessions?') ? list : { permissions: ['read'] }))));
+    vi.stubGlobal('fetch', fetchMock);
+    renderHistory();
+    const user = userEvent.setup();
+    await screen.findByRole('option', { name: 'Codex' });
+    await user.selectOptions(screen.getByLabelText('Agent'), 'codex');
+    await screen.findByRole('option', { name: '/repo/work (1)' });
+    await user.selectOptions(screen.getByLabelText('工作区'), '/repo/work');
+    await user.type(screen.getByPlaceholderText('搜索会话…'), '临时搜索');
+    await user.click(screen.getByRole('button', { name: '刷新会话' }));
+    cleanup();
+    fetchMock.mockClear();
+    renderHistory();
+    await screen.findByRole('button', { name: /不可信标题/ });
+    expect(screen.getByLabelText('Agent')).toHaveProperty('value', 'codex');
+    expect(screen.getByLabelText('工作区')).toHaveProperty('value', '/repo/work');
+    expect(screen.getByPlaceholderText('搜索会话…')).toHaveProperty('value', '');
+    const path = fetchMock.mock.calls.find(([url]) => url.startsWith('/api/agent-sessions?'))?.[0];
+    expect(new URL(path!, 'http://test').searchParams).toEqual(new URLSearchParams({ offset: '0', limit: '30', agent: 'codex', q: '', workspace: '/repo/work' }));
+  });
 
   it('shows a safe session list and opens the existing hash address', async () => {
     const fetchMock = vi.fn().mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(path.startsWith('/api/agent-sessions?') ? list : { permissions: ['read'] }), { status: 200 })));
