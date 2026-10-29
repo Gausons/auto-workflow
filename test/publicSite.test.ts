@@ -15,7 +15,7 @@ test('public HTML, documentation and discovery files are independently served wi
   assert.ok(address && typeof address === 'object');
   const base = `http://127.0.0.1:${address.port}`;
   try {
-    for (const route of ['/', '/index.html', '/docs', '/docs/', '/docs/quickstart', '/docs/tasks', '/docs/devices', '/docs/jira', '/docs/sessions', '/docs/self-hosting', '/docs/api', '/docs/troubleshooting', '/docs/development/']) {
+    for (const route of ['/', '/index.html', '/docs', '/docs/', '/docs/quickstart', '/docs/workspaces', '/docs/workspaces/', '/docs/tasks', '/docs/devices', '/docs/jira', '/docs/sessions', '/docs/self-hosting', '/docs/api', '/docs/troubleshooting', '/docs/development/']) {
       const response = await fetch(base + route);
       assert.equal(response.status, 200, route);
       const html = await response.text();
@@ -38,7 +38,9 @@ test('public HTML, documentation and discovery files are independently served wi
     assert.match(await (await fetch(base + '/tasks')).text(), /react-entry/);
     const sitemap = await fetch(base + '/sitemap.xml');
     assert.match(sitemap.headers.get('content-type') || '', /application\/xml/);
-    assert.match(await sitemap.text(), /https:\/\/autoworkflow.top\/docs\/api/);
+    const sitemapBody = await sitemap.text();
+    assert.match(sitemapBody, /https:\/\/autoworkflow.top\/docs\/api/);
+    assert.match(sitemapBody, /https:\/\/autoworkflow.top\/docs\/workspaces/);
     assert.match(await (await fetch(base + '/robots.txt')).text(), /Disallow: \/api\//);
   } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });

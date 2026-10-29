@@ -7,8 +7,8 @@
 ## 官网与开放文档
 
 - [官网](https://autoworkflow.top/)：产品介绍、能力边界与工作流程。
-- [开放文档](https://autoworkflow.top/docs)：快速开始、任务、设备与 Agent、Jira、会话交接、自托管、HTTP API、故障排查及开发贡献。
-- [工作台](https://autoworkflow.top/tasks)：登录后管理个人任务与设备。
+- [开放文档](https://autoworkflow.top/docs)：快速开始、团队协作空间、任务、设备与 Agent、Jira、会话交接、自托管、HTTP API、故障排查及开发贡献。
+- [工作台](https://autoworkflow.top/tasks)：登录后管理个人与团队空间中的任务和设备。
 
 官网与文档无需登录，使用独立的轻量入口，不加载工作台或读取账号数据。Vite 构建时生成完整 HTML、页面元数据、`/sitemap.xml` 与 `/robots.txt`；文档支持本地全文搜索、代码复制、页内目录、明暗主题和手机目录。内容维护于 `web/src/site/content.ts`，页面模板与独立样式位于同目录，运行 `pnpm build:client` 后随现有 Docker / CI 发布。不要编辑或提交 `public/build/`。
 
@@ -705,6 +705,8 @@ CI 的 TEST_PGHOST、TEST_PGPORT、TEST_PGUSER、TEST_PGPASSWORD、TEST_PGDATABA
 [MIT](./LICENSE)
 
 ## 团队协作空间
+
+使用指南见[团队协作空间](https://autoworkflow.top/docs/workspaces)，接口说明见[工作空间 API](https://autoworkflow.top/docs/api#workspaces)。
 
 侧栏「协作空间」（`/space`）提供个人/团队空间切换、共享任务概览、最近任务活动和成员管理。交互参考 [ChatGPT 工作区](https://help.openai.com/en/articles/8265430-what-is-a-chatgpt-enterprise-workspace-how-can-i-switch-workspaces)，使用 AgentFlow 自身的角色与执行机制。
 

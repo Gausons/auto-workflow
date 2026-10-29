@@ -48,7 +48,7 @@ test('code copying and persisted theme work', async ({ page, context }) => {
 test('public pages fit desktop and phone, with usable mobile document navigation', async ({ page }, testInfo) => {
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
-    for (const route of ['/', '/docs', '/docs/api', '/docs/self-hosting']) {
+    for (const route of ['/', '/docs', '/docs/workspaces', '/docs/api', '/docs/self-hosting']) {
       await page.goto(route);
       await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth), `${route} at ${width}`).toBe(width);
@@ -76,4 +76,30 @@ test('Google exchange on the homepage finishes at the workbench instead of the p
   await page.goto('/?google_login=test-only-exchange');
   await expect(page).toHaveURL(/\/tasks$/);
   await expect(page.getByRole('heading', { name: '登录 AgentFlow' })).toBeVisible();
+});
+
+
+test('workspace documentation is discoverable, links to its API and preserves deep links', async ({ page, context }) => {
+  const protectedRequests: string[] = [];
+  page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/')) protectedRequests.push(request.url()); });
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.goto('/');
+  await page.getByRole('link', { name: /团队协作空间/ }).click();
+  await expect(page).toHaveURL(/\/docs\/workspaces$/);
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('团队协作空间');
+  await page.getByRole('navigation', { name: '页内目录' }).getByRole('link', { name: '成员角色与访问权限' }).click();
+  await expect(page).toHaveURL(/#roles$/);
+  await page.reload();
+  await expect(page.getByRole('cell', { name: '只读成员（viewer）', exact: true })).toBeVisible();
+  await page.getByRole('searchbox', { name: '搜索文档' }).fill('站内邀请');
+  await page.locator('#search-results').getByRole('link', { name: /^团队协作空间/ }).click();
+  await expect(page.getByRole('navigation', { name: '文档导航' }).getByRole('link', { name: '团队协作空间', exact: true })).toHaveAttribute('aria-current', 'page');
+  await page.getByRole('link', { name: '工作空间 API', exact: true }).click();
+  await expect(page).toHaveURL(/\/docs\/api#workspaces$/);
+  await page.locator('#workspaces').getByRole('button', { name: '复制代码' }).first().click();
+  const example = JSON.parse(await page.evaluate(() => navigator.clipboard.readText())) as { name: string; requestId: string };
+  expect(example.name).toBe('产品研发团队');
+  expect(example.requestId).toMatch(/^[a-zA-Z0-9-]{16,64}$/);
+  await expect(page.getByRole('cell', { name: 'PATCH /api/organization/members/:id', exact: true })).toBeVisible();
+  expect(protectedRequests).toEqual([]);
 });
