@@ -1,3 +1,4 @@
+import { SpeechInput } from '../components/SpeechInput.js';
 import { useMutation, useMutationState, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
@@ -228,6 +229,7 @@ export function HistoryComposer({ session, historyMessages, canEdit, syncHistory
         <span title={session.cwd}>▱ {runDirectoryName(session.cwd)}</span><span>▣ {session.agentLabel || session.agent} · {currentDevice}</span>{session.branch && <span>⑂ {session.branch}</span>}<span>{currentModel}</span>
       </div>}
       <form className="conversation-composer" onSubmit={submit}><label className="history-sr-only" htmlFor="historyReply">{newSessionMode ? '新会话首条消息（可选）' : '发送消息'}</label><textarea id="historyReply" rows={3} maxLength={12000} placeholder={newSessionMode ? '输入新会话的第一条消息，也可以留空后创建…' : '继续讨论，或描述下一步需要完成的工作…'} value={text} onChange={event => updateText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} disabled={send.isPending || creating || disabled} required={!newSessionMode} />
+        <SpeechInput key={`${session.id}:${newSessionMode}`} value={text} onChange={updateText} maxLength={12000} disabled={configurationDisabled || !canEdit} />
         <div className="history-compose-footer"><div className="tc-create-tools">{!newSessionMode && session.agent === 'codex' && (!session.deviceId || session.deviceId === 'local') && session.sessionId && <a className="conversation-context" href={`codex://threads/${encodeURIComponent(session.sessionId)}`}>在 Codex 中打开 ↗</a>}<span className="history-meta">⌘ / Ctrl + Enter</span></div><div className="tc-create-send">
           {newSessionMode ? <>{project && <ModelEffortMenu project={project} model={model} effort={effort} disabled={configurationDisabled} onModelChange={setModel} onEffortChange={setEffort} />}<button type="submit" className={styles.createButton} disabled={!canCreate}>{creating ? '正在创建…' : text.trim() ? '创建并发送' : '创建会话'}</button></> : <button type="submit" aria-label="发送消息" title="发送消息" disabled={!canSend}>↑</button>}
         </div></div>{newSessionMode && <p className="conversation-new-status" role="status">{creating ? '正在带上上下文…' : newStatus || (latestCreation?.status === 'error' ? `${errorMessage(latestCreation.error)}。再次点击可重试，输入已保留。` : '')}</p>}

@@ -1,5 +1,6 @@
+import { mockSpeechRecognition, SpeechRecognitionMock } from '../test/speechRecognitionMock.js';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NewTaskPage } from './NewTaskPage.js';
@@ -36,6 +37,22 @@ function setup(permissions = ['work.execute'], failExecute = false, remote = fal
 }
 
 describe('NewTaskPage', () => {
+
+  it('inserts recognized speech into the draft without creating or executing a task', async () => {
+    mockSpeechRecognition();
+    const fetchMock = setup();
+    await screen.findByText('main');
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText('任务描述'), '已有描述');
+    await user.click(screen.getByRole('button', { name: '语音输入' }));
+    await user.click(screen.getByRole('button', { name: '开始录音' }));
+    const recognition = SpeechRecognitionMock.instances.at(-1)!;
+    act(() => { recognition.result(['修复登录问题', true]); recognition.onend?.(); });
+    await user.click(screen.getByRole('button', { name: '插入文字' }));
+    expect(screen.getByLabelText('任务描述')).toHaveProperty('value', '已有描述\n修复登录问题');
+    expect(fetchMock.mock.calls.some(([path, init]) => init?.method === 'POST' && ['/api/task-center', '/api/task-center/execute'].includes(path))).toBe(false);
+  });
+
   afterEach(() => { cleanup(); sessionStorage.clear(); localStorage.clear(); history.replaceState(null, '', '/'); vi.unstubAllGlobals(); });
 
   it('restores the target by identity when targets reorder, with directory, model and effort', async () => {

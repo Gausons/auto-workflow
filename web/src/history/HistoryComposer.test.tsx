@@ -1,3 +1,4 @@
+import { mockSpeechRecognition, SpeechRecognitionMock } from '../test/speechRecognitionMock.js';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -55,6 +56,24 @@ function switchableCreation(respond: () => Promise<Response>) {
 }
 
 describe('HistoryComposer', () => {
+
+  it('inserts recognized speech without sending and submits it only on explicit send', async () => {
+    mockSpeechRecognition();
+    const writes = setup();
+    const user = userEvent.setup();
+    await user.type(screen.getByRole('textbox', { name: '发送消息' }), '继续任务');
+    await user.click(screen.getByRole('button', { name: '语音输入' }));
+    await user.click(screen.getByRole('button', { name: '开始录音' }));
+    const recognition = SpeechRecognitionMock.instances.at(-1)!;
+    act(() => { recognition.result(['检查回归测试', true]); recognition.onend?.(); });
+    await user.click(screen.getByRole('button', { name: '插入文字' }));
+    expect(screen.getByRole('textbox', { name: '发送消息' })).toHaveProperty('value', '继续任务\n检查回归测试');
+    expect(writes).toHaveLength(0);
+    await user.click(screen.getByRole('button', { name: '发送消息' }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]?.body.message).toBe('继续任务\n检查回归测试');
+  });
+
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
   it('sends to an enabled remote original session without a local desktop link', async () => {

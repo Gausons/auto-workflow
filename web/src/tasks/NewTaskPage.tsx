@@ -1,3 +1,4 @@
+import { SpeechInput } from '../components/SpeechInput.js';
 import { PageHeading } from '../components/PageHeading.js';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
@@ -200,6 +201,7 @@ export function NewTaskPage() {
       <div className="tc-composer conversation-composer">
         {sourceSessionId && <p className="tc-meta">将关联会话：{snapshot.data?.sessions.find(item => item.id === sourceSessionId)?.title || sourceSessionId}</p>}
         <textarea ref={messageInput} aria-label="任务描述" value={content} onChange={event => setContent(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder="描述任务、期望结果，或需要解决的问题…" rows={4} maxLength={64000} required disabled={blocked || !canEdit} />
+        <SpeechInput value={content} onChange={setContent} maxLength={64000} disabled={blocked || !canEdit} />
         <div className="tc-attachment-list">{files.map((file, index) => <span className="tc-attachment" key={`${file.name}:${index}`} title={file.name}><span>{file.name}</span><small>{Math.max(1, Math.round(file.size / 1024))} KB</small><button type="button" aria-label={`移除 ${file.name}`} disabled={blocked} onClick={() => setFiles(current => current.filter((_, at) => at !== index))}>×</button></span>)}</div>
         <input ref={fileInput} type="file" multiple hidden onChange={event => { const next = [...files, ...Array.from(event.target.files || [])]; if (next.length > 10 || next.some(file => file.size > 5 * 1024 * 1024) || next.reduce((total, file) => total + file.size, 0) > 10 * 1024 * 1024) setError('最多 10 个附件，单个不超过 5 MB，总计不超过 10 MB'); else { setFiles(next); setError(''); } event.target.value = ''; }} />
         <footer><div className="tc-create-tools"><button className="tc-attach-button" type="button" aria-label="附加文件" disabled={blocked || project?.deviceId !== 'local'} onClick={() => fileInput.current?.click()}>＋</button><span className="tc-create-shortcut">⌘ / Ctrl + Enter 发送</span></div><div className="tc-create-send">

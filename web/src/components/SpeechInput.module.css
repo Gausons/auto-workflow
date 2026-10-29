@@ -1,0 +1,11 @@
+.root { margin: 6px 0; min-width: 0; }
+.root button { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--text); cursor: pointer; }
+.root button:hover:not(:disabled) { background: var(--surface-strong); }
+.root button:disabled { opacity: .5; cursor: default; }
+.root .trigger { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; font-size: 12px; }
+.panel { margin-top: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; overflow-wrap: anywhere; }
+.panel p { margin: 0 0 10px; }
+.hint, .interim { color: var(--muted, #64748b); }
+.preview { white-space: pre-wrap; max-height: 160px; overflow-y: auto; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.actions button { padding: 6px 10px; font-size: 12px; }

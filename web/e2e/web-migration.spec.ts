@@ -1002,3 +1002,47 @@ test('semantic results work through task, defect and history search controls', a
   await expect(page.getByText('共 1 个会话，关键词优先，包含语义相关结果')).toBeVisible();
   await expect(page.getByText('处理登录异常', { exact: true })).toBeVisible();
 });
+
+test('speech input previews and inserts without sending, fits mobile, and aborts on navigation', async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    class Recognition {
+      lang = ''; continuous = false; interimResults = false;
+      onstart: (() => void) | null = null;
+      onend: (() => void) | null = null;
+      onresult: ((event: { results: Array<{ isFinal: boolean; 0: { transcript: string } }> }) => void) | null = null;
+      start() { this.onstart?.(); this.onresult?.({ results: [{ isFinal: true, 0: { transcript: '修复登录问题并补充测试。' } }] }); }
+      stop() { this.onend?.(); }
+      abort() { document.documentElement.dataset.speechAborted = 'true'; }
+    }
+    Object.defineProperty(window, 'SpeechRecognition', { value: Recognition, configurable: true });
+  });
+  await login(page);
+  await page.getByRole('navigation', { name: '主导航' }).getByRole('link', { name: '新建任务' }).click();
+  const input = page.getByRole('textbox', { name: '任务描述' });
+  await input.fill('已有任务描述');
+  let submits = 0;
+  page.on('request', request => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/task-center') submits++;
+  });
+  await page.getByRole('button', { name: '语音输入' }).click();
+  await page.getByRole('button', { name: '开始录音' }).click();
+  await expect(page.getByLabel('识别结果')).toHaveText('修复登录问题并补充测试。');
+  await expect(input).toHaveValue('已有任务描述');
+  await expect(page.getByRole('button', { name: '插入文字' })).toBeDisabled();
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await expect(page.getByRole('button', { name: '停止录音' })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+    await page.screenshot({ path: testInfo.outputPath(`speech-input-${width}.png`), fullPage: true });
+  }
+  await page.getByRole('button', { name: '停止录音' }).click();
+  await page.getByRole('button', { name: '插入文字' }).click();
+  await expect(input).toHaveValue('已有任务描述\n修复登录问题并补充测试。');
+  expect(submits).toBe(0);
+  await page.getByRole('button', { name: '语音输入' }).click();
+  await page.getByRole('button', { name: '开始录音' }).click();
+  await page.evaluate(() => { delete document.documentElement.dataset.speechAborted; });
+  await page.getByRole('link', { name: '返回任务中心' }).click();
+  await expect(page.getByRole('heading', { name: '任务中心', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.dataset.speechAborted)).toBe('true');
+});
