@@ -49,7 +49,7 @@ function setup(read: (since: number, signal: AbortSignal) => Promise<Response>, 
   const notify = async (version: number, reset = false) => {
     await act(async () => { await Promise.resolve(); sockets.at(-1)!.receive({ type: 'task-center', version, reset }); });
   };
-  return { client, fetchMock, sockets, notify, ...view };
+  return { client, fetchMock, sockets, notify, ...view, setConsumers: (count: number) => view.rerender(<QueryClientProvider client={client}>{Array.from({ length: count }, (_, index) => <Probe key={index} />)}</QueryClientProvider>) };
 }
 
 afterEach(() => { cleanup(); sessionStorage.clear(); vi.unstubAllGlobals(); });
@@ -145,4 +145,20 @@ it('heartbeats leave unrelated history details fresh while a changed session inv
   await notify(2);
   await waitFor(() => expect(client.getQueryState(['history', 'detail', 'changed'])?.isInvalidated).toBe(true));
   expect(client.getQueryState(['history', 'detail', 'other'])?.isInvalidated).toBe(false);
+});
+
+it('shares one subscription between global and page consumers and only closes after the last consumer leaves', async () => {
+  const read = vi.fn().mockResolvedValue(response(taskCenterDelta(data(1, [task('done', '后台完成')]), 0, { tasks: ['done'] }, false)));
+  const { setConsumers, sockets, notify } = setup(read);
+  setConsumers(2);
+  // The initial unkeyed probe remounts once, then both consumers share the replacement connection.
+  await waitFor(() => expect(sockets.filter(socket => socket.readyState === 1)).toHaveLength(1));
+  const count = sockets.length;
+  setConsumers(1);
+  await notify(1);
+  await screen.findByText('后台完成');
+  expect(sockets).toHaveLength(count);
+  expect(sockets.at(-1)?.readyState).toBe(1);
+  setConsumers(0);
+  expect(sockets.at(-1)?.readyState).toBe(3);
 });

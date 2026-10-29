@@ -1070,3 +1070,50 @@ test('speech input matches the compact toolbar, fills on stop without sending, a
   await expect(page.getByRole('textbox', { name: '发送消息' })).toHaveValue('修复登录问题并补充测试。');
   expect(sends).toBe(0);
 });
+
+test('completion notifications stay live on other pages, link to the result and do not replay history', async ({ page, request }, testInfo) => {
+  const { token } = await (await request.post('/api/auth/login', { data: { username: 'owner', password } })).json() as { token: string };
+  const headers = { Authorization: `Bearer ${token}` };
+  const result = await request.post('/api/task-center', { headers, data: { action: 'create', title: '后台完成提醒回归' } });
+  expect(result.ok()).toBeTruthy();
+  const { taskId } = await result.json() as { taskId: string };
+  const sockets: string[] = [];
+  page.on('websocket', socket => sockets.push(socket.url()));
+  await login(page);
+  await expect.poll(() => sockets.length).toBe(1);
+  await page.getByRole('link', { name: '设置', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '设置', exact: true })).toBeVisible();
+  expect((await request.post('/api/task-center', { headers, data: { action: 'update', taskId, revision: 1, status: 'completed' } })).ok()).toBeTruthy();
+  const notices = page.getByRole('region', { name: '完成通知' });
+  await expect(notices.getByText('后台完成提醒回归')).toBeVisible();
+  await expect(notices.getByText('任务已完成')).toBeVisible();
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const box = await notices.boundingBox();
+    expect(box!.y).toBeLessThan(30);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+    expect(box!.x + box!.width).toBeGreaterThan(width - 30);
+    await page.screenshot({ path: testInfo.outputPath(`completion-notice-${width}.png`), fullPage: true });
+  }
+  await notices.getByRole('button', { name: '查看任务' }).click();
+  await expect(page.getByRole('heading', { name: '后台完成提醒回归', exact: true })).toBeVisible();
+  await expect(notices.getByRole('status')).toHaveCount(0);
+  expect(sockets).toHaveLength(1);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: '任务中心', exact: true })).toBeVisible();
+  await expect(notices.getByRole('status')).toHaveCount(0);
+
+  const deviceId = 'completion-notice-device';
+  const heartbeat = (status: string) => ({ action: 'heartbeat', deviceId, name: '通知设备', agents: ['codex'], sessions: [{ nativeId: 'completion-notice-session', agent: 'codex', title: '后台会话完成回归', status, updatedAt: new Date().toISOString() }] });
+  const changed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/task-center/changes');
+  expect((await request.post('/api/task-center', { headers, data: heartbeat('running') })).ok()).toBeTruthy();
+  await changed;
+  await page.getByRole('link', { name: '设置', exact: true }).click();
+  expect((await request.post('/api/task-center', { headers, data: heartbeat('completed') })).ok()).toBeTruthy();
+  await expect(notices.getByText('会话本轮已完成')).toBeVisible();
+  await expect(notices.getByText('后台会话完成回归')).toBeVisible();
+  await notices.getByRole('button', { name: '查看会话' }).click();
+  await expect(page).toHaveURL(/\/history\/[a-f0-9]{64}$/);
+  await expect(page.getByRole('heading', { name: '后台会话完成回归', exact: true })).toBeVisible();
+  await expect(notices.getByRole('status')).toHaveCount(0);
+});

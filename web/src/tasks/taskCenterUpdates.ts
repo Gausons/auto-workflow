@@ -4,6 +4,7 @@ import { apiRequest, ApiError, subscribeTaskCenterUpdates } from '../api/client.
 import { applyTaskCenterDelta, type TaskCenterDelta } from '../../../shared/taskCenterSync.js';
 import type { TaskCenterData } from '../../../shared/taskTypes.js';
 
+const subscriptions = new WeakMap<QueryClient, { users: number; stop(): void }>();
 const snapshotKey = ['task-center', 'snapshot'] as const;
 const denied = (error: unknown) => error instanceof ApiError && [401, 403].includes(error.status);
 const pause = (ms: number, signal: AbortSignal) => new Promise<void>(resolve => {
@@ -45,7 +46,14 @@ export function useTaskCenterUpdates(active: boolean, syncVersion: number | unde
   const ready = Number.isSafeInteger(syncVersion);
   useEffect(() => {
     if (!active || !ready) return;
+    const existing = subscriptions.get(client);
+    const release = () => {
+      const shared = subscriptions.get(client);
+      if (shared && --shared.users === 0) { subscriptions.delete(client); shared.stop(); }
+    };
+    if (existing) { existing.users++; return release; }
     const controller = new AbortController(), { signal } = controller;
+    subscriptions.set(client, { users: 1, stop: () => controller.abort() });
     let targetVersion = client.getQueryData<TaskCenterData>(snapshotKey)?.syncVersion || 0;
     let reset = false, syncing: Promise<void> | null = null;
     const synchronize = () => {
@@ -79,7 +87,7 @@ export function useTaskCenterUpdates(active: boolean, syncVersion: number | unde
             delay = 500;
           } catch (error) {
             if (signal.aborted) return;
-            if (denied(error)) { controller.abort(); return; }
+            if (denied(error)) { controller.abort(); void client.invalidateQueries({ queryKey: ['app', 'bootstrap'] }); return; }
             await pause(delay, signal);
             delay = Math.min(delay * 2, 10_000);
           }
@@ -104,7 +112,7 @@ export function useTaskCenterUpdates(active: boolean, syncVersion: number | unde
           delay = 500;
         } catch (error) {
           if (signal.aborted) return;
-          if (denied(error)) { controller.abort(); return; }
+          if (denied(error)) { controller.abort(); void client.invalidateQueries({ queryKey: ['app', 'bootstrap'] }); return; }
         }
         // Clean EOF also needs backoff; a closing server must not create a busy loop.
         await pause(delay, signal);
@@ -112,6 +120,6 @@ export function useTaskCenterUpdates(active: boolean, syncVersion: number | unde
       }
     };
     void run();
-    return () => controller.abort();
+    return release;
   }, [active, client, ready]);
 }

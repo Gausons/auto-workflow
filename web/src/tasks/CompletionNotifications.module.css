@@ -1,0 +1,12 @@
+.stack { position: fixed; top: max(20px, env(safe-area-inset-top)); right: max(20px, env(safe-area-inset-right)); z-index: 1000; display: flex; flex-direction: column; gap: 10px; width: min(360px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); overflow-y: auto; pointer-events: none; }
+.notice { display: flex; align-items: flex-start; gap: 12px; padding: 16px; border: 1px solid #e4e7ec; border-radius: 14px; background: var(--surface, #fff); color: var(--text, #202123); box-shadow: 0 8px 28px #00000014; pointer-events: auto; }
+.icon { display: grid; place-items: center; flex: 0 0 26px; height: 26px; border-radius: 50%; background: #e8f5ef; color: #23825c; }
+.content { flex: 1; min-width: 0; }
+.content strong { font-size: 14px; }
+.content p { margin: 6px 0 10px; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.view, .close { border: 0; background: transparent; cursor: pointer; }
+.view { padding: 0; color: #3478eb; font-size: 13px; }
+.close { flex: 0 0 26px; height: 26px; padding: 0; border-radius: 6px; color: #777; font-size: 22px; line-height: 1; }
+.close:hover { background: #f4f4f4; }
+.view:focus-visible, .close:focus-visible { outline: 2px solid #3478eb; outline-offset: 3px; }
+@media (max-width: 600px) { .stack { top: max(12px, env(safe-area-inset-top)); right: 16px; } }
