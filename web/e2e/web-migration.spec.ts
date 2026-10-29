@@ -18,6 +18,57 @@ async function login(page: import('@playwright/test').Page) {
   await expect(page.getByRole('heading', { name: '任务中心', exact: true })).toBeVisible();
 }
 
+test('integration settings group fields and save the assignee select at desktop and mobile widths', async ({ page }, testInfo) => {
+  await login(page);
+  let assignee = '001';
+  let configPayload: Record<string, unknown> = {};
+  await page.route('**/api/bootstrap', async route => {
+    const response = await route.fetch();
+    const data = await response.json();
+    await route.fulfill({ json: { ...data, config: { ...data.config, assignee, workspaceManaged: true }, assignmentPeople: [{ name: '小李', employeeId: '42', responsibility: '前端' }] } });
+  });
+  await page.route('**/api/config', async route => {
+    configPayload = route.request().postDataJSON() as Record<string, unknown>;
+    const response = await route.fetch();
+    const data = await response.json();
+    assignee = String(configPayload.assignee);
+    await route.fulfill({ json: { ...data, config: { ...data.config, assignee, workspaceManaged: true }, assignmentPeople: [{ name: '小李', employeeId: '42', responsibility: '前端' }] } });
+  });
+  await page.goto('/settings/config');
+  const select = page.getByRole('combobox', { name: '扩展数据源经办人', exact: true });
+  await expect(select).toHaveValue('001');
+  await expect(page.getByRole('textbox', { name: '扩展数据源经办人' })).toHaveCount(0);
+  await expect(page.getByLabel('OpenAI Base URL')).toBeHidden();
+  for (const width of [1440, 1000, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const name of ['数据源', '定时同步', '智能分配']) await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+    const source = await select.boundingBox();
+    const operator = await page.getByLabel('扩展数据源操作人', { exact: true }).boundingBox();
+    if (width === 390) expect(operator!.y).toBeGreaterThan(source!.y + source!.height);
+    else expect(operator!.y).toBe(source!.y);
+    const form = await page.locator('#configForm').boundingBox();
+    const save = await page.getByRole('button', { name: '保存配置', exact: true }).boundingBox();
+    expect(save!.x).toBeGreaterThanOrEqual(form!.x);
+    expect(save!.x + save!.width).toBeLessThanOrEqual(form!.x + form!.width);
+    await page.screenshot({ path: testInfo.outputPath(`integration-settings-${width}.png`), fullPage: true });
+  }
+  await select.selectOption('42');
+  await page.getByRole('button', { name: '保存配置', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('配置已保存');
+  expect(configPayload.assignee).toBe('42');
+  expect(configPayload).not.toHaveProperty('codexWorkspaceDir');
+  await page.reload();
+  await expect(select).toHaveValue('42');
+  await page.getByText('高级配置', { exact: false }).click();
+  await expect(page.getByLabel('OpenAI Base URL')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+  await select.selectOption('');
+  await page.getByRole('button', { name: '保存配置', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('配置已保存');
+  expect(configPayload.assignee).toBe('');
+});
+
 test('page configuration survives navigation and reload without changing Git branches', async ({ page }) => {
   const projects = ['first', 'selected'].map(id => ({ id, deviceId: 'local', deviceName: '本机', name: id === 'first' ? 'Codex' : 'Claude Code', cwd: '/repo', online: true,
     models: [{ id: 'model', name: '测试模型', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }] }], defaultModel: 'model' }));
