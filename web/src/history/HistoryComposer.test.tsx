@@ -63,10 +63,8 @@ describe('HistoryComposer', () => {
     const user = userEvent.setup();
     await user.type(screen.getByRole('textbox', { name: '发送消息' }), '继续任务');
     await user.click(screen.getByRole('button', { name: '语音输入' }));
-    await user.click(screen.getByRole('button', { name: '开始录音' }));
     const recognition = SpeechRecognitionMock.instances.at(-1)!;
     act(() => { recognition.result(['检查回归测试', true]); recognition.onend?.(); });
-    await user.click(screen.getByRole('button', { name: '插入文字' }));
     expect(screen.getByRole('textbox', { name: '发送消息' })).toHaveProperty('value', '继续任务\n检查回归测试');
     expect(writes).toHaveLength(0);
     await user.click(screen.getByRole('button', { name: '发送消息' }));

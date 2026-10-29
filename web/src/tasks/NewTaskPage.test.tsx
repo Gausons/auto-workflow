@@ -45,10 +45,8 @@ describe('NewTaskPage', () => {
     const user = userEvent.setup();
     await user.type(screen.getByLabelText('任务描述'), '已有描述');
     await user.click(screen.getByRole('button', { name: '语音输入' }));
-    await user.click(screen.getByRole('button', { name: '开始录音' }));
     const recognition = SpeechRecognitionMock.instances.at(-1)!;
     act(() => { recognition.result(['修复登录问题', true]); recognition.onend?.(); });
-    await user.click(screen.getByRole('button', { name: '插入文字' }));
     expect(screen.getByLabelText('任务描述')).toHaveProperty('value', '已有描述\n修复登录问题');
     expect(fetchMock.mock.calls.some(([path, init]) => init?.method === 'POST' && ['/api/task-center', '/api/task-center/execute'].includes(path))).toBe(false);
   });

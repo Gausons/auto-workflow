@@ -15,15 +15,14 @@ function Harness({ disabled = false, maxLength = 12000 }: { disabled?: boolean; 
 async function start() {
   const user = userEvent.setup();
   await user.click(screen.getByRole('button', { name: '语音输入' }));
-  expect(SpeechRecognitionMock.instances).toHaveLength(0);
-  await user.click(screen.getByRole('button', { name: '开始录音' }));
+  expect(SpeechRecognitionMock.instances).toHaveLength(1);
   return { user, recognition: SpeechRecognitionMock.instances.at(-1)! };
 }
 
 describe('SpeechInput', () => {
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); });
 
-  it.each([false, true])('previews revised results without duplicating or submitting, prefixed=%s', async prefixed => {
+  it.each([false, true])('fills finalized results on stop without duplicating, overwriting edits or submitting, prefixed=%s', async prefixed => {
     mockSpeechRecognition(prefixed);
     render(<Harness />);
     const { user, recognition } = await start();
@@ -34,11 +33,10 @@ describe('SpeechInput', () => {
     act(() => recognition.result(['修复问题。', true], ['检查测试。', true]));
     act(() => recognition.result(['修复问题。', true], ['检查测试。', true]));
     await user.type(screen.getByLabelText('草稿'), '（补充）');
-    expect(screen.getByRole('button', { name: '插入文字' })).toHaveProperty('disabled', true);
+    expect(screen.queryByRole('button', { name: '插入文字' })).toBeNull();
     await user.click(screen.getByRole('button', { name: '停止录音' }));
     expect(recognition.stop).toHaveBeenCalledOnce();
     act(() => recognition.onend?.());
-    await user.click(screen.getByRole('button', { name: '插入文字' }));
     expect(screen.getByLabelText('草稿')).toHaveProperty('value', '原有草稿（补充）\n修复问题。检查测试。');
     expect(screen.queryByRole('button', { name: '插入文字' })).toBeNull();
   });
@@ -49,31 +47,29 @@ describe('SpeechInput', () => {
     act(() => recognition.result(['第一段。', true], ['未确认', false]));
     act(() => recognition.onerror?.({ error }));
     expect(screen.getByRole('alert').textContent).toBeTruthy();
-    expect(screen.getByLabelText('识别结果').textContent).toBe('第一段。');
+    expect(screen.getByLabelText('草稿')).toHaveProperty('value', '原有草稿\n第一段。');
     expect(recognition.abort).toHaveBeenCalledOnce();
-    await user.click(screen.getByRole('button', { name: '继续录音' }));
+    await user.click(screen.getByRole('button', { name: '语音输入' }));
     const next = SpeechRecognitionMock.instances.at(-1)!;
     act(() => { next.result(['第二段。', true]); next.onend?.(); });
-    await user.click(screen.getByRole('button', { name: '插入文字' }));
-    expect(screen.getByLabelText('草稿')).toHaveProperty('value', '原有草稿\n第一段。第二段。');
+    expect(screen.getByLabelText('草稿')).toHaveProperty('value', '原有草稿\n第一段。\n第二段。');
   });
 
   it('blocks over-limit insertion without truncating the transcript or existing draft', async () => {
     mockSpeechRecognition(); render(<Harness maxLength={6} />);
-    const { user, recognition } = await start();
+    const { recognition } = await start();
     act(() => { recognition.result(['完整文字', true]); recognition.onend?.(); });
     expect(screen.getByRole('alert').textContent).toContain('超过 6 字');
-    expect(screen.getByRole('button', { name: '插入文字' })).toHaveProperty('disabled', true);
-    await user.clear(screen.getByLabelText('草稿'));
-    await user.click(screen.getByRole('button', { name: '插入文字' }));
-    expect(screen.getByLabelText('草稿')).toHaveProperty('value', '完整文字');
+    expect(screen.queryByRole('button', { name: '插入文字' })).toBeNull();
+    expect(screen.getByLabelText('未填入的识别文字').textContent).toBe('完整文字');
+    expect(screen.getByLabelText('草稿')).toHaveProperty('value', '原有草稿');
   });
 
   it.each(['cancel', 'unmount', 'disabled', 'hidden', 'pagehide'])('aborts on %s and ignores late events', async reason => {
     mockSpeechRecognition(); const view = render(<Harness />);
     const { user, recognition } = await start();
     const lateResult = recognition.onresult!;
-    if (reason === 'cancel') await user.click(screen.getByRole('button', { name: '取消' }));
+    if (reason === 'cancel') await user.keyboard('{Escape}');
     else if (reason === 'unmount') view.unmount();
     else if (reason === 'disabled') view.rerender(<Harness disabled />);
     else if (reason === 'pagehide') fireEvent(window, new Event('pagehide'));
@@ -89,7 +85,7 @@ describe('SpeechInput', () => {
     vi.stubGlobal(reason === 'unsupported' ? 'SpeechRecognition' : 'isSecureContext', reason === 'unsupported' ? undefined : false);
     render(<Harness />);
     await userEvent.setup().click(screen.getByRole('button', { name: '语音输入' }));
-    expect(screen.getByRole('status').textContent).toContain(reason === 'unsupported' ? '不支持' : 'HTTPS');
+    expect(screen.getByRole('alert').textContent).toContain(reason === 'unsupported' ? '不支持' : 'HTTPS');
     expect(screen.queryByRole('button', { name: '开始录音' })).toBeNull();
     expect(SpeechRecognitionMock.instances).toHaveLength(0);
   });
@@ -121,13 +117,12 @@ describe('SpeechInput', () => {
     vi.stubGlobal('SpeechRecognition', PendingRecognition);
     render(<Harness />);
     fireEvent.click(screen.getByRole('button', { name: '语音输入' }));
-    fireEvent.click(screen.getByRole('button', { name: '开始录音' }));
     const recognition = SpeechRecognitionMock.instances.at(-1)!;
     act(() => vi.advanceTimersByTime(15_000));
     expect(recognition.abort).toHaveBeenCalledOnce();
     expect(screen.getByRole('alert').textContent).toContain('启动超时');
     expect(screen.getByLabelText('草稿')).toHaveProperty('value', '原有草稿');
-    expect(screen.getByRole('button', { name: '开始录音' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '语音输入' })).toBeTruthy();
   });
 
   it('can stop before microphone permission resolves without returning to listening', () => {
@@ -136,26 +131,24 @@ describe('SpeechInput', () => {
     vi.stubGlobal('SpeechRecognition', PendingRecognition);
     render(<Harness />);
     fireEvent.click(screen.getByRole('button', { name: '语音输入' }));
-    fireEvent.click(screen.getByRole('button', { name: '开始录音' }));
     const recognition = SpeechRecognitionMock.instances.at(-1)!;
     fireEvent.click(screen.getByRole('button', { name: '停止录音' }));
     act(() => recognition.onstart?.());
     expect(screen.getByRole('status').textContent).toBe('正在完成识别…');
     expect(screen.getByRole('button', { name: '停止录音' })).toHaveProperty('disabled', true);
     act(() => recognition.onend?.());
-    expect(screen.getByRole('button', { name: '开始录音' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: '语音输入' })).toBeTruthy();
   });
 
   it('releases a service that never finishes stopping', () => {
     vi.useFakeTimers(); mockSpeechRecognition(); render(<Harness />);
     fireEvent.click(screen.getByRole('button', { name: '语音输入' }));
-    fireEvent.click(screen.getByRole('button', { name: '开始录音' }));
     const recognition = SpeechRecognitionMock.instances.at(-1)!;
     act(() => recognition.result(['已确认', true], ['未确认', false]));
     fireEvent.click(screen.getByRole('button', { name: '停止录音' }));
     act(() => vi.advanceTimersByTime(5000));
     expect(recognition.abort).toHaveBeenCalledOnce();
     expect(screen.getByRole('alert').textContent).toContain('结束超时');
-    expect(screen.getByLabelText('识别结果').textContent).toBe('已确认');
+    expect(screen.getByLabelText('草稿')).toHaveProperty('value', '原有草稿\n已确认');
   });
 });

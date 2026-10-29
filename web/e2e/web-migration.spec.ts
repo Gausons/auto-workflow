@@ -1003,7 +1003,7 @@ test('semantic results work through task, defect and history search controls', a
   await expect(page.getByText('处理登录异常', { exact: true })).toBeVisible();
 });
 
-test('speech input previews and inserts without sending, fits mobile, and aborts on navigation', async ({ page }, testInfo) => {
+test('speech input matches the compact toolbar, fills on stop without sending, and aborts on navigation', async ({ page }, testInfo) => {
   await page.addInitScript(() => {
     class Recognition {
       lang = ''; continuous = false; interimResults = false;
@@ -1016,6 +1016,8 @@ test('speech input previews and inserts without sending, fits mobile, and aborts
     }
     Object.defineProperty(window, 'SpeechRecognition', { value: Recognition, configurable: true });
   });
+  await page.route('**/api/task-center/codex', route => route.fulfill({ json: { projects: [{ id: 'speech-project', deviceId: 'local', deviceName: '本机', name: 'Codex', cwd: '/repo', online: true, defaultModel: 'gpt-6-astra', models: [{ id: 'gpt-6-astra', name: 'GPT-6 Astra', defaultReasoningEffort: 'high', reasoningEfforts: [{ id: 'high', name: '高' }] }] }] } }));
+  await page.route('**/api/task-center/git', route => route.fulfill({ json: { repository: true, current: 'main', changes: 0, branches: ['main'] } }));
   await login(page);
   await page.getByRole('navigation', { name: '主导航' }).getByRole('link', { name: '新建任务' }).click();
   const input = page.getByRole('textbox', { name: '任务描述' });
@@ -1024,25 +1026,47 @@ test('speech input previews and inserts without sending, fits mobile, and aborts
   page.on('request', request => {
     if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/task-center') submits++;
   });
-  await page.getByRole('button', { name: '语音输入' }).click();
-  await page.getByRole('button', { name: '开始录音' }).click();
-  await expect(page.getByLabel('识别结果')).toHaveText('修复登录问题并补充测试。');
+  await page.getByRole('button', { name: '语音输入', exact: true }).click();
   await expect(input).toHaveValue('已有任务描述');
-  await expect(page.getByRole('button', { name: '插入文字' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '插入文字' })).toHaveCount(0);
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1000 });
-    await expect(page.getByRole('button', { name: '停止录音' })).toBeVisible();
+    const stop = page.getByRole('button', { name: '停止录音' });
+    await expect(stop).toBeVisible();
+    const model = await page.getByLabel('模型与思考强度').boundingBox();
+    const microphone = await stop.boundingBox();
+    const send = await page.getByRole('button', { name: '创建并发送任务' }).boundingBox();
+    expect(microphone!.width).toBe(88);
+    expect(model!.x + model!.width).toBeLessThanOrEqual(microphone!.x);
+    expect(microphone!.x + microphone!.width).toBeLessThanOrEqual(send!.x);
+    expect(microphone!.y + microphone!.height / 2).toBeCloseTo(send!.y + send!.height / 2, 0);
+    expect(await page.getByRole('button', { name: '创建并发送任务' }).evaluate(element => getComputedStyle(element).backgroundColor)).toBe('rgb(61, 127, 252)');
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
     await page.screenshot({ path: testInfo.outputPath(`speech-input-${width}.png`), fullPage: true });
   }
   await page.getByRole('button', { name: '停止录音' }).click();
-  await page.getByRole('button', { name: '插入文字' }).click();
   await expect(input).toHaveValue('已有任务描述\n修复登录问题并补充测试。');
   expect(submits).toBe(0);
-  await page.getByRole('button', { name: '语音输入' }).click();
-  await page.getByRole('button', { name: '开始录音' }).click();
+  await expect(page.getByRole('button', { name: '语音输入', exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath('speech-idle-390.png'), fullPage: true });
+  await page.getByRole('button', { name: '语音输入', exact: true }).click();
   await page.evaluate(() => { delete document.documentElement.dataset.speechAborted; });
   await page.getByRole('link', { name: '返回任务中心' }).click();
   await expect(page.getByRole('heading', { name: '任务中心', exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.dataset.speechAborted)).toBe('true');
+
+  const id = '9'.repeat(64);
+  const session = { id, sessionId: id, agent: 'codex', agentLabel: 'Codex', deviceId: 'local', title: '语音输入回归', cwd: '/repo', status: 'completed', canContinue: true, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-05T00:00:00Z', messageCount: 0 };
+  await page.route('**/api/agent-sessions?*', route => route.fulfill({ json: { offset: 0, limit: 30, total: 1, scope: 'all', providers: [], workspaces: [], sessions: [session] } }));
+  await page.route(`**/api/agent-sessions/${id}?*`, route => route.fulfill({ json: { session, messages: [], total: 0 } }));
+  let sends = 0;
+  await page.route(`**/api/agent-sessions/${id}/continue`, route => { if (route.request().method() === 'POST') sends++; return route.fulfill({ json: { execution: null, executions: [] } }); });
+  await page.goto(`/history/${id}`);
+  await page.getByRole('button', { name: '语音输入', exact: true }).click();
+  await expect(page.getByRole('button', { name: '停止录音' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+  await page.screenshot({ path: testInfo.outputPath('speech-history-390.png'), fullPage: true });
+  await page.getByRole('button', { name: '停止录音' }).click();
+  await expect(page.getByRole('textbox', { name: '发送消息' })).toHaveValue('修复登录问题并补充测试。');
+  expect(sends).toBe(0);
 });
