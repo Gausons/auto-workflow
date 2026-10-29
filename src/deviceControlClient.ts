@@ -103,6 +103,7 @@ function createWake(signal: AbortSignal, interval: number) {
 export async function runDeviceControl(options: {
   signal: AbortSignal; work: () => Promise<void>; controls: () => Promise<void>; heartbeat: () => Promise<void>;
   subscribe: (wake: () => void, signal: AbortSignal) => Promise<void>; onError: (error: unknown) => void;
+  git?: () => Promise<void>;
   pollMs?: number; heartbeatMs?: number; onControlsWake?: (wake: () => void) => void;
 }) {
   const stop = new AbortController(), signal = stop.signal;
@@ -110,6 +111,7 @@ export async function runDeviceControl(options: {
   options.signal.addEventListener('abort', abort, { once: true });
   if (options.signal.aborted) stop.abort();
   const work = createWake(signal, options.pollMs ?? 3000), controls = createWake(signal, options.pollMs ?? 3000);
+  const git = createWake(signal, options.pollMs ?? 3000);
   const heartbeat = createWake(signal, options.heartbeatMs ?? 30_000);
   options.onControlsWake?.(() => controls.wake());
   const loop = async (wake: ReturnType<typeof createWake>, action: () => Promise<void>) => {
@@ -119,7 +121,8 @@ export async function runDeviceControl(options: {
     }
   };
   const loops = [loop(work, options.work), loop(controls, options.controls), loop(heartbeat, options.heartbeat),
-    options.subscribe(() => { work.wake(); controls.wake(); }, signal)];
+    ...(options.git ? [loop(git, options.git)] : []),
+    options.subscribe(() => { work.wake(); controls.wake(); git.wake(); }, signal)];
   try { await Promise.all(loops); }
   catch (error) { options.onError(error); throw error; }
   finally { options.onControlsWake?.(() => {}); stop.abort(); options.signal.removeEventListener('abort', abort); await Promise.allSettled(loops); }

@@ -294,7 +294,7 @@ export async function runDeviceConnector({ environment = { ...process.env }, onc
   try {
     if (worker) {
       try { await heartbeat(); } catch (error) { if (!stopping.signal.aborted) reportError(error); }
-      loops.push(runDeviceControl({ signal: stopping.signal, work: () => worker.sync(), controls: () => worker.syncControls(), heartbeat,
+      loops.push(runDeviceControl({ signal: stopping.signal, work: () => worker.sync(false), git: () => worker.syncGit(), controls: () => worker.syncControls(), heartbeat,
         onControlsWake: wake => { wakeControls = wake; },
         onError: reportError,
         subscribe: (wake, signal) => watchDeviceUpdates({ url: new URL('/api/realtime', base), token, deviceId, signal, wake,

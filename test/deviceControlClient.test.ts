@@ -124,3 +124,22 @@ test('aborting the connector closes its live WebSocket', { timeout: 5000 }, asyn
   const running = connectDeviceUpdates({ url, token: 'test', deviceId: 'remote', signal: stop.signal, wake() { ready.resolve(); } });
   await ready.promise; stop.abort(); await running; await closed.promise;
 });
+
+test('Git notifications bypass blocked execution and controls and serialize repeated wakes', { timeout: 5000 }, async () => {
+  const stop = new AbortController(), releaseWork = deferred(), releaseGit = deferred(), entered = deferred(), repeated = deferred();
+  let wake = () => {}, calls = 0;
+  const running = runDeviceControl({ signal: stop.signal, pollMs: 60_000,
+    work: () => releaseWork.promise, controls: () => releaseWork.promise, async heartbeat() {},
+    async git() { if (++calls === 1) { entered.resolve(); await releaseGit.promise; } else repeated.resolve(); },
+    onError(error) { throw error; },
+    async subscribe(notify, signal) { wake = notify; await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true })); }
+  });
+  try {
+    await entered.promise;
+    for (let i = 0; i < 20; i++) wake();
+    assert.equal(calls, 1);
+    releaseGit.resolve(); await repeated.promise;
+    assert.equal(calls, 2);
+  } finally { releaseWork.resolve(); releaseGit.resolve(); stop.abort(); await running; }
+  const finished = calls; await delay(10); assert.equal(calls, finished);
+});

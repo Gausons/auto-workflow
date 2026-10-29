@@ -58,6 +58,26 @@ test('consecutive tools collapse together and user content remains literal', () 
   assert.doesNotMatch(html, /<details[^>]*\bopen(?:[\s=>]|$)/);
 });
 
+test('question replies preserve literal examples and malformed or incomplete payloads', () => {
+  const wrap = (body: string) => `<send_user_message_question_reply>${body}</send_user_message_question_reply>`;
+  const valid = wrap(JSON.stringify([{ question: '范围？', answer: '全部' }]));
+  const cases = [
+    `解释这个协议：${valid}`, `\`\`\`xml\n${valid}\n\`\`\``, `${valid}\n补充说明`,
+    wrap('not json'), wrap('{}'), wrap('[]'), wrap('[null]'),
+    wrap('[{"question":"范围？","answer":["全部"]}]'),
+    wrap('[{"question":"范围？","answer":"全部"},{}]'),
+    wrap('[{"answer":"全部"}]'), valid.replace('</send_user_message_question_reply>', '')
+  ];
+  for (const text of cases) {
+    const html = renderMessages([{ role: 'user', text }]);
+    assert.match(html, /&lt;send_user_message_question_reply&gt;/);
+    assert.doesNotMatch(html, /<strong>/);
+  }
+  const assistant = renderMessages([{ role: 'assistant', text: valid }]);
+  assert.match(assistant, /&lt;send_user_message_question_reply&gt;/);
+  assert.doesNotMatch(assistant, /<strong>/);
+});
+
 test('only explicit commentary joins collapsed work and final answers remain in the transcript', () => {
   const html = renderMessages([
     { role: 'user', text: '继续', turnId: 'turn-1' },

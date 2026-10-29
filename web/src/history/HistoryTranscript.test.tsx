@@ -18,6 +18,27 @@ function show(selected = session) {
 }
 afterEach(() => { cleanup(); sessionStorage.clear(); vi.unstubAllGlobals(); });
 
+it.each(['remote', 'local'])('shows desktop question replies as readable questions and answers in %s history', deviceId => {
+  const text = `<send_user_message_question_reply>\n${JSON.stringify([
+    { questionItemId: JSON.stringify(['request_user_input_async', 'call-123', 0]), question: '向量搜索希望覆盖哪些内容？', answer: '任务、缺陷和历史会话都支持' },
+    { questionItemId: 'second', question: '保留关键词匹配？', answer: '保留\n<script>只是文本</script> **原文**' }
+  ])}\n</send_user_message_question_reply>`;
+  const client = new QueryClient();
+  render(<QueryClientProvider client={client}><HistoryTranscript session={{ ...session, deviceId, recordMode: deviceId === 'local' ? undefined : 'synced', syncedImageCount: 0 }} messages={[
+    { role: 'user', text, timestamp: '2026-10-21T06:11:00Z', images: [{ dataUrl, alt: '回答附件' }] },
+    { role: 'assistant', text: '收到' }
+  ]} /></QueryClientProvider>);
+  expect(screen.getByText('向量搜索希望覆盖哪些内容？')).toBeTruthy();
+  expect(screen.getByText('任务、缺陷和历史会话都支持', { exact: false })).toBeTruthy();
+  expect(screen.getByText('保留关键词匹配？')).toBeTruthy();
+  expect(screen.getByText('保留 <script>只是文本</script> **原文**', { exact: false })).toBeTruthy();
+  expect(screen.getByAltText('回答附件').closest('.history-message.user')).toBeTruthy();
+  expect(document.querySelector('time')?.dateTime).toBe('2026-10-21T06:11:00.000Z');
+  expect(document.querySelector('script')).toBeNull();
+  expect(document.body.textContent).not.toMatch(/send_user_message_question_reply|questionItemId|request_user_input_async|call-123/);
+  expect(screen.getByText('收到')).toBeTruthy();
+});
+
 it('reads all metadata pages, restores external images in messages, and labels earlier image context without inventing a role', async () => {
   const fetcher = vi.fn().mockImplementation((url: string) => Promise.resolve(new Response(JSON.stringify(url.includes('offset=0')
     ? { images: [earlier], total: 2 } : url.includes('offset=1') ? { images: [inline], total: 2 }

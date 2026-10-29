@@ -88,6 +88,21 @@ export function renderImages(images: HistoryImage[] = []) {
     return valid ? `<figure><img src="${escape(image.dataUrl)}" alt="${escape(image.alt || '会话图片')}" loading="lazy" decoding="async"><figcaption>会话图片</figcaption></figure>` : `<p class="history-image-unavailable">${escape(image.alt || '图片无法预览')}</p>`;
   }).join('')}</div>`;
 }
+function renderUserText(text = ''): string {
+  // Only decode a complete desktop reply envelope, never examples embedded in
+  // prose or code. Keep unknown/truncated payloads available for inspection.
+  const reply = /^\s*<send_user_message_question_reply>([\s\S]*?)<\/send_user_message_question_reply>\s*$/.exec(text);
+  if (!reply) return escape(text);
+  let items: unknown;
+  try { items = JSON.parse(reply[1]); } catch { return escape(text); }
+  if (!Array.isArray(items) || !items.length) return escape(text);
+  const answers: string[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || typeof item.question !== 'string' || typeof item.answer !== 'string') return escape(text);
+    answers.push(`<strong>${escape(item.question)}</strong>\n${escape(item.answer)}`);
+  }
+  return answers.join('\n\n');
+}
 export function renderMessages(messages: HistoryMessage[], images = (message: HistoryMessage) => renderImages(message.images)) {
   let html = '', work: HistoryMessage[] = [];
   function flushWork() {
@@ -110,7 +125,7 @@ export function renderMessages(messages: HistoryMessage[], images = (message: Hi
       continue;
     }
     flushWork();
-    html += m.role === 'user' ? `<article class="history-message user"><span class="history-sr-only">用户</span><div class="history-message-body">${escape(m.text)}${images(m)}</div>${renderMessageTime(m.timestamp)}</article>` : `<article class="history-message assistant"><span class="history-sr-only">助手</span><div class="history-message-body history-markdown">${renderMarkdown(m.text)}${images(m)}</div>${renderMessageTime(m.timestamp)}</article>`;
+    html += m.role === 'user' ? `<article class="history-message user"><span class="history-sr-only">用户</span><div class="history-message-body">${renderUserText(m.text)}${images(m)}</div>${renderMessageTime(m.timestamp)}</article>` : `<article class="history-message assistant"><span class="history-sr-only">助手</span><div class="history-message-body history-markdown">${renderMarkdown(m.text)}${images(m)}</div>${renderMessageTime(m.timestamp)}</article>`;
   }
   flushWork();
   return html || '<p class="history-meta">此会话暂无可显示的对话。</p>';

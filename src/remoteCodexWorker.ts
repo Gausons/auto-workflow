@@ -193,8 +193,8 @@ export class RemoteCodexWorker {
   private loading: Promise<void> | null = null;
   private controlSync: Promise<void> | null = null;
   private syncing: Promise<void> | null = null;
-  sync(): Promise<void> {
-    if (!this.syncing) this.syncing = this.syncOnce().finally(() => { this.syncing = null; });
+  sync(includeGit = true): Promise<void> {
+    if (!this.syncing) this.syncing = this.syncOnce(includeGit).finally(() => { this.syncing = null; });
     return this.syncing;
   }
   private load(): Promise<void> {
@@ -252,12 +252,21 @@ export class RemoteCodexWorker {
     }
     await this.flush();
   }
-  private async syncOnce() {
+  private gitSync: Promise<void> | null = null;
+  syncGit(): Promise<void> {
+    if (!this.gitSync) this.gitSync = this.syncGitOnce().finally(() => { this.gitSync = null; });
+    return this.gitSync;
+  }
+  private async syncGitOnce() {
+    const snapshot = await this.request('GET') as TaskCenterData;
+    await syncRemoteGit({ request: this.request, deviceId: this.deviceId, directory: this.directory, projects: () => this.projects() }, snapshot);
+  }
+  private async syncOnce(includeGit: boolean) {
     await this.load();
     await this.flush();
     await this.syncControls();
     const snapshot = await this.request('GET') as TaskCenterData;
-    await syncRemoteGit({ request: this.request, deviceId: this.deviceId, directory: this.directory, projects: () => this.projects() }, snapshot);
+    if (includeGit) await syncRemoteGit({ request: this.request, deviceId: this.deviceId, directory: this.directory, projects: () => this.projects() }, snapshot);
     for (const job of snapshot.executions.filter(candidate => candidate.contextSourceDeviceId === this.deviceId && candidate.deviceId !== this.deviceId && candidate.status === 'queued' && candidate.remoteContext && !this.published.has(candidate.id))) {
       if (!job.conversationId) continue;
       try {
