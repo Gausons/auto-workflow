@@ -811,3 +811,98 @@ test('history search rechecks local visibility after embedding I/O', async t => 
   });
   assert.equal((await service.historyList(new URLSearchParams({ q: '接口' }))).total, 0);
 });
+
+async function unsentRemoteFixture(t: TestContext) {
+  const f = await fixture(t), owner = { id: 'connector-a' };
+  const center = createTaskCenter({ database: f.database, tenantId: 'default', history: f.history });
+  await center.command({ action: 'heartbeat', deviceId: 'A', name: 'A', agents: ['codex'],
+    codexProjects: [{ id: 'project-A', name: 'A', cwd: f.root, agent: 'codex' }],
+    sessions: [{ nativeId: 'source-native', agent: 'codex', title: '远端来源', cwd: f.root, status: 'completed', updatedAt: new Date().toISOString() }] }, owner);
+  const source = (await center.snapshot()).sessions.find(session => session.deviceId === 'A')!;
+  const launches: RunnerJob[] = [], directory = path.join(f.root, 'journal');
+  const workerOptions = {
+    deviceId: 'A', workspace: f.root, directory,
+    contextSource: { catalog: () => f.history.catalog(), delivery: f.delivery },
+    request: (method: string, body?: unknown, endpoint?: string) => {
+      if (endpoint?.includes('/inherited')) {
+        const url = new URL(endpoint, 'http://localhost');
+        return f.service.inherited(url.pathname.split('/')[3]!, url.searchParams);
+      }
+      if (endpoint?.includes('/transfer')) return f.service.transfer(String(endpoint.split('/')[3]), String((body as Record<string, unknown>).executionId), 'upload', owner, body as Record<string, unknown>);
+      return method === 'GET' ? center.snapshot() : f.execution.action(body as Parameters<typeof f.execution.action>[0], owner);
+    },
+    runnerFactory: (update: (job: RunnerJob) => void) => ({ projects: async () => [{ id: 'project-A', cwd: f.root, agent: 'codex' }],
+      start: async (job: RunnerJob) => { launches.push(job); update({ ...job, status: 'completed', sessionId: `result-${launches.length}` }); },
+      respond: async () => {}, stop: async () => {}, reconcile: async () => {}, close() {} })
+  };
+  const worker = new RemoteCodexWorker(workerOptions);
+  t.after(() => worker.close());
+  return { ...f, owner, center, sourceRemote: source, worker, workerOptions, launches, directory };
+}
+
+test('unsent remote conversation chains freeze the original only on first execution', async t => {
+  const f = await unsentRemoteFixture(t);
+  const first = await f.service.create(f.sourceRemote.id, { requestId: randomUUID(), targetAgent: 'codex' });
+  const middle = await f.service.create(first.sessionId, { requestId: randomUUID(), targetAgent: 'codex' });
+  const last = await f.service.create(middle.sessionId, { requestId: randomUUID(), targetAgent: 'codex', message: '继续' });
+  await f.worker.sync();
+  assert.equal(f.launches.length, 1);
+  assert.match(await linkedContext(f.launches[0]!.contextMarkdownPath!), /保持原接口兼容/);
+  assert.equal(f.database.readTaskCenter('default').executions.find(job => job.conversationId === last.sessionId)?.status, 'completed');
+  await f.worker.sync();
+  assert.equal(f.launches.length, 1);
+});
+
+test('unsent cross-device chains retain the actual source and wait for full transfer', async t => {
+  const f = await unsentRemoteFixture(t);
+  const first = await f.service.create(f.sourceRemote.id, { requestId: randomUUID(), targetAgent: 'codex', deviceId: 'local', cwd: f.root });
+  const last = await f.service.create(first.sessionId, { requestId: randomUUID(), targetAgent: 'codex', deviceId: 'local', message: '继续' });
+  await f.service.preparePending();
+  assert.equal(f.launched.length, 0);
+  assert.equal(f.service.detail(last.sessionId).session.contextSourceDeviceId, 'A');
+  await f.worker.sync();
+  await f.service.preparePending();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.launched.length, 1);
+  assert.match(await linkedContext(f.launched[0]!.contextMarkdownPath!), /保持原接口兼容/);
+});
+
+test('oversized remote evidence preserves the journal, reports completion and permits later jobs after restart', async t => {
+  const f = await unsentRemoteFixture(t);
+  const created = await f.service.create(f.sourceRemote.id, { requestId: randomUUID(), targetAgent: 'codex', message: '继续' });
+  const job = f.database.readTaskCenter('default').executions.find(item => item.conversationId === created.sessionId)!;
+  await f.execution.action({ action: 'claim', executionId: job.id }, f.owner);
+  const contextEvents = [{ text: 'x'.repeat(4 * 1024 * 1024) }];
+  f.worker.update({ ...job, status: 'completed', sessionId: 'existing-native', protocol: 'acp', contextEvents });
+  await f.worker.sync();
+  const saved = f.database.readTaskCenter('default').executions.find(item => item.id === job.id)!;
+  assert.equal(saved.status, 'completed');
+  assert.match(saved.message || '', /记录未完整同步/);
+  assert.deepEqual(JSON.parse(await readFile(path.join(f.directory, `${job.id}.json`), 'utf8')).contextEvents, contextEvents);
+  await assert.rejects(f.service.create(created.sessionId, { requestId: randomUUID(), targetAgent: 'codex' }), /记录未完整同步/);
+  await assert.rejects(f.execution.action({ action: 'report', executionId: job.id, report: { status: 'completed', contextEvidenceError: 'invalid' } }, { id: 'other' }), { statusCode: 403 });
+  await assert.rejects(f.execution.action({ action: 'report', executionId: job.id, report: { status: 'completed', contextEvidenceError: '' } }, f.owner), { statusCode: 400 });
+  const restarted = new RemoteCodexWorker(f.workerOptions);
+  t.after(() => restarted.close());
+  const next = await f.service.send(created.sessionId, { requestId: randomUUID(), message: '另一条消息' });
+  await restarted.sync();
+  assert.equal(f.launches.length, 1);
+  assert.equal(f.database.readTaskCenter('default').executions.find(item => item.id === next.executionId)?.status, 'completed');
+});
+
+test('oversized remote output reports unknown status without losing the local evidence or retrying Agent commands', async t => {
+  const f = await unsentRemoteFixture(t);
+  const created = await f.service.create(f.sourceRemote.id, { requestId: randomUUID(), targetAgent: 'codex', message: '继续' });
+  const job = f.database.readTaskCenter('default').executions.find(item => item.conversationId === created.sessionId)!;
+  await f.execution.action({ action: 'claim', executionId: job.id }, f.owner);
+  const output = '长回复'.repeat(800000);
+  f.worker.update({ ...job, status: 'unknown', sessionId: 'uncertain-native', output });
+  await f.worker.sync();
+  const saved = f.database.readTaskCenter('default').executions.find(item => item.id === job.id)!;
+  assert.equal(saved.status, 'unknown');
+  assert.match(saved.contextEvidenceError || '', /记录未完整同步/);
+  assert.equal(JSON.parse(await readFile(path.join(f.directory, `${job.id}.json`), 'utf8')).output, output);
+  await f.worker.sync();
+  assert.equal(f.launches.length, 0);
+  await assert.rejects(f.service.send(created.sessionId, { requestId: randomUUID(), message: '不要重复执行' }), { statusCode: 409 });
+});

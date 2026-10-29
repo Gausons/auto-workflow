@@ -25,6 +25,8 @@ interface RemoteJob {
   prompt?: string; contextMarkdownPath?: string; promptImages?: PromptImageReference[]; contextSourcePartial?: boolean;
   contextCoverage?: ContextCoverage;
   contextBrief?: PreparedContextBrief;
+  contextEvents?: unknown[];
+  contextEvidenceError?: string;
 }
 type Request = (method: string, body?: unknown, endpoint?: string) => unknown;
 interface RemoteRunner {
@@ -185,7 +187,19 @@ export class RemoteCodexWorker {
   private async flushOnce() {
     await this.queue; if (this.storageError) throw this.storageError;
     for (const [id, report] of this.pending) {
-      await this.request('POST', { action: 'report', executionId: id, report, controlAck: report.controlAck, controlError: report.controlError }, '/api/task-center/execution-action');
+      // The full report remains in the durable journal. Evidence overflow must
+      // neither block terminal status nor silently become a complete handoff.
+      let wire = report;
+      if (report.conversationId && (JSON.stringify(report.contextEvents || []).length > 4 * 1024 * 1024 ||
+          (report.output?.length || 0) > 2 * 1024 * 1024 || Buffer.byteLength(JSON.stringify(report)) > 7 * 1024 * 1024)) {
+        const warning = '执行记录超过同步限制，完整记录保留在来源设备连接器日志中；记录未完整同步，暂不能带上下文新开会话。';
+        wire = { ...report, contextEvents: [], output: '[执行正文未完整同步，请在来源设备核对完整记录]', contextEvidenceError: warning,
+          message: `${report.message || ''}；${warning}`.slice(-2000) };
+        // Images are already represented by the prepared handoff and coverage.
+        delete wire.promptImages;
+        delete wire.prompt;
+      }
+      await this.request('POST', { action: 'report', executionId: id, report: wire, controlAck: report.controlAck, controlError: report.controlError }, '/api/task-center/execution-action');
       if (this.pending.get(id) === report) this.pending.delete(id);
     }
   }

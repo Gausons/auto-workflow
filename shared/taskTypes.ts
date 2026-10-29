@@ -226,6 +226,7 @@ export interface Execution {
   control?: ExecutionControl | null;
   controlError?: string | null;
   contextEvents?: unknown[];
+  contextEvidenceError?: string;
   attachments?: Array<{ path: string; name?: string }>;
   desktopMessage?: string;
   desktopOpened?: boolean;

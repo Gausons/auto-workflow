@@ -627,6 +627,10 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
             if (saved.sessionId && report.sessionId !== undefined && saved.sessionId !== report.sessionId) throw httpError(409, '不能替换已绑定的 ACP 会话');
             if (['completed', 'failed', 'interrupted'].includes(saved.status) && reportStatus !== saved.status) throw httpError(409, '执行已经结束');
             const patch: Partial<ExecutionRecord> & Record<string, unknown> = {};
+            if (report.contextEvidenceError !== undefined) {
+              if (!saved.conversationId || typeof report.contextEvidenceError !== 'string' || !report.contextEvidenceError.trim() || report.contextEvidenceError.length > 2000) throw httpError(400, '执行记录同步错误无效');
+              patch.contextEvidenceError = report.contextEvidenceError;
+            }
             for (const key of ['threadId', 'sessionId', 'turnId', 'message', 'output', 'desktopMessage', 'protocol', 'agent', 'agentLabel']) if (report[key] !== undefined) {
               if (report[key] !== null && (typeof report[key] !== 'string' || report[key].length > (key === 'output' ? (saved.conversationId ? 2 * 1024 * 1024 : 24000) : 2000))) throw httpError(400, '回报字段无效');
               patch[key] = report[key];

@@ -96,7 +96,9 @@ export function createConversations({ database, tenantId, history, delivery, exe
         return { sourceNativeId: source.nativeId, sourceAgent: source.agent, sourceDeviceId: source.deviceId,
           sourceCwd: source.cwd, sourceSessionId: source.id, sourceFreezeId, contextDigest: '' };
       }
-      sourceFreezeId = source.id;
+      // An unsent conversation has never captured a source on the connector.
+      // Keep the current capture boundary until an ancestor actually executed.
+      if (data.executions.some(job => job.conversationId === source.id)) sourceFreezeId = source.id;
       id = source.sourceSessionId || '';
     }
     throw httpError(409, '远端原始会话来源不可核对，无法生成完整交接文件');
@@ -133,6 +135,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
       if (!prior) throw httpError(409, '继承上下文不可用');
       const entries: ContextEntry[] = [...prior.entries];
       for (const job of jobsFor(data, id)) {
+        if (job.contextEvidenceError) throw httpError(409, job.contextEvidenceError);
         entries.push({ role: 'user', text: JSON.stringify([{ type: 'text', text: String(clean({ text: job.userMessage })?.text || '') }]), source: id, timestamp: job.createdAt, turnId: job.id });
         for (const event of job.contextEvents || []) {
           const value = clean(event);
@@ -385,7 +388,9 @@ export function createConversations({ database, tenantId, history, delivery, exe
       if (!project) throw httpError(projectId ? 400 : 422, projectId ? '请选择可用执行目标' : `来源设备上没有可用的 ${targetAgent}，请配置该 Agent 后重试`);
       const deviceId = project.deviceId || 'local';
       const sourceDeviceId = originDeviceId;
-      const contextSourceDeviceId = origin.session.source === 'conversation' && (origin.session.contextTransferred || origin.session.contextSourceDeviceId === 'local') ? 'local' : sourceDeviceId;
+      const contextSourceDeviceId = origin.session.source === 'conversation'
+        ? origin.session.contextTransferred ? 'local' : origin.session.contextSourceDeviceId || sourceDeviceId
+        : sourceDeviceId;
       if (deviceId !== sourceDeviceId && !requestedCwd) throw httpError(400, '跨设备交接请明确选择目标设备的工作目录');
       const selectedModel = (project.models || []).find(item => item.id === (model || project.defaultModel));
       if (model && !selectedModel) throw httpError(400, '所选模型不属于目标 Agent');
