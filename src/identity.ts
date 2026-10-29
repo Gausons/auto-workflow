@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import type { Connection } from './storage/connection.js';
 import { ROLES, httpError, permissionsFor } from './rbac.js';
+import { createWorkspaceStore } from './teamWorkspaces.js';
 
 type Role = keyof typeof ROLES;
 interface PublicUser {
@@ -18,7 +19,7 @@ interface PublicUser {
 interface StoredUser extends PublicUser { password_hash: string }
 interface Actor { id: string; username?: string }
 interface UserInput { username?: unknown; displayName?: unknown; role?: unknown; password?: unknown }
-interface UserUpdate { role?: unknown; enabled?: unknown; displayName?: unknown }
+interface UserUpdate { expectedUpdatedAt?: unknown; role?: unknown; enabled?: unknown; displayName?: unknown }
 interface CreateUserOptions { actor?: Actor | null; bootstrap?: boolean; authorizeBootstrap?: () => void }
 interface Principal { tenant: { id: string; name?: string }; user: PublicUser; expiresAt?: number }
 interface PasswordChange { currentPassword?: unknown; password?: unknown }
@@ -94,6 +95,7 @@ export function createIdentityStore(db: Connection, transaction: Transaction) {
     }
   }
   async function createUser(tenantId: string, input: UserInput, { actor, bootstrap = false, authorizeBootstrap = () => {} }: CreateUserOptions = {}): Promise<PublicUser> {
+    if (db.prepare('SELECT 1 FROM team_workspaces WHERE tenant_id = ?').get(tenantId)) throw httpError(400, '团队空间请通过邀请添加成员');
     const { username, displayName } = personalInput(input);
     const requestedRole = bootstrap ? 'owner' : input.role ?? 'viewer';
     validateRole(requestedRole);
@@ -118,6 +120,7 @@ export function createIdentityStore(db: Connection, transaction: Transaction) {
   }
   function updateUser(tenantId: string, id: string, input: UserUpdate, actor: Actor): PublicUser {
     return transaction(() => {
+      db.prepare('SELECT id FROM tenants WHERE id = ? FOR UPDATE').get(tenantId);
       const current = liveActor(tenantId, actor), target = getUser(tenantId, id);
       if (!target) throw httpError(404, '成员不存在');
       const requestedRole = input.role ?? target.role;
@@ -128,12 +131,13 @@ export function createIdentityStore(db: Connection, transaction: Transaction) {
       const name = input.displayName === undefined ? target.displayName : String(input.displayName).trim();
       if (!name || name.length > 80) throw httpError(400, '显示名称需为 1–80 个字符');
       guardTarget(current, target, role);
+      if (db.prepare('SELECT 1 FROM workspace_memberships WHERE member_id = ?').get(id) && input.expectedUpdatedAt !== target.updatedAt) throw httpError(409, '成员状态已变化，请刷新后重试');
       if (target.role === 'owner' && target.enabled && (role !== 'owner' || !enabled)) {
         const count = (db.prepare("SELECT count(*) AS count FROM organization_users WHERE tenant_id = ? AND role = 'owner' AND enabled = 1").get(tenantId) as unknown as { count: number }).count;
         if (count <= 1) throw httpError(409, '组织必须保留至少一位启用的所有者');
       }
       db.prepare('UPDATE organization_users SET role = ?, enabled = ?, display_name = ?, updated_at = ? WHERE tenant_id = ? AND id = ?')
-        .run(role, enabled, name, new Date().toISOString(), tenantId, id);
+        .run(role, enabled, name, new Date(Math.max(Date.now(), Date.parse(target.updatedAt) + 1)).toISOString(), tenantId, id);
       if (!enabled) revokeUserSessions(tenantId, id);
       audit(tenantId, current, 'member.updated', id, { previousRole: target.role, role, enabled: Boolean(enabled) });
       const updated = getUser(tenantId, id);
@@ -141,12 +145,13 @@ export function createIdentityStore(db: Connection, transaction: Transaction) {
       return updated;
     });
   }
-  const revokeUserSessions = (tenantId: string, id: string) => db.prepare('DELETE FROM user_sessions WHERE tenant_id = ? AND user_id = ?').run(tenantId, id);
+  const revokeUserSessions = (tenantId: string, id: string) => db.prepare('DELETE FROM user_sessions WHERE (tenant_id = ? AND user_id = ?) OR user_id IN (SELECT member_id FROM workspace_memberships WHERE account_id = ?)').run(tenantId, id, id);
 
   async function resetPassword(tenantId: string, id: string, password: unknown, actor: Actor) {
     const current = liveActor(tenantId, actor), target = getUser(tenantId, id);
     if (!target) throw httpError(404, '成员不存在');
     guardTarget(current, target, target.role);
+    if (db.prepare('SELECT 1 FROM workspace_memberships WHERE member_id = ?').get(id)) throw httpError(400, '团队成员使用自己的个人账号密码');
     const passwordHash = await hashPassword(password);
     transaction(() => {
       const currentActor = liveActor(tenantId, actor), currentTarget = getUser(tenantId, id);
@@ -189,7 +194,7 @@ export function createIdentityStore(db: Connection, transaction: Transaction) {
   async function loginPersonal(username: unknown, password: unknown) {
     const normalized = typeof username === 'string' ? username.trim().toLowerCase() : '';
     const rows = typeof username === 'string' && username.length <= 254
-      ? db.prepare('SELECT *, tenant_id AS tenantId FROM organization_users WHERE username = ? ORDER BY tenant_id').all(normalized) as unknown as StoredUser[]
+      ? db.prepare('SELECT *, tenant_id AS tenantId FROM organization_users u WHERE username = ? AND NOT EXISTS (SELECT 1 FROM workspace_memberships m WHERE m.member_id = u.id) ORDER BY tenant_id').all(normalized) as unknown as StoredUser[]
       : [];
     const row = rows.find(candidate => candidate.tenantId === 'default') || (rows.length === 1 ? rows[0] : undefined);
     const valid = await verifyPassword(password, row?.password_hash);
@@ -231,11 +236,13 @@ export function createIdentityStore(db: Connection, transaction: Transaction) {
     if (!row) return null;
     const user = getUser(row.tenant_id, row.user_id);
     if (!user?.enabled) return null;
+    const membership = db.prepare('SELECT a.enabled FROM workspace_memberships m JOIN organization_users a ON a.id = m.account_id WHERE m.member_id = ?').get(user.id);
+    if (membership && !membership.enabled) return null;
     const tenant = db.prepare('SELECT id, name FROM tenants WHERE id = ?').get(row.tenant_id) as unknown as { id: string; name: string } | undefined;
     if (!tenant) return null;
     const scope = db.prepare('SELECT 1 FROM device_connector_sessions WHERE token_hash = ?').get(digest(token)) ? 'connector' : 'browser';
     if (scope === 'connector' && !permissionsFor(user.role).includes('work.execute')) return null;
-    return { tenant, user, expiresAt: row.expires_at, scope };
+    return { tenant, user: { ...user, isWorkspaceMember: Boolean(membership) }, expiresAt: row.expires_at, scope };
   }
   function issueDeviceDeployment(token: unknown) {
     return transaction(() => {
@@ -265,6 +272,7 @@ export function createIdentityStore(db: Connection, transaction: Transaction) {
     });
   }
   async function changePassword(principal: Principal, input: PasswordChange) {
+    if (db.prepare('SELECT 1 FROM workspace_memberships WHERE member_id = ?').get(principal.user.id)) throw httpError(400, '请切换到个人空间修改账号密码');
     const row = db.prepare('SELECT password_hash FROM organization_users WHERE tenant_id = ? AND id = ?').get(principal.tenant.id, principal.user.id) as unknown as { password_hash: string } | undefined;
     if (!row) throw httpError(400, '当前密码不正确');
     const hasPassword = row.password_hash.startsWith('scrypt$');
@@ -279,6 +287,7 @@ export function createIdentityStore(db: Connection, transaction: Transaction) {
     });
   }
   return {
+    ...createWorkspaceStore(db, { transaction, getUser, issueSession, audit, authenticateSession }),
     hasUsers, createUser, getUser, listUsers, updateUser, resetPassword, registerPersonal, login, loginPersonal, loginWithGoogle, authenticateSession, changePassword, audit, issueDeviceDeployment, exchangeDeviceDeployment,
     logout: (token: string) => db.prepare('DELETE FROM user_sessions WHERE token_hash = ?').run(digest(token)),
     listAudit: (tenantId: string) => (db.prepare('SELECT id, actor_name AS actorName, action, target, detail, created_at AS createdAt FROM audit_events WHERE tenant_id = ? ORDER BY id DESC LIMIT 200').all(tenantId) as unknown as Array<{ id: number; actorName: string; action: string; target: string; detail: string; createdAt: string }>).map(row => ({ ...row, detail: JSON.parse(row.detail) as unknown }))

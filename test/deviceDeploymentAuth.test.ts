@@ -128,7 +128,7 @@ test('version 8 upgrades existing sessions without exposing old logins as connec
   const raw = rawDatabase(key);
   raw.prepare('DROP TABLE device_deployment_tokens').run();
   raw.prepare('DROP TABLE device_connector_sessions').run();
-  raw.prepare('DELETE FROM schema_migrations WHERE version = 8').run();
+  raw.prepare('DELETE FROM schema_migrations WHERE version >= 8').run();
   raw.close();
   db = openDatabase(key);
   assert.equal(db.authenticateSession(browser.token)?.scope, 'browser');

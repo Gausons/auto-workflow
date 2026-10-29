@@ -1,0 +1,112 @@
+.page { color: #292b28; min-height: 100dvh; background: #fff; }
+.page button, .switcher button { cursor: pointer; font: inherit; }
+.page button:disabled, .switcher button:disabled { cursor: default; opacity: .55; }
+.page :is(input, select, button, a):focus-visible, .switcher :is(summary, button, a):focus-visible { outline: 2px solid #437c64; outline-offset: 3px; }
+.topbar { min-height: 76px; padding: 18px 40px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #eeeeeb; gap: 16px; font-size: 13px; color: #72766e; }
+.topbar > span > span { color: #c5c7c2; margin: 0 12px; }
+.body { max-width: 1210px; padding: 52px 48px 24px; margin: auto; }
+.hero { display: flex; justify-content: space-between; gap: 30px; align-items: center; margin-bottom: 42px; }
+.eyebrow { color: #7a8277; font-size: 10px; font-weight: 600; letter-spacing: 2px; }
+.hero h1 { margin: 14px 0 12px; font-size: clamp(27px, 3vw, 38px); letter-spacing: -1.2px; line-height: 1.3; font-weight: 550; overflow-wrap: anywhere; }
+.hero p, .formCard p, .sectionHeading p { margin: 0; color: #7b8076; font-size: 13px; line-height: 1.8; }
+.heroMark { color: #52705a; background: #eef2e9; border-radius: 24px; width: 86px; height: 86px; display: grid; place-items: center; font-size: 52px; flex-shrink: 0; transform: rotate(-8deg); }
+.primary, .secondary { border-radius: 8px; padding: 9px 15px; text-decoration: none; font-size: 12px; white-space: nowrap; display: inline-flex; justify-content: center; align-items: center; border: 1px solid transparent; }
+.primary { color: #fff; background: #30382f; }
+.primary:hover { background: #46513e; }
+.secondary { color: #454b42; background: #fff; border-color: #e0e3dc; }
+.secondary:hover { background: #f5f6f2; }
+.formCard { border: 1px solid #dce2d6; background: #f8faf5; padding: 24px; border-radius: 12px; display: grid; gap: 16px; margin-bottom: 24px; }
+.page h2 { margin: 0 0 5px; font-size: 16px; font-weight: 600; }
+.page h3 { font-size: 14px; font-weight: 550; }
+.formCard label, .inviteForm label { display: grid; gap: 8px; font-size: 12px; }
+.page input, .page select { background: #fff; border: 1px solid #dedfd9; padding: 10px 12px; border-radius: 8px; color: #343930; font: inherit; min-width: 0; }
+.actions { display: flex; gap: 8px; }
+.error, .notice { padding: 12px 16px; border-radius: 8px; font-size: 13px; }
+.error { background: #fff3f1; color: #973b31; }
+.notice { background: #eef5eb; color: #46603c; }
+.sectionHeading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; gap: 12px; }
+.sectionHeading > span { font-size: 12px; color: #8c9087; }
+.spaceGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.spaceCard { padding: 24px; border: 1px solid #e3e5df; border-radius: 12px; background: #fff; display: grid; gap: 18px; text-align: left; min-width: 0; }
+.spaceCard:hover { border-color: #94a48a; background: #fafbf8; }
+.spaceCard strong { font-size: 17px; overflow-wrap: anywhere; }
+.spaceCard > span:last-child { display: flex; justify-content: space-between; color: #838a7d; font-size: 12px; }
+.cardIcon { display: grid; place-items: center; width: 42px; height: 42px; background: #eef2e8; border-radius: 11px; color: #65775a; font-size: 24px; }
+.welcome { grid-column: 1/-1; border: 1px dashed #d9dfd2; background: #fafbf8; border-radius: 14px; padding: 50px 24px; text-align: center; }
+.welcome .cardIcon { margin: 0 auto 20px; }
+.welcome h3 { font-size: 19px; }
+.welcome p { color: #818779; font-size: 13px; line-height: 2; }
+.incoming { background: #f4f6ee; border: 1px solid #e0e7d5; border-radius: 12px; padding: 22px; margin-bottom: 28px; }
+.incoming > div, .pendingInvites > div { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 16px; }
+.incoming small, .pendingInvites small { display: block; color: #808776; font-size: 12px; margin-top: 5px; }
+.tabs { display: flex; border-bottom: 1px solid #e8eae4; gap: 28px; }
+.tabs button { border: 0; background: none; padding: 12px 0 16px; font-size: 13px; color: #858b7d; border-bottom: 2px solid transparent; }
+.tabs button[aria-pressed='true'] { color: #333d2c; border-bottom-color: #414d36; }
+.tabs span { font-size: 10px; background: #f0f2ed; padding: 2px 6px; border-radius: 4px; margin-left: 6px; }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 30px 0 40px; border: 1px solid #e7e9e1; border-radius: 12px; padding: 22px 0; }
+.stats > div { display: grid; gap: 8px; padding: 0 26px; border-right: 1px solid #e7e9e1; }
+.stats > div:last-child { border: 0; }
+.stats span { color: #858a7e; font-size: 12px; }
+.stats strong { font-size: 28px; font-weight: 500; line-height: 1.3; }
+.columns { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 36px; }
+.search { width: 100%; margin-bottom: 12px; font-size: 12px !important; }
+.taskRow { display: flex; gap: 12px; align-items: center; padding: 18px 4px; width: 100%; text-align: left; border: 0; border-bottom: 1px solid #eeefe9; background: none; }
+.taskRow:hover { background: #f9faf7; }
+.taskRow > span:nth-child(2) { flex: 1; min-width: 0; }
+.taskRow strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; font-size: 13px; }
+.taskRow small { display: block; font-size: 10px; color: #969c8e; margin-top: 7px; }
+.taskDot { width: 7px; height: 7px; background: #bec4b6; border-radius: 50%; flex: 0 0 7px; }
+.taskDot[data-status='running'] { background: #6f9760; box-shadow: 0 0 0 3px #f0f5eb; }
+.taskDot[data-status='error'] { background: #bd7669; }
+.badge { font-size: 10px; color: #78816f; padding: 4px 7px; border: 1px solid #e6e9df; border-radius: 5px; white-space: nowrap; }
+.empty { padding: 45px 20px; text-align: center; background: #fafbf8; border-radius: 10px; }
+.empty p { font-size: 12px; color: #838a79; line-height: 1.8; }
+.textLink { display: inline-block; margin-top: 20px; color: #65775a; font-size: 12px; text-decoration: none; }
+.activity { border-left: 1px solid #eeefe8; padding-left: 28px; }
+.activity > button { width: 100%; display: grid; text-align: left; gap: 6px; border: 0; background: none; padding: 14px 0; }
+.activity > button small { color: #999f90; font-size: 10px; }
+.activity > button strong { font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+.activity > button span { color: #8b9281; font-size: 11px; }
+.activity > p { color: #939a88; font-size: 12px; line-height: 1.9; }
+.sharingNote { background: #f4f6ef; padding: 22px 18px; border-radius: 10px; margin-top: 28px; }
+.sharingNote > span { display: block; font-size: 28px; color: #7b8e66; margin-bottom: 15px; }
+.sharingNote strong { font-size: 12px; font-weight: 500; }
+.sharingNote p { color: #8b947e; font-size: 11px; line-height: 1.9; }
+.sharingNote a { font-size: 11px; color: #5e724d; text-decoration: none; }
+.membersSection { padding-top: 30px; }
+.inviteForm { display: grid; grid-template-columns: minmax(0, 1fr) 150px auto; align-items: end; gap: 12px; padding: 22px; border-radius: 10px; background: #f7f8f4; margin-bottom: 25px; }
+.inviteForm p { grid-column: 1/-1; margin: 0; font-size: 11px; color: #8b9380; }
+.memberRow { display: flex; align-items: center; gap: 15px; padding: 18px 0; border-bottom: 1px solid #e9ece3; }
+.memberAvatar { display: grid; place-items: center; border-radius: 50%; width: 34px; height: 34px; flex: 0 0 34px; background: #e9eee1; color: #647355; font-size: 12px; }
+.memberIdentity { flex: 1; min-width: 0; }
+.memberIdentity strong, .memberIdentity small { display: block; overflow-wrap: anywhere; }
+.memberIdentity strong { font-size: 13px; font-weight: 500; }
+.memberIdentity small { font-size: 11px; color: #8b9281; margin-top: 4px; }
+.memberRow select { width: 110px; font-size: 11px; }
+.pendingInvites { margin-top: 30px; }
+.roleHelp { color: #939b87; font-size: 11px; margin-top: 25px; line-height: 1.8; }
+.footer { border-top: 1px solid #eeefe9; padding-top: 22px; margin-top: 65px; display: flex; justify-content: space-between; gap: 16px; color: #a1a795; font-size: 10px; }
+.loading { padding: 50px; color: #7f8775; }
+.switcher { position: relative; margin: -6px 0; z-index: 10; }
+.switcher summary { display: flex; gap: 10px; padding: 10px 12px; align-items: center; cursor: pointer; border: 1px solid #e3e6de; border-radius: 9px; background: #fff; list-style: none; }
+.switcher summary::-webkit-details-marker { display: none; }
+.switcher summary > span:nth-child(2) { min-width: 0; flex: 1; }
+.switcher summary strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 550; }
+.switcher summary small { display: block; font-size: 10px; color: #9a9f91; margin-top: 3px; }
+.spaceIcon { background: #edf0e7; color: #67775a; border-radius: 7px; width: 28px; height: 28px; display: grid; place-items: center; flex: 0 0 28px; }
+.switcherMenu { position: absolute; top: calc(100% + 6px); left: 0; width: max(100%, 240px); max-width: calc(100vw - 30px); max-height: 60vh; overflow: auto; padding: 12px; background: white; border: 1px solid #e2e5db; box-shadow: 0 10px 30px #242d1814; border-radius: 10px; }
+.switcherMenu > .eyebrow { display: block; padding: 4px 8px 10px; }
+.switcherMenu button, .switcherMenu a { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 0; background: none; width: 100%; border-radius: 6px; padding: 10px 8px; font-size: 12px; text-decoration: none; color: #4f5a43; text-align: left; overflow-wrap: anywhere; }
+.switcherMenu button:hover, .switcherMenu a:hover { background: #f4f6ef; }
+.switcherMenu a { border-top: 1px solid #eef0e8; margin-top: 7px; border-radius: 0; }
+.switcher > p { font-size: 11px; color: #973b31; }
+@media (max-width: 1100px) { .body { padding: 36px 28px 24px; } .columns { grid-template-columns: minmax(0, 1fr) 200px; gap: 24px; } .activity { padding-left: 20px; } .spaceGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 680px) { .topbar { padding: 16px 20px; font-size: 11px; } .body { padding: 30px 20px 22px; } .hero { margin-bottom: 28px; gap: 12px; } .heroMark { width: 52px; height: 52px; font-size: 32px; border-radius: 16px; } .hero p { font-size: 12px; } .stats { padding: 18px 0; margin: 24px 0; } .stats > div { padding: 0 12px; } .stats span { font-size: 10px; } .stats strong { font-size: 22px; } .columns { grid-template-columns: 1fr; } .activity { border-left: 0; border-top: 1px solid #eeefe8; padding: 24px 0 0; } .spaceGrid { grid-template-columns: 1fr; } .inviteForm { grid-template-columns: minmax(0, 1fr) 110px; padding: 16px; } .inviteForm > button { grid-column: 1/-1; } .memberRow { flex-wrap: wrap; gap: 10px; } .memberIdentity { min-width: 130px; } .footer { margin-top: 40px; flex-wrap: wrap; } .incoming > div { align-items: start; } }
+
+@media (max-width: 860px) {
+  .switcher { position: absolute; left: 10px; top: 10px; width: 42px; margin: 0; }
+  .switcher summary { padding: 6px; height: 42px; }
+  .switcher summary > span:not(:first-child) { display: none; }
+  .switcherMenu { width: 260px; }
+  .switcher > p { position: absolute; top: 44px; background: #fff; padding: 10px; width: 240px; border: 1px solid #e3e6de; }
+}

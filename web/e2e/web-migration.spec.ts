@@ -504,6 +504,8 @@ test('history conversation scroll stays inside the viewport with a docked compos
   const composer = page.getByRole('region', { name: '会话输入框' });
   const transcript = page.locator('.history-chat-scroll');
   await expect(composer).toBeVisible();
+  // The region first renders its read-only placeholder while permissions load.
+  await expect(composer.getByRole('textbox', { name: '发送消息' })).toBeVisible();
   for (const viewport of [{ width: 1440, height: 812 }, { width: 1000, height: 700 }, { width: 800, height: 900 }]) {
     await page.setViewportSize(viewport);
     const before = await composer.boundingBox();
@@ -1001,6 +1003,8 @@ test('semantic results work through task, defect and history search controls', a
   await page.getByRole('button', { name: '刷新会话', exact: true }).click();
   await expect(page.getByText('共 1 个会话，关键词优先，包含语义相关结果')).toBeVisible();
   await expect(page.getByText('处理登录异常', { exact: true })).toBeVisible();
+  // Finish intercepted bootstrap reads before the context disposes their responses.
+  await page.unrouteAll({ behavior: 'wait' });
 });
 
 test('speech input matches the compact toolbar, fills on stop without sending, and aborts on navigation', async ({ page }, testInfo) => {

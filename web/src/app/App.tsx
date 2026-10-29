@@ -1,3 +1,5 @@
+import { WorkspacePage } from '../workspaces/WorkspacePage.js';
+import { WorkspaceSwitcher } from '../workspaces/WorkspaceSwitcher.js';
 import { CompletionNotifications } from '../tasks/CompletionNotifications.js';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
@@ -26,7 +28,7 @@ const titles: Record<string, [string, string]> = {
 function pathForHash(hash: string) {
   const value = hash.replace(/^#/, '');
   if (value === 'new-task') return '/tasks/new';
-  if (['tasks', 'inbox', 'devices', 'workbench', 'history'].includes(value)) return `/${value}`;
+  if (['tasks', 'inbox', 'devices', 'workbench', 'history', 'space'].includes(value)) return `/${value}`;
   if (/^history\/[a-f0-9]{64}$/.test(value)) return `/${value}`;
   if (value === 'settings') return '/settings/assignment';
   if (/^settings\/(assignment|config|account)$/.test(value)) return `/${value}`;
@@ -53,13 +55,14 @@ function SettingsPage() {
   return <section className="page settings-page"><PageHeading title="设置" description="管理分配策略、外部服务与个人账号" /><div className="settings-layout"><nav className="settings-nav" aria-label="设置导航">{items.map(([id, icon, title, subtitle]) => <Link key={id} to={`/settings/${id}`} className={current === id ? 'active' : ''} aria-current={current === id ? 'page' : undefined}><span aria-hidden="true">{icon}</span><span><strong>{title}</strong><small>{subtitle}</small></span></Link>)}</nav><div className="settings-content"><div className="settings-panel">{current === 'assignment' ? <AssignmentPanel /> : current === 'config' ? <ConfigPanel /> : <AccountPanel />}</div></div></div></section>;
 }
 
-function NavIcon({ name }: { name: 'new' | 'tasks' | 'bugs' | 'history' | 'devices' | 'settings' }) {
+function NavIcon({ name }: { name: 'new' | 'tasks' | 'bugs' | 'history' | 'devices' | 'settings' | 'space' }) {
   const paths = {
     new: 'M12 5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7M16 3l5 5M10 14l2-5 6-6 3 3-6 6-5 2',
     tasks: 'M8 5h12M8 12h12M8 19h12M3 5h.01M3 12h.01M3 19h.01',
     bugs: 'M12 3l9 9-9 9-9-9 9-9M12 8v5M12 16h.01',
     history: 'M3 11a9 9 0 1 1 2 7M3 4v7h7M12 7v5l3 2',
     devices: 'M3 4h18v12H3zM8 21h8M12 16v5',
+    space: 'M3 4h7l2 3h9v13H3zM8 12h8M8 16h5',
     settings: 'M4 7h16M4 17h16M8 4v6M16 14v6'
   };
   return <svg className={`nav-icon ${styles.navIcon}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={paths[name]} /></svg>;
@@ -113,7 +116,7 @@ function Shell() {
     if (notice.sessionId) navigate(`/history/${encodeURIComponent(notice.sessionId)}`);
     else if (notice.taskId) window.dispatchEvent(new CustomEvent('bugflow:open-task', { detail: { taskId: notice.taskId } }));
   }} />}<aside className={`sidebar ${styles.sidebar}`}><div className={`brand ${styles.brand}`}><svg className={`brand-mark ${styles.brandMark}`} viewBox="0 0 36 36" aria-hidden="true"><rect x="4" y="5" width="28" height="26" rx="6" /><path d="M11 14h18M11 21h10M24 20l4 4-4 4" /></svg><div><strong>AgentFlow</strong><span>多设备 Agent 工作台</span></div></div>
-    <nav className={`nav-list ${styles.navigation}`} aria-label="主导航"><Link className={`nav-create-task ${view === 'new-task' ? 'active' : ''}`} aria-current={view === 'new-task' ? 'page' : undefined} to="/tasks/new"><NavIcon name="new" /><span>新建任务</span></Link><Link className={['tasks', 'inbox'].includes(view) ? 'active' : ''} aria-current={['tasks', 'inbox'].includes(view) ? 'page' : undefined} to="/tasks"><NavIcon name="tasks" /><span>任务中心</span></Link><Link className={view === 'workbench' ? 'active' : ''} aria-current={view === 'workbench' ? 'page' : undefined} to="/workbench"><NavIcon name="bugs" /><span>缺陷工作台</span></Link><Link className={view === 'history' ? 'active' : ''} aria-current={view === 'history' ? 'page' : undefined} to="/history"><NavIcon name="history" /><span>Agent 历史会话</span></Link><Link className={view === 'devices' ? 'active' : ''} aria-current={view === 'devices' ? 'page' : undefined} to="/devices"><NavIcon name="devices" /><span>设备与 Agent</span></Link></nav>
+    <WorkspaceSwitcher /><nav className={`nav-list ${styles.navigation}`} aria-label="主导航"><Link className={view === 'space' ? 'active' : ''} aria-current={view === 'space' ? 'page' : undefined} to="/space"><NavIcon name="space" /><span>协作空间</span></Link><Link className={`nav-create-task ${view === 'new-task' ? 'active' : ''}`} aria-current={view === 'new-task' ? 'page' : undefined} to="/tasks/new"><NavIcon name="new" /><span>新建任务</span></Link><Link className={['tasks', 'inbox'].includes(view) ? 'active' : ''} aria-current={['tasks', 'inbox'].includes(view) ? 'page' : undefined} to="/tasks"><NavIcon name="tasks" /><span>任务中心</span></Link><Link className={view === 'workbench' ? 'active' : ''} aria-current={view === 'workbench' ? 'page' : undefined} to="/workbench"><NavIcon name="bugs" /><span>缺陷工作台</span></Link><Link className={view === 'history' ? 'active' : ''} aria-current={view === 'history' ? 'page' : undefined} to="/history"><NavIcon name="history" /><span>Agent 历史会话</span></Link><Link className={view === 'devices' ? 'active' : ''} aria-current={view === 'devices' ? 'page' : undefined} to="/devices"><NavIcon name="devices" /><span>设备与 Agent</span></Link></nav>
     <Link className={`settings-link ${styles.settings} ${view === 'settings' ? 'active' : ''}`} aria-current={view === 'settings' ? 'page' : undefined} to="/settings/assignment"><NavIcon name="settings" /><span>设置</span></Link><div className={`sidebar-note ${styles.note}`}><span className={`status-dot ${bootstrap.config?.issueSourceConfigured ? 'online' : ''}`} /><span>{bootstrap.config?.issueSourceConfigured ? '数据源已配置' : '数据源未配置'}</span></div><div className={`tenant-panel ${styles.account}`}><span className={styles.avatar} aria-hidden="true">{(bootstrap.user?.displayName || bootstrap.user?.username || 'B').slice(0, 1).toUpperCase()}</span><div className={styles.identity}><strong>{bootstrap.user?.displayName || bootstrap.user?.username}</strong><span>{bootstrap.user?.username}</span></div><button className={styles.logout} type="button" onClick={() => void logout()}>退出登录</button></div></aside>
     <main className={`main ${styles.main}`}>{view === 'workbench' ? <><PageHeading title={title[0]} description={title[1]}><div className={styles.workbenchActions} id="workbenchActions" /></PageHeading><div className={styles.content}><Outlet /></div></> : <Outlet />}</main></div>;
 }
@@ -128,6 +131,7 @@ function AppRoot() {
 function createRouter() {
   return createBrowserRouter([{ path: '/', element: <Shell />, errorElement: <div role="alert">页面加载失败，请刷新后重试。</div>, children: [
     { index: true, element: <Navigate to="/tasks" replace /> },
+    { path: 'space', element: <WorkspacePage /> },
     { path: 'tasks', element: <section className="page task-center" aria-label="任务中心"><TaskPage /></section> },
     { path: 'tasks/new', element: <section className="page task-center"><NewTaskPage /></section> },
     { path: 'inbox', element: <section className="page task-center"><TaskAuxPage /></section> },

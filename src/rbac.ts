@@ -23,6 +23,12 @@ export function permissionForRealtimeChannel(channel: unknown): string | null {
 }
 
 export function permissionForRoute(method: string | undefined, pathname: string): string | null {
+  if (pathname === '/api/workspaces' && ['GET', 'POST'].includes(method || '')) return 'read';
+  if (pathname === '/api/workspaces/switch' && method === 'POST') return 'read';
+  if (pathname === '/api/workspaces/members' && method === 'GET') return 'read';
+  if (pathname === '/api/workspaces/invitations' && method === 'POST') return 'members.manage';
+  if (/^\/api\/workspaces\/invitations\/[a-zA-Z0-9-]+\/accept$/.test(pathname) && method === 'POST') return 'read';
+  if (/^\/api\/workspaces\/invitations\/[a-zA-Z0-9-]+$/.test(pathname) && method === 'DELETE') return 'members.manage';
   if (pathname === '/api/auth/device-deployment' && method === 'POST') return 'work.execute';
   if (/^\/api\/sessions\/[a-f0-9]{64}\/continue-as-new$/.test(pathname) && method === 'POST') return 'work.execute';
   if ((pathname === '/api/conversations' || /^\/api\/conversations\/[a-f0-9]{64}\/(?:inherited|context-preview)$/.test(pathname)) && method === 'GET') return 'read';

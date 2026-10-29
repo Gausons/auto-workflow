@@ -48,7 +48,7 @@ test('PostgreSQL initializes new schemas, upgrades version 1, preserves data and
   assert.equal(upgraded.getTenant('default')?.id, 'default');
   upgraded.close();
   const check = rawDatabase(key);
-  assert.equal(Number(check.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()?.version), 8);
+  assert.equal(Number(check.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()?.version), 9);
   assert.equal(check.prepare("SELECT to_regclass(current_schema() || '.import_receipts') AS table_name").get()?.table_name, null);
   assert.equal(Number(check.prepare('SELECT count(*) AS count FROM remote_session_history').get()?.count), 0);
   assert.equal(Number(check.prepare('SELECT count(*) AS count FROM remote_session_images').get()?.count), 0);

@@ -2,7 +2,7 @@ import { useMutation } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { apiRequest, clearSessionToken } from '../api/client.js';
 
-interface CurrentUser { username: string; displayName: string; hasPassword?: number; hasGoogle?: number }
+interface CurrentUser { username: string; displayName: string; hasPassword?: number; hasGoogle?: number; isWorkspaceMember?: boolean }
 interface AccountPanelProps { reload?: () => void }
 
 const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -30,6 +30,8 @@ export function AccountPanel({ reload = () => location.reload() }: AccountPanelP
     event.preventDefault();
     password.mutate(Object.fromEntries(new FormData(event.currentTarget)));
   };
+
+  if (user?.isWorkspaceMember) return <div className="config-band"><h2>我的账号</h2><p>{user.username} · {user.displayName}</p><p>你正在团队空间中。请通过侧栏切换到个人空间，管理登录方式与密码。</p></div>;
 
   return <div className="config-band">
     <h2>我的账号</h2>

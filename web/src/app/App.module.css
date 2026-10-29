@@ -28,7 +28,7 @@
 }
 @media (max-width: 860px) {
   .shell { display: block; }
-  .sidebar { position: relative; height: 62px; padding: 10px 84px 10px 10px; }
+  .sidebar { position: relative; height: 62px; padding: 10px 84px 10px 62px; }
   .brand, .note, .account { display: none; }
   .navigation { display: flex; gap: 4px; overflow-x: auto; }
   .navigation a { flex: 0 0 auto; }

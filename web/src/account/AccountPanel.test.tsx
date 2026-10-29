@@ -36,6 +36,13 @@ describe('AccountPanel', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('directs team members to their personal account for password changes', async () => {
+    renderAccount();
+    window.dispatchEvent(new CustomEvent('bugflow:bootstrap', { detail: { user: { username: 'member', displayName: '团队成员', isWorkspaceMember: true, hasPassword: 0 } } }));
+    expect(await screen.findByText(/请通过侧栏切换到个人空间/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /密码/ })).toBeNull();
+  });
+
   it('lets a Google-only account add a password for device login', async () => {
     renderAccount();
     window.dispatchEvent(new CustomEvent('bugflow:bootstrap', { detail: { user: { username: 'person@example.com', displayName: '个人用户', hasPassword: 0, hasGoogle: 1 } } }));

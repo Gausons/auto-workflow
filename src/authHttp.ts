@@ -181,6 +181,37 @@ export function createAuthHandler(database: Database, { environment = {}, fetchI
       sendJson(res, 201, { tenant, message: '组织所有者已创建，请使用用户名和密码登录' });
       return true;
     }
+    if (endpoint.startsWith('/api/workspaces')) {
+      if (!principal) throw httpError(401, '请先登录');
+      if (principal.scope === 'connector') throw httpError(403, '设备会话不能管理协作空间');
+      requirePermission(principal, 'read');
+      const workspacePrincipal = { ...principal, token };
+      if (endpoint === '/api/workspaces' && req.method === 'GET') {
+        sendJson(res, 200, database.workspaces(workspacePrincipal)); return true;
+      }
+      if (endpoint === '/api/workspaces' && req.method === 'POST') {
+        sendJson(res, 201, database.createWorkspace(workspacePrincipal, await readAuthJson(req))); return true;
+      }
+      if (endpoint === '/api/workspaces/switch' && req.method === 'POST') {
+        sendJson(res, 200, sessionResponse(database.switchWorkspace(workspacePrincipal, await readAuthJson(req)))); return true;
+      }
+      if (endpoint === '/api/workspaces/members' && req.method === 'GET') {
+        sendJson(res, 200, database.workspaceMembers(workspacePrincipal)); return true;
+      }
+      if (endpoint === '/api/workspaces/invitations' && req.method === 'POST') {
+        requirePermission(principal, 'members.manage');
+        sendJson(res, 201, database.inviteWorkspaceMember(workspacePrincipal, await readAuthJson(req))); return true;
+      }
+      const invitation = endpoint.match(/^\/api\/workspaces\/invitations\/([a-zA-Z0-9-]+)(\/accept)?$/);
+      if (invitation && req.method === 'POST' && invitation[2]) {
+        sendJson(res, 200, database.acceptWorkspaceInvitation(workspacePrincipal, invitation[1])); return true;
+      }
+      if (invitation && req.method === 'DELETE' && !invitation[2]) {
+        requirePermission(principal, 'members.manage');
+        sendJson(res, 200, database.cancelWorkspaceInvitation(workspacePrincipal, invitation[1])); return true;
+      }
+      return false;
+    }
     if (!principal) return false;
     if (endpoint === '/api/auth/session' && req.method === 'GET') {
       sendJson(res, 200, publicIdentity(principal)); return true;
