@@ -182,7 +182,7 @@ GOOGLE_CLIENT_SECRET=your-client-secret
 GOOGLE_REDIRECT_URI=https://workbench.example.com/api/auth/google/callback
 ```
 
-本机默认可使用 `http://localhost:4173/api/auth/google/callback`。公网部署应使用 HTTPS。服务端只请求 `openid email profile`，Google 客户端密钥和访问令牌不会发送到浏览器。通过 Google 单点登录注册的账号可以在“设置 → 我的账号”中补充密码，供设备连接器登录。
+本机默认可使用 `http://localhost:4173/api/auth/google/callback`。公网部署应使用 HTTPS。服务端只请求 `openid email profile`，Google 客户端密钥和访问令牌不会发送到浏览器。通过 Google 单点登录注册的账号可直接通过设备页面的临时令牌接入连接器，也可在“设置 → 我的账号”中补充密码。
 
 ### Jira
 
@@ -252,20 +252,30 @@ IDE_HISTORY_SCOPE=all
 
 ### 从网页连接开发机并远程控制
 
-在浏览器点击左侧主导航“设备与 Agent”（`/devices`），点击“连接设备”展开“连接本机 Agent”向导填写服务地址并复制三项登录配置。开发机只需 Node.js 22.16+、Git 和已安装登录的 Agent，无需下载本项目源码。
+在浏览器点击“设备与 Agent → 连接设备 → 生成并复制部署命令”，在开发机终端粘贴运行。命令通过 Node.js 自带的 `npx` 获取最新连接器，自动兑换服务端签发的临时令牌并接入当前账号；无需输入密码、全局安装、下载源码或创建配置文件，Google 登录账号也适用。支持 macOS、Linux 和 Windows PowerShell，需要 Node.js 22.16+ 及已安装登录的 Agent（Git 分支管理还需要 Git）。
 
-连接器独立包发布到 npm 后，可以安装并运行：
+临时令牌最长有效 10 分钟、仅可兑换一次，绑定签发时的登录会话、账号和租户；重新生成会使该浏览器登录会话此前的命令失效。服务端只存摘要，兑换与消费在同一个数据库事务内完成。退出浏览器登录、登录会话过期或账号失去执行权限后，未兑换令牌失效。命令包含一次性接入凭据，请勿分享；不包含浏览器登录令牌或密码。跨设备使用时，先通过开发机可访问的工作台 HTTPS 地址打开网页再生成命令；HTTP 仅允许 localhost 回环调试。
+
+兑换后签发独立的 24 小时设备会话，只能访问连接器所需接口及设备控制实时通道，不能修改密码、配置或管理成员，也不能继续签发部署令牌。设备会话只保留在连接器进程内存中，不写入文件；退出浏览器不会终止已兑换的设备会话，账号停用、密码重置或撤销执行权限会使设备授权失效。退出连接器、会话过期或兑换结果未知时，需手动重新生成命令；连接器不自动重试兑换，也不切换为密码登录。
+
+页面每 3 秒更新设备状态，显示临时令牌剩余有效时间；复制失败可单独重试复制，过期后隐藏命令。复制成功不代表已部署。保持终端运行，Ctrl+C 退出；再次启动前先退出旧连接器。默认启用远程执行及历史摘要同步，默认工作目录是用户主目录。
+
+维护者须先发布支持令牌版 `--connect` 的新版连接器，再部署包含迁移 `008_device_deployment_tokens.sql` 的工作台（服务端与网页一起更新，命令使用 registry 的 `latest`）。未发布时，可将页面命令中的 `npx --yes agent-workbench-connector@latest` 替换为本地打包安装的新版命令。`--connect` 不读取默认 `~/.bugflow/agent.env`，不接受 `--env-file` 或 `--once`，会覆盖环境中的旧登录凭据，保留其他高级设置。
+
+新增接口：`POST /api/auth/device-deployment` 要求登录及 `work.execute` 权限，请求体为空对象，返回 `deploymentToken`、`expiresAt`；`POST /api/auth/device-deployment/exchange` 仅接受 `{ deploymentToken }`，返回受限设备会话。两者返回 `Cache-Control: no-store`，签发/兑换均限流并记录不含令牌的审计事件。账号和租户只能由服务端绑定，请求中不接受覆盖。
+
+高级用户仍可手动创建 `agent.env` 并配置 `WORKBENCH_URL`、`WORKBENCH_USERNAME`、`WORKBENCH_PASSWORD` 及其他环境变量，再运行：
 
 ```bash
-npm install -g agent-workbench-connector
+pnpm add -g agent-workbench-connector
 agent-workbench-connector --env-file ./agent.env
 ```
 
-先将向导生成的配置保存到 `agent.env` 并填写账号密码；macOS/Linux 使用 `chmod 600 agent.env`，Windows 使用文件权限限制当前用户可读。尚未发布到 registry 时，可安装维护者提供的 `agent-workbench-connector-0.3.0.tgz`：`npm install -g ./agent-workbench-connector-0.3.0.tgz`，同样无需源码。安装包不包含 Agent 可执行程序，Codex / Claude 仍需自行安装并登录。
+含凭据的配置文件应限制为当前用户可读；macOS/Linux 可使用 `chmod 600 agent.env`。安装包不包含 Agent 可执行程序，Codex / Claude 仍需自行安装并登录。
 
 `agent-workbench-connector` 默认读取 `~/.bugflow/agent.env`（存在时），支持 `--env-file`、`--help`、`--version` 和仅同步模式的 `--once`。已有环境变量优先，不自动读取当前目录的 `.env`。默认设备状态位于 `~/.workflow-data/devices/<连接标识>/`，从不同目录启动不会改变设备身份。迁移已有连接器时，先正常停止旧进程，再将 `WORKBENCH_DEVICE_DIR` 指向旧状态目录的绝对路径以保留身份和执行日志；不要同时运行两个处理同一设备的进程。升级包不会删除设备状态。
 
-维护者运行 `pnpm agent:pack` 生成 `dist/device-agent/agent-workbench-connector-0.3.0.tgz`；CI 也保存独立安装包供下载。构建只复用已有 Vite 和 ACP SDK，不发布整个工作台，不包含 `.env`、数据库和本地会话。npm 发布由 `agent-vX.Y.Z` 标签触发，完整 CI 通过后发布同一次构建的安装包，普通构建不会发布。配置见下文“连接器 npm 发布”，包说明见 [device-agent](packages/device-agent/README.md)。仓库开发仍统一使用 pnpm，上面的 npm 命令用于开发机安装发行包。
+维护者运行 `pnpm agent:pack` 生成 `dist/device-agent/agent-workbench-connector-0.3.0.tgz`；CI 也保存独立安装包供下载。构建只复用已有 Vite 和 ACP SDK，不发布整个工作台，不包含 `.env`、数据库和本地会话。npm 发布由 `agent-vX.Y.Z` 标签触发，完整 CI 通过后发布同一次构建的安装包，普通构建不会发布。配置见下文“连接器 npm 发布”，包说明见 [device-agent](packages/device-agent/README.md)。仓库开发仍统一使用 pnpm，页面的 npx 命令用于开发机运行发行包。
 
 ### 从源码启动连接器（开发调试）
 

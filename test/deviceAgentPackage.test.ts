@@ -57,9 +57,17 @@ test('packed device agent installs and runs outside the repository without TypeS
     const help = (await exec(command, ['--help'], { cwd, env: baseEnv })).stdout;
     assert.match(help, /用法：agent-workbench-connector \[--env-file/);
     assert.match(help, /Agent Workbench 开发机连接器/);
+    assert.match(help, /--connect/);
     assert.equal((await exec(command, ['--version'], { cwd, env: baseEnv })).stdout.trim(), manifest.version);
     await assert.rejects(exec(command, ['--bogus'], { cwd, env: baseEnv }));
     await assert.rejects(exec(command, ['--env-file', path.join(directory, 'missing.env')], { cwd, env: baseEnv }), /无法读取连接配置|not found/);
+    const deployment = Buffer.from(JSON.stringify({ url: 'https://work.example.com', deploymentToken: 'd'.repeat(43), expiresAt: 1 })).toString('base64url');
+    await assert.rejects(exec(command, ['--connect', deployment], { cwd, env: baseEnv }), /临时令牌已过期/);
+    await assert.rejects(exec(command, ['--connect', deployment, '--once'], { cwd, env: baseEnv }), /不能与/);
+    // Node can read --env-file before the application parser, so supply a real empty fixture.
+    const emptyConfig = path.join(directory, 'empty.env');
+    await writeFile(emptyConfig, '');
+    await assert.rejects(exec(command, ['--connect', deployment, '--env-file', emptyConfig], { cwd, env: baseEnv }), /不能与/);
   });
   const stateDir = path.join(directory, 'device-state');
   const historyDir = path.join(directory, 'empty-history'); await mkdir(historyDir);

@@ -6,23 +6,22 @@
 
 ## 安装与启动
 
-发布到 npm 后安装：
+推荐在工作台“设备与 Agent → 连接设备”点击“生成并复制部署命令”，在开发机终端粘贴运行。命令使用 Node.js 自带的 `npx` 获取最新连接器，兑换服务端的临时令牌后直接启动，无需密码、配置文件或全局安装。支持 macOS、Linux 和 Windows PowerShell，Google 登录账号也适用。
+
+`--connect <页面生成的参数>` 携带工作台地址、一次性临时令牌和有效期，不包含浏览器会话或账号密码。令牌最长 10 分钟有效，重新生成后旧命令失效。命令包含接入凭据，请勿分享；跨设备使用 HTTPS，回环地址可用 HTTP。兑换成功后使用独立的 24 小时受限设备会话，仅保存在进程内存中，不写入文件。退出浏览器不影响已接入设备；账号停用、重置密码或撤销执行权限会使设备会话失效。退出连接器或授权失效后需在网页重新生成命令。
+
+兑换不会跟随重定向、自动重试或回退到密码登录。网络失败会提示结果未知并停止，不启动替代连接。该模式不读取默认配置文件，不使用环境中的旧账号密码或令牌，不能与 `--env-file` / `--once` 混用；其他高级环境变量仍保留。先停止已有连接器再启动，保持终端运行。
+
+维护者需先发布支持令牌版 `--connect` 的连接器，再部署带临时令牌接口、数据库迁移 008 及新版网页的工作台。未发布时，安装维护者提供的 tgz，使用 `agent-workbench-connector` 替换页面命令的 `npx --yes agent-workbench-connector@latest` 前缀。
+
+高级用户仍可使用配置文件：
 
 ```bash
-npm install -g agent-workbench-connector
-```
-
-尚未发布到 registry 时，可直接安装维护者提供的安装包：
-
-```bash
-npm install -g ./agent-workbench-connector-0.3.0.tgz
-```
-
-在工作台“设备与 Agent → 连接本机 Agent”复制登录配置，保存到任意目录的 `agent.env`，填写密码。在 macOS/Linux 上运行 `chmod 600 agent.env`，Windows 上将文件权限限制为当前用户可读，然后启动：
-
-```bash
+pnpm add -g agent-workbench-connector
 agent-workbench-connector --env-file ./agent.env
 ```
+
+手动创建 `agent.env`，填写 `WORKBENCH_URL`、`WORKBENCH_USERNAME` 和 `WORKBENCH_PASSWORD`。macOS/Linux 使用 `chmod 600 agent.env`，Windows 将文件权限限制为当前用户可读。
 
 也可以把配置保存为 `~/.bugflow/agent.env`，然后直接运行 `agent-workbench-connector`。已有环境变量优先于文件；不自动加载当前目录的 `.env`。令牌登录仍支持 `WORKBENCH_TOKEN`。不要把密码或令牌放入命令行参数。
 

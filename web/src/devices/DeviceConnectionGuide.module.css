@@ -1,5 +1,12 @@
-.guide { display: grid; gap: 12px; min-width: 0; }
-.guide label { display: grid; gap: 6px; }
-.guide input:not([type='checkbox']) { width: 100%; min-width: 0; box-sizing: border-box; }
-.guide ol { padding-left: 24px; line-height: 1.8; }
-.config { width: 100%; box-sizing: border-box; font-family: monospace; font-size: 12px; white-space: pre; overflow: auto; }
+.guide { display: grid; gap: 16px; min-width: 0; }
+.heading { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.badge { padding: 3px 9px; border-radius: 6px; background: #e9f0e2; color: #54723f; font-size: 12px; }
+.steps { display: flex; flex-wrap: wrap; gap: 8px 24px; color: #69765a; font-size: 13px; }
+.command { width: 100%; min-width: 0; box-sizing: border-box; padding: 14px; border: 1px solid #dce2d6; border-radius: 10px; font-family: monospace; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; resize: vertical; background: #fff; color: #30362d; }
+.status { color: #54723f; }
+.details { border-top: 1px solid #e3e7df; padding-top: 12px; font-size: 13px; }
+.details summary { cursor: pointer; color: #69765a; }
+.details label { display: grid; gap: 6px; margin-top: 14px; }
+.details input { width: 100%; min-width: 0; box-sizing: border-box; }
+.details p { padding: 10px 0; }
+.details a { color: #54723f; }

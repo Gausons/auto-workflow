@@ -1,0 +1,136 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { WebSocket } from 'ws';
+import { createApp, openDatabase, rawDatabase, hashToken } from '../scripts/testing/database.js';
+import { realtimeProtocol } from '../shared/realtime.js';
+import { DEVICE_DEPLOYMENT_DURATION_MS } from '../src/identity.js';
+
+interface Result { token?: string; deploymentToken?: string; expiresAt?: number; permissions?: string[]; tenant?: { id: string }; user?: { id: string }; error?: string }
+
+test('temporary device authorization binds the signed-in user and rejects unauthorized, duplicate and privileged requests', async t => {
+  const rootDir = await mkdtemp(path.join(tmpdir(), 'workflow-deployment-'));
+  const app = createApp({ rootDir, environment: { ACP_ENABLED: 'false', CODEX_EXECUTABLE: path.join(rootDir, 'missing-codex') } });
+  t.after(async () => { await app.close(); await rm(rootDir, { recursive: true, force: true }); });
+  app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
+  const address = app.server.address(); assert.ok(address && typeof address !== 'string');
+  const base = `http://127.0.0.1:${address.port}`;
+  const db = openDatabase(app.databaseKey); t.after(() => db.close());
+  const browser = db.loginWithGoogle({ subject: 'deployment-google', email: 'google@example.com', displayName: 'Google' });
+  const owner = db.authenticateSession(browser.token)!;
+  assert.equal(owner.user.hasPassword, 0);
+  const other = db.loginWithGoogle({ subject: 'other-google', email: 'other@example.com', displayName: 'Other' });
+  await db.createUser(owner.tenant.id, { username: 'viewer', password: 'synthetic-test-password', role: 'viewer' }, { actor: owner.user });
+  const viewer = await db.login(owner.tenant.id, 'viewer', 'synthetic-test-password');
+  async function request(endpoint: string, token?: string, body?: unknown, method = 'POST', tenant?: string) {
+    const response = await fetch(base + endpoint, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(tenant ? { 'X-Tenant-Id': tenant } : {}) }, ...(method !== 'GET' ? { body: JSON.stringify(body ?? {}) } : {}) });
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    return { status: response.status, data: await response.json() as Result };
+  }
+  const issue = '/api/auth/device-deployment', exchange = issue + '/exchange';
+  assert.equal((await request(issue)).status, 401);
+  assert.equal((await request(issue, viewer.token)).status, 403);
+  assert.equal((await request(issue, browser.token, { tenantId: 'other' })).status, 400);
+  assert.equal((await request(issue, browser.token, {}, 'POST', db.authenticateSession(other.token)!.tenant.id)).status, 403);
+  const first = await request(issue, browser.token);
+  assert.equal(first.status, 201); assert.ok(first.data.deploymentToken);
+  assert.ok(first.data.expiresAt! <= Date.now() + DEVICE_DEPLOYMENT_DURATION_MS);
+  assert.equal((await request('/api/task-center', first.data.deploymentToken, undefined, 'GET')).status, 401);
+  const fresh = await request(issue, browser.token); assert.ok(fresh.data.deploymentToken);
+  assert.equal((await request(exchange, undefined, { deploymentToken: first.data.deploymentToken })).status, 401);
+  assert.equal((await request(exchange, undefined, { deploymentToken: fresh.data.deploymentToken, tenantId: 'other' })).status, 400);
+  const simultaneous = await Promise.all([1, 2].map(() => request(exchange, undefined, { deploymentToken: fresh.data.deploymentToken })));
+  assert.deepEqual(simultaneous.map(result => result.status).sort(), [200, 401]);
+  const connector = simultaneous.find(result => result.status === 200)!.data;
+  assert.ok(connector.token); assert.notEqual(connector.token, browser.token);
+  assert.equal(connector.tenant?.id, owner.tenant.id);
+  assert.equal(connector.user?.id, owner.user.id);
+  assert.deepEqual(connector.permissions, ['read', 'work.execute']);
+  assert.equal((await request('/api/auth/session', connector.token, undefined, 'GET')).status, 200);
+  for (const [endpoint, method] of [[issue, 'POST'], ['/api/auth/password', 'PUT'], ['/api/organization/members', 'GET'], ['/api/config', 'PUT'], ['/api/bootstrap', 'GET'], ['/api/task-center/execute', 'POST']]) {
+    assert.equal((await request(endpoint, connector.token, {}, method)).status, 403, endpoint);
+  }
+  assert.equal((await request('/api/task-center', connector.token, { action: 'heartbeat', deviceId: 'temporary-device', name: '临时令牌设备', agents: [], sessions: [] })).status, 200);
+  assert.equal((await request('/api/task-center', connector.token, undefined, 'GET', db.authenticateSession(other.token)!.tenant.id)).status, 403);
+  assert.equal((await request('/api/task-center/device-state?deviceId=temporary-device', other.token, undefined, 'GET')).status, 404);
+  assert.equal((await request('/api/task-center', connector.token, { action: 'create', title: 'forbidden' })).status, 403);
+  assert.equal((await request('/api/task-center/execution-action', connector.token, { action: 'approve' })).status, 403);
+  const socket = new WebSocket(base.replace('http:', 'ws:') + '/api/realtime', realtimeProtocol);
+  t.after(() => socket.terminate()); await once(socket, 'open');
+  const message = once(socket, 'message');
+  socket.send(JSON.stringify({ type: 'subscribe', channel: 'task-center', token: connector.token, since: 0 }));
+  assert.equal(JSON.parse(String((await message)[0])).status, 403);
+  const serialized = JSON.stringify(db.listAudit(owner.tenant.id));
+  assert.ok(serialized.includes('device.deployment_issued'));
+  assert.ok(serialized.includes('device.deployment_exchanged'));
+  for (const secret of [browser.token, fresh.data.deploymentToken, connector.token]) assert.ok(!serialized.includes(secret));
+  await request('/api/auth/logout', connector.token);
+  assert.equal((await request('/api/auth/session', connector.token, undefined, 'GET')).status, 401);
+});
+
+test('deployment state survives reopening, expires, follows revocation and rolls back an unsuccessful exchange', async t => {
+  const key = randomUUID();
+  let db = openDatabase(key); t.after(() => db.close());
+  db.createTenant({ id: 'default', token: 'a'.repeat(43) });
+  const browser = db.loginWithGoogle({ subject: 'state-google', email: 'state@example.com', displayName: 'State' });
+  const owner = db.authenticateSession(browser.token)!;
+  const issued = db.issueDeviceDeployment(browser.token);
+  const raw = rawDatabase(key); t.after(() => raw.close());
+  const row = raw.prepare('SELECT * FROM device_deployment_tokens').get();
+  assert.equal(row?.token_hash, hashToken(issued.deploymentToken));
+  assert.ok(!JSON.stringify(row).includes(issued.deploymentToken));
+  db.close(); db = openDatabase(key);
+  const exchanged = db.exchangeDeviceDeployment(issued.deploymentToken);
+  assert.equal(db.authenticateSession(exchanged.token)?.scope, 'connector');
+  assert.throws(() => db.exchangeDeviceDeployment(issued.deploymentToken), /已使用|失效/);
+  const expiring = db.issueDeviceDeployment(browser.token);
+  raw.prepare('UPDATE device_deployment_tokens SET expires_at = 0 WHERE token_hash = ?').run(hashToken(expiring.deploymentToken));
+  assert.throws(() => db.exchangeDeviceDeployment(expiring.deploymentToken), /过期|失效/);
+  const failure = db.issueDeviceDeployment(browser.token);
+  raw.prepare("CREATE FUNCTION fail_connector_session() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic-write-failure'; END $$").run();
+  raw.prepare('CREATE TRIGGER fail_connector BEFORE INSERT ON device_connector_sessions FOR EACH ROW EXECUTE FUNCTION fail_connector_session()').run();
+  const sessionCount = raw.prepare('SELECT count(*) AS count FROM user_sessions').get()?.count;
+  assert.throws(() => db.exchangeDeviceDeployment(failure.deploymentToken), /P0001/);
+  assert.equal(raw.prepare('SELECT count(*) AS count FROM user_sessions').get()?.count, sessionCount);
+  assert.ok(raw.prepare('SELECT 1 FROM device_deployment_tokens WHERE token_hash = ?').get(hashToken(failure.deploymentToken)));
+  raw.prepare('DROP TRIGGER fail_connector ON device_connector_sessions').run();
+  raw.prepare('DROP FUNCTION fail_connector_session()').run();
+  assert.ok(db.exchangeDeviceDeployment(failure.deploymentToken).token);
+  const pending = db.issueDeviceDeployment(browser.token);
+  db.logout(browser.token);
+  assert.throws(() => db.exchangeDeviceDeployment(pending.deploymentToken), /无效/);
+  assert.ok(db.authenticateSession(exchanged.token), 'device session remains independent after browser logout');
+  const replacementBrowser = db.loginWithGoogle({ subject: 'state-google', email: 'state@example.com', displayName: 'State' });
+  const revoked = db.issueDeviceDeployment(replacementBrowser.token);
+  raw.prepare("UPDATE organization_users SET role = 'viewer' WHERE tenant_id = ? AND id = ?").run(owner.tenant.id, owner.user.id);
+  assert.equal(db.authenticateSession(exchanged.token), null);
+  assert.throws(() => db.exchangeDeviceDeployment(revoked.deploymentToken), /没有设备接入权限/);
+  raw.prepare("UPDATE organization_users SET role = 'owner', enabled = 0 WHERE tenant_id = ? AND id = ?").run(owner.tenant.id, owner.user.id);
+  assert.equal(db.authenticateSession(exchanged.token), null);
+  assert.throws(() => db.exchangeDeviceDeployment(revoked.deploymentToken), /账号已停用/);
+  raw.prepare('UPDATE organization_users SET enabled = 1 WHERE tenant_id = ? AND id = ?').run(owner.tenant.id, owner.user.id);
+  await db.changePassword(owner, { password: 'replacement-test-password' });
+  assert.equal(db.authenticateSession(exchanged.token), null);
+  assert.equal(db.authenticateSession(replacementBrowser.token), null);
+  assert.throws(() => db.exchangeDeviceDeployment(revoked.deploymentToken), /无效/);
+});
+
+test('version 8 upgrades existing sessions without exposing old logins as connector sessions', async t => {
+  const key = randomUUID();
+  let db = openDatabase(key); t.after(() => db.close());
+  db.createTenant({ id: 'default', token: 'b'.repeat(43) });
+  const browser = db.loginWithGoogle({ subject: 'migration-google', email: 'migration@example.com', displayName: 'Migration' });
+  db.close();
+  const raw = rawDatabase(key);
+  raw.prepare('DROP TABLE device_deployment_tokens').run();
+  raw.prepare('DROP TABLE device_connector_sessions').run();
+  raw.prepare('DELETE FROM schema_migrations WHERE version = 8').run();
+  raw.close();
+  db = openDatabase(key);
+  assert.equal(db.authenticateSession(browser.token)?.scope, 'browser');
+  assert.ok(db.issueDeviceDeployment(browser.token).deploymentToken);
+});

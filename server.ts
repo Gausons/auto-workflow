@@ -7,7 +7,7 @@ import { createRealtime } from './src/realtime.js';
 import { createAuthHandler } from './src/authHttp.js';
 import { createStaticHandler } from './src/http/staticAssets.js';
 import { sendJson } from './src/http/response.js';
-import { permissionForRoute, permissionsFor } from './src/rbac.js';
+import { connectorRouteAllowed, permissionForRoute, permissionsFor } from './src/rbac.js';
 import { assertSeparateWorkspaces, canonicalWorkspace, loadEnvironment, provisionDefaultTenant, tenantEnvironment } from './src/tenancy.js';
 import type { Tenant } from './src/database.js';
 import type { Environment } from './src/issueSources/types.js';
@@ -80,6 +80,7 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
         }
         if (await handleAuth(req, res, url, token, principal, sendJson)) return;
         if (!principal) return sendJson(res, 401, { error: 'unauthorized', message: '请登录个人账号' });
+        if (principal.scope === 'connector' && !connectorRouteAllowed(req.method, url.pathname)) return sendJson(res, 403, { error: 'forbidden', message: '设备会话只能访问连接器接口' });
         const { tenant, user } = principal;
         const permission = permissionForRoute(req.method, url.pathname);
         if (!permission) return sendJson(res, 404, { error: 'not_found', message: '接口不存在' });

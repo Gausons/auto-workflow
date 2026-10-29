@@ -115,7 +115,7 @@ test('chunking finds matches late in long documents and commits complete documen
 test('version 7 migrates existing tenants without changing task data', t => {
   const f = fixture(t), before = f.database.readTaskCenter('a');
   const raw = rawDatabase(f.key);
-  raw.prepare('DROP TABLE search_vectors').run(); raw.prepare('DELETE FROM schema_migrations WHERE version = 7').run(); raw.close();
+  raw.prepare('DROP TABLE search_vectors').run(); raw.prepare('DELETE FROM schema_migrations WHERE version >= 7').run(); raw.close();
   const upgraded = openDatabase(f.key);
   assert.deepEqual(upgraded.readTaskCenter('a'), before);
   assert.equal(upgraded.searchVectors.indexed('a', 'tasks', 'profile').size, 0);

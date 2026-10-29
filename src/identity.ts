@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import type { Connection } from './storage/connection.js';
-import { ROLES, httpError } from './rbac.js';
+import { ROLES, httpError, permissionsFor } from './rbac.js';
 
 type Role = keyof typeof ROLES;
 interface PublicUser {
@@ -32,6 +32,7 @@ const digest = (value: string) => createHash('sha256').update(value).digest('hex
 const scryptOptions = { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 const PUBLIC_COLUMNS = "id, tenant_id AS tenantId, username, display_name AS displayName, role, enabled, created_at AS createdAt, updated_at AS updatedAt, CASE WHEN password_hash LIKE 'external$%' THEN 0 ELSE 1 END AS hasPassword, EXISTS(SELECT 1 FROM auth_identities ai WHERE ai.tenant_id = organization_users.tenant_id AND ai.user_id = organization_users.id AND ai.provider = 'google') AS hasGoogle";
 export const SESSION_DURATION_MS = 24 * 60 * 60 * 1000;
+export const DEVICE_DEPLOYMENT_DURATION_MS = 10 * 60 * 1000;
 
 export async function hashPassword(password: unknown) {
   if (typeof password !== 'string' || password.length < 12 || password.length > 128) throw httpError(400, '密码长度必须为 12–128 个字符');
@@ -232,7 +233,36 @@ export function createIdentityStore(db: Connection, transaction: Transaction) {
     if (!user?.enabled) return null;
     const tenant = db.prepare('SELECT id, name FROM tenants WHERE id = ?').get(row.tenant_id) as unknown as { id: string; name: string } | undefined;
     if (!tenant) return null;
-    return { tenant, user, expiresAt: row.expires_at };
+    const scope = db.prepare('SELECT 1 FROM device_connector_sessions WHERE token_hash = ?').get(digest(token)) ? 'connector' : 'browser';
+    if (scope === 'connector' && !permissionsFor(user.role).includes('work.execute')) return null;
+    return { tenant, user, expiresAt: row.expires_at, scope };
+  }
+  function issueDeviceDeployment(token: unknown) {
+    return transaction(() => {
+      const principal = authenticateSession(token);
+      if (!principal || typeof token !== 'string') throw httpError(401, '请重新登录后生成部署命令');
+      if (principal.scope !== 'browser' || !permissionsFor(principal.user.role).includes('work.execute')) throw httpError(403, '当前会话不能生成设备部署令牌');
+      const expiresAt = Math.min(Date.now() + DEVICE_DEPLOYMENT_DURATION_MS, principal.expiresAt);
+      const deploymentToken = randomBytes(32).toString('base64url');
+      db.prepare('DELETE FROM device_deployment_tokens WHERE expires_at <= ? OR parent_session_hash = ?').run(Date.now(), digest(token));
+      db.prepare('INSERT INTO device_deployment_tokens VALUES (?, ?, ?)').run(digest(deploymentToken), digest(token), expiresAt);
+      audit(principal.tenant.id, principal.user, 'device.deployment_issued', '', { expiresAt });
+      return { deploymentToken, expiresAt };
+    });
+  }
+  function exchangeDeviceDeployment(token: unknown) {
+    if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(token)) throw httpError(401, '临时令牌无效或已失效，请在网页重新生成部署命令');
+    return transaction(() => {
+      const row = db.prepare('SELECT s.tenant_id, s.user_id FROM device_deployment_tokens d JOIN user_sessions s ON s.token_hash = d.parent_session_hash WHERE d.token_hash = ? AND d.expires_at > ? AND s.expires_at > ?').get(digest(token), Date.now(), Date.now()) as { tenant_id: string; user_id: string } | undefined;
+      if (!row) throw httpError(401, '临时令牌无效、已使用或已过期，请在网页重新生成部署命令');
+      const user = getUser(row.tenant_id, row.user_id);
+      if (!user?.enabled || !permissionsFor(user.role).includes('work.execute')) throw httpError(403, '账号已停用或没有设备接入权限');
+      db.prepare('DELETE FROM device_deployment_tokens WHERE token_hash = ?').run(digest(token));
+      const session = issueSession(row.tenant_id, row.user_id);
+      db.prepare('INSERT INTO device_connector_sessions VALUES (?)').run(digest(session.token));
+      audit(row.tenant_id, user, 'device.deployment_exchanged');
+      return session;
+    });
   }
   async function changePassword(principal: Principal, input: PasswordChange) {
     const row = db.prepare('SELECT password_hash FROM organization_users WHERE tenant_id = ? AND id = ?').get(principal.tenant.id, principal.user.id) as unknown as { password_hash: string } | undefined;
@@ -249,7 +279,7 @@ export function createIdentityStore(db: Connection, transaction: Transaction) {
     });
   }
   return {
-    hasUsers, createUser, getUser, listUsers, updateUser, resetPassword, registerPersonal, login, loginPersonal, loginWithGoogle, authenticateSession, changePassword, audit,
+    hasUsers, createUser, getUser, listUsers, updateUser, resetPassword, registerPersonal, login, loginPersonal, loginWithGoogle, authenticateSession, changePassword, audit, issueDeviceDeployment, exchangeDeviceDeployment,
     logout: (token: string) => db.prepare('DELETE FROM user_sessions WHERE token_hash = ?').run(digest(token)),
     listAudit: (tenantId: string) => (db.prepare('SELECT id, actor_name AS actorName, action, target, detail, created_at AS createdAt FROM audit_events WHERE tenant_id = ? ORDER BY id DESC LIMIT 200').all(tenantId) as unknown as Array<{ id: number; actorName: string; action: string; target: string; detail: string; createdAt: string }>).map(row => ({ ...row, detail: JSON.parse(row.detail) as unknown }))
   };

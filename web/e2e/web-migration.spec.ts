@@ -679,7 +679,8 @@ test('Agent request reply and unknown-result reconciliation never resubmit execu
   expect(executeWrites).toHaveLength(0);
 });
 
-test('device setup selects remote target and browser controls a remote original session', async ({ page, request }) => {
+test('device setup selects remote target and browser controls a remote original session', async ({ page, request, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   const loginResult = await request.post('/api/auth/login', { data: { username: 'owner', password } });
   const { token: connectorToken } = await loginResult.json() as { token: string };
   const headers = { Authorization: `Bearer ${connectorToken}` };
@@ -700,8 +701,26 @@ test('device setup selects remote target and browser controls a remote original 
   await page.reload();
   await page.getByRole('button', { name: '连接设备', exact: true }).click();
   await expect(page.getByRole('heading', { name: '连接本机 Agent' })).toBeVisible();
-  await expect(page.getByLabel('设备连接配置')).toContainText("WORKBENCH_USERNAME='owner'");
-  expect(await page.getByLabel('设备连接配置').inputValue()).not.toContain(connectorToken);
+  await page.getByRole('button', { name: '生成并复制部署命令' }).click();
+  const deployment = await page.getByLabel('一键部署命令').inputValue();
+  const temporary = JSON.parse(Buffer.from(deployment.split(' ').at(-1)!, 'base64url').toString('utf8'));
+  expect(temporary.deploymentToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  expect(temporary).not.toHaveProperty('username');
+  expect(deployment).not.toContain(connectorToken);
+  const exchanged = await request.post('/api/auth/device-deployment/exchange', { data: { deploymentToken: temporary.deploymentToken } });
+  expect(exchanged.ok()).toBeTruthy();
+  const deviceSession = await exchanged.json() as { token: string; permissions: string[] };
+  expect(deviceSession.permissions).toEqual(['read', 'work.execute']);
+  expect((await request.get(`/api/task-center/device-state?deviceId=${deviceId}`, { headers: { Authorization: `Bearer ${deviceSession.token}` } })).ok()).toBeTruthy();
+  expect((await request.post('/api/auth/device-deployment/exchange', { data: { deploymentToken: temporary.deploymentToken } })).status()).toBe(401);
+  await page.getByRole('button', { name: '已复制，再次复制' }).click();
+  await expect(page.getByRole('status')).toContainText('尚未部署');
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(page.getByLabel('一键部署命令')).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
   const device = page.locator('article').filter({ has: page.getByRole('heading', { name: '浏览器远端开发机' }) });
   await device.getByText('设备详情', { exact: true }).click();
   await expect(device).toContainText('支持 Codex 原会话续聊');

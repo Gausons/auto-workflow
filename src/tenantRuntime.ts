@@ -8,7 +8,7 @@ import path from 'node:path';
 import { taskContent } from '../shared/taskContent.js';
 import { DEFAULT_AI_ASSIGNMENT_MODEL } from '../shared/assignmentModels.js';
 import { createHash } from 'node:crypto';
-import { httpError, publicIdentity } from './rbac.js';
+import { connectorActionAllowed, httpError, publicIdentity } from './rbac.js';
 import type { ExecutionFeedback, RealtimeEvent, RealtimeSubscription } from '../shared/realtime.js';
 import { createSessionDelivery } from './sessionDelivery/index.ts';
 import { createAgentHistory } from './agentHistory/index.js';
@@ -26,7 +26,7 @@ import type { Environment, IssueAttachment, WorkIssue } from './issueSources/typ
 
 type Database = ReturnType<typeof import('./database.js').openDatabase>;
 type JsonObject = Record<string, unknown>;
-interface Principal { user: { id: string; role: string }; tenant: Tenant; expiresAt?: unknown }
+interface Principal { user: { id: string; role: string }; tenant: Tenant; expiresAt?: unknown; scope?: string }
 interface AssignmentPerson { name: string; employeeId: string; responsibility: string }
 interface AssignmentRecommendation {
   status: string; source?: string; reason?: string; error?: string; model?: string; assigneeId?: string;
@@ -124,6 +124,11 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
   }
 
   async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
+    const readDeviceCommand = async (limit?: number) => {
+      const body = await readJson(req, limit);
+      if (requestIdentity.getStore()?.scope === 'connector' && !connectorActionAllowed(url.pathname, body.action)) throw httpError(403, '设备会话只能同步设备状态或领取、回报执行');
+      return body;
+    };
     if (url.pathname === '/api/search' && req.method === 'GET') {
       const q = searchQuery(url.searchParams), scope = url.searchParams.get('scope');
       if (scope !== 'tasks' && scope !== 'bugs') { sendJson(res, 400, { error: 'invalid_search_scope', message: '搜索范围必须为 tasks 或 bugs' }); return; }
@@ -180,17 +185,17 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
       const input = await readJson(req);
       sendJson(res, 200, input.deviceId && input.deviceId !== 'local' ? remoteGit.submit(input, actor) : await codexExecution.git(input)); return;
     }
-    if (url.pathname === '/api/task-center/git-action' && req.method === 'POST') { sendJson(res, 200, remoteGit.action(await readJson(req), requestIdentity.getStore()!.user)); return; }
+    if (url.pathname === '/api/task-center/git-action' && req.method === 'POST') { sendJson(res, 200, remoteGit.action(await readDeviceCommand(), requestIdentity.getStore()!.user)); return; }
     if (url.pathname === '/api/task-center/directory-picker') {
       const actor = requestIdentity.getStore()!.user;
       sendJson(res, 200, req.method === 'GET' ? codexExecution.directoryStatus({ requestId: url.searchParams.get('requestId') || undefined }, actor) : await codexExecution.pickDirectory(await readJson(req), actor)); return;
     }
-    if (url.pathname === '/api/task-center/directory-action') { sendJson(res, 200, codexExecution.directoryAction(await readJson(req), requestIdentity.getStore()!.user)); return; }
+    if (url.pathname === '/api/task-center/directory-action') { sendJson(res, 200, codexExecution.directoryAction(await readDeviceCommand(), requestIdentity.getStore()!.user)); return; }
     if (url.pathname === '/api/task-center/codex') { sendJson(res, 200, await codexExecution.targets()); return; }
     if (url.pathname === '/api/task-center/execute') { sendJson(res, 202, await codexExecution.execute(await readJson(req, 15_000_000), requestIdentity.getStore()!.user)); return; }
-    if (url.pathname === '/api/task-center/execution-action') { sendJson(res, 200, await codexExecution.action(await readJson(req, 8_000_000), requestIdentity.getStore()!.user)); return; }
+    if (url.pathname === '/api/task-center/execution-action') { sendJson(res, 200, await codexExecution.action(await readDeviceCommand(8_000_000), requestIdentity.getStore()!.user)); return; }
     if (url.pathname === '/api/task-center') {
-      sendJson(res, 200, req.method === 'GET' ? await taskCenter.snapshot() : await taskCenter.command(await readJson(req), requestIdentity.getStore()!.user)); return;
+      sendJson(res, 200, req.method === 'GET' ? await taskCenter.snapshot() : await taskCenter.command(await readDeviceCommand(), requestIdentity.getStore()!.user)); return;
     }
     if (req.method === 'POST' && url.pathname === '/api/task-center/history-images') {
       sendJson(res, 200, historyImages.upload(await readJson(req, 17_000_000), requestIdentity.getStore()!.user)); return;

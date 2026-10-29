@@ -38,7 +38,8 @@ export function DevicesPage() {
   const snapshot = useQuery({
     queryKey: ['task-center', 'snapshot'],
     queryFn: ({ signal }) => apiRequest<TaskCenterData>('/api/task-center', { signal }),
-    enabled: hasSessionToken()
+    enabled: hasSessionToken(),
+    refetchInterval: guideOpen ? 3000 : false
   });
   useTaskCenterUpdates(true, snapshot.data?.syncVersion);
   const identity = useQuery({

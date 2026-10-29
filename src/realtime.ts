@@ -72,6 +72,7 @@ export function createRealtime(server: Server, database: Database, runtimeFor: (
             if (input.type !== 'subscribe' || typeof input.token !== 'string' || input.token.length > 512) throw httpError(401, '请登录个人账号');
             token = input.token; principal = database.authenticateSession(token);
             if (!principal) throw httpError(401, '请登录个人账号');
+            if (principal.scope === 'connector' && input.channel !== 'device-control') throw httpError(403, '设备会话只能订阅设备控制通道');
             if (req.headers['x-tenant-id'] && req.headers['x-tenant-id'] !== principal.tenant.id || input.tenantId && input.tenantId !== principal.tenant.id) throw httpError(403, '登录会话不属于指定账号空间');
             const permission = permissionForRealtimeChannel(input.channel);
             if (!permission) throw httpError(404, '实时订阅不存在');

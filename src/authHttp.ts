@@ -68,6 +68,23 @@ export function createAuthHandler(database: Database, { environment = {}, fetchI
 
   return async function handleAuth(req: IncomingMessage, res: ServerResponse, url: URL, token: unknown, principal: Principal | null, sendJson: SendJson) {
     const endpoint = url.pathname;
+    if (principal?.scope === 'connector' && endpoint.startsWith('/api/auth/') && !['/api/auth/session', '/api/auth/logout'].includes(endpoint)) throw httpError(403, '设备会话不能执行账号操作');
+    if (endpoint === '/api/auth/device-deployment/exchange' && req.method === 'POST') {
+      rateLimit(`device-exchange:${req.socket.remoteAddress}`, 100);
+      const body = await readAuthJson(req);
+      if (Object.keys(body).some(key => key !== 'deploymentToken')) throw httpError(400, '兑换请求只能包含 deploymentToken');
+      sendJson(res, 200, sessionResponse(database.exchangeDeviceDeployment(body.deploymentToken)));
+      return true;
+    }
+    if (endpoint === '/api/auth/device-deployment' && req.method === 'POST') {
+      if (!principal) throw httpError(401, '请登录后生成部署命令');
+      requirePermission(principal, 'work.execute');
+      rateLimit(`device-deployment:${principal.user.id}`, 30);
+      const body = await readAuthJson(req);
+      if (Object.keys(body).length) throw httpError(400, '部署令牌自动绑定当前账号，无需指定账号或租户');
+      sendJson(res, 201, database.issueDeviceDeployment(token));
+      return true;
+    }
     if (endpoint === '/api/auth/providers' && req.method === 'GET') {
       sendJson(res, 200, { google: googleConfigured() });
       return true;
@@ -214,6 +231,7 @@ export function createAuthHandler(database: Database, { environment = {}, fetchI
 }
 
 function requirePermission(principal: Principal, permission: string) {
+  if (principal.scope === 'connector') throw httpError(403, '设备会话不能执行账号管理操作');
   if (!permissionsFor(principal.user.role).includes(permission)) throw httpError(403, '当前角色没有此操作权限');
 }
 

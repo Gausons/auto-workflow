@@ -17,6 +17,7 @@ function setup(permissions: string[], failSnapshot = false, execution: unknown =
   let failed = false;
   let currentData = structuredClone(data);
   const fetchMock = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
+    if (path === '/api/auth/device-deployment') return Promise.resolve(new Response(JSON.stringify({ deploymentToken: 'd'.repeat(43), expiresAt: Date.now() + 600_000 }), { status: 201 }));
     if (init?.method === 'POST') {
       const command = JSON.parse(String(init.body));
       const state = currentData as typeof snapshot;
@@ -35,17 +36,58 @@ function setup(permissions: string[], failSnapshot = false, execution: unknown =
 describe('DevicesPage', () => {
   afterEach(() => { cleanup(); sessionStorage.clear(); vi.unstubAllGlobals(); });
 
-  it('generates connection configuration without exposing the browser token', async () => {
-    setup(['read', 'work.execute']);
-    await userEvent.click(await screen.findByRole('button', { name: '连接设备' }));
-    const config = await screen.findByLabelText('设备连接配置');
-    expect((config as HTMLTextAreaElement).value.split('\n')).toHaveLength(3);
-    expect((config as HTMLTextAreaElement).value).toContain('WORKBENCH_USERNAME=');
-    expect((config as HTMLTextAreaElement).value).not.toContain('WORKBENCH_EXECUTE_CODEX');
-    expect((config as HTMLTextAreaElement).value).not.toContain('WORKBENCH_TENANT');
-    expect((config as HTMLTextAreaElement).value).not.toContain('test-token');
-    expect(screen.getByText('npm install -g agent-workbench-connector')).toBeTruthy();
-    expect(screen.getByText('agent-workbench-connector --env-file ./agent.env')).toBeTruthy();
+  it('generates a single-use deployment command without exposing the browser token', async () => {
+    const fetchMock = setup(['read', 'work.execute']);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: '连接设备' }));
+    expect(screen.queryByLabelText('一键部署命令')).toBeNull();
+    await user.click(screen.getByRole('button', { name: '生成并复制部署命令' }));
+    const command = (await screen.findByLabelText('一键部署命令') as HTMLTextAreaElement).value;
+    expect(command).toMatch(/^npx --yes agent-workbench-connector@latest --connect [A-Za-z0-9_-]+$/);
+    const config = JSON.parse(Buffer.from(command.split(' ').at(-1)!, 'base64url').toString('utf8'));
+    expect(config.url).toBe(location.origin);
+    expect(config.deploymentToken).toBe('d'.repeat(43));
+    expect(config.username).toBeUndefined();
+    expect(command).not.toContain('test-token');
+    expect(await navigator.clipboard.readText()).toBe(command);
+    expect(screen.getByRole('status').textContent).toContain('尚未部署');
+    expect(fetchMock.mock.calls.filter(([path]) => path === '/api/auth/device-deployment')).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: '已复制，再次复制' }));
+    expect(fetchMock.mock.calls.filter(([path]) => path === '/api/auth/device-deployment')).toHaveLength(1);
+  });
+
+  it('offers manual copying when clipboard permission is denied', async () => {
+    setup(['work.execute']);
+    const user = userEvent.setup();
+    vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValueOnce(new Error('denied'));
+    await user.click(await screen.findByRole('button', { name: '连接设备' }));
+    await user.click(screen.getByRole('button', { name: '生成并复制部署命令' }));
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', '自动复制失败，请点击“复制部署命令”或选中上方命令手动复制。');
+    await user.click(screen.getByRole('button', { name: '复制部署命令' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('does not retry uncertain issuance and lets the user explicitly regenerate', async () => {
+    const fetchMock = setup(['work.execute']);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: '连接设备' }));
+    fetchMock.mockRejectedValueOnce(new Error('网络失败'));
+    await user.click(screen.getByRole('button', { name: '生成并复制部署命令' }));
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', '生成失败：网络失败。请重试；此前的命令可能已失效。');
+    expect(screen.queryByLabelText('一键部署命令')).toBeNull();
+    expect(fetchMock.mock.calls.filter(([path]) => path === '/api/auth/device-deployment')).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: '生成并复制部署命令' }));
+    expect(await screen.findByLabelText('一键部署命令')).toBeTruthy();
+  });
+
+  it('hides expired deployment commands', async () => {
+    const fetchMock = setup(['work.execute']);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: '连接设备' }));
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ deploymentToken: 'd'.repeat(43), expiresAt: Date.now() - 1 })));
+    await user.click(screen.getByRole('button', { name: '生成并复制部署命令' }));
+    expect(await screen.findByText('部署命令已过期，请重新生成。')).toBeTruthy();
+    expect(screen.queryByLabelText('一键部署命令')).toBeNull();
   });
 
   it('shows device status from the snapshot', async () => {

@@ -9,6 +9,7 @@ interface Principal {
   user: { role: unknown };
   tenant: { id: string };
   expiresAt?: unknown;
+  scope?: string;
 }
 
 export function permissionsFor(role: unknown): string[] {
@@ -22,6 +23,7 @@ export function permissionForRealtimeChannel(channel: unknown): string | null {
 }
 
 export function permissionForRoute(method: string | undefined, pathname: string): string | null {
+  if (pathname === '/api/auth/device-deployment' && method === 'POST') return 'work.execute';
   if (/^\/api\/sessions\/[a-f0-9]{64}\/continue-as-new$/.test(pathname) && method === 'POST') return 'work.execute';
   if ((pathname === '/api/conversations' || /^\/api\/conversations\/[a-f0-9]{64}\/(?:inherited|context-preview)$/.test(pathname)) && method === 'GET') return 'read';
   if (/^\/api\/conversations\/[a-f0-9]{64}\/transfer$/.test(pathname) && ['GET', 'POST'].includes(method || '')) return 'work.execute';
@@ -54,7 +56,27 @@ export function permissionForRoute(method: string | undefined, pathname: string)
 }
 
 export function publicIdentity(principal: Principal) {
-  return { user: principal.user, tenant: principal.tenant, permissions: permissionsFor(principal.user.role), expiresAt: principal.expiresAt };
+  const permissions = permissionsFor(principal.user.role).filter(permission => principal.scope !== 'connector' || ['read', 'work.execute'].includes(permission));
+  return { user: principal.user, tenant: principal.tenant, permissions, expiresAt: principal.expiresAt };
+}
+
+export function connectorRouteAllowed(method: string | undefined, pathname: string) {
+  if (pathname === '/api/task-center' && ['GET', 'POST'].includes(method || '')) return true;
+  if (method === 'GET' && ['/api/task-center/device-state', '/api/task-center/device-updates'].includes(pathname)) return true;
+  if (method === 'POST' && ['/api/task-center/execution-action', '/api/task-center/git-action', '/api/task-center/directory-action', '/api/task-center/history-images'].includes(pathname)) return true;
+  if (method === 'GET' && /^\/api\/agent-sessions\/[a-f0-9]{64}\/images$/.test(pathname)) return true;
+  if (method === 'GET' && /^\/api\/conversations\/[a-f0-9]{64}\/inherited$/.test(pathname)) return true;
+  return ['GET', 'POST'].includes(method || '') && /^\/api\/conversations\/[a-f0-9]{64}\/transfer(?:\/objects\/[a-f0-9]{64})?$/.test(pathname);
+}
+
+export function connectorActionAllowed(pathname: string, action: unknown) {
+  const actions: Record<string, string[]> = {
+    '/api/task-center': ['heartbeat', 'ack'],
+    '/api/task-center/execution-action': ['claim', 'report'],
+    '/api/task-center/git-action': ['claim', 'verify', 'report'],
+    '/api/task-center/directory-action': ['claim', 'report']
+  };
+  return typeof action === 'string' && actions[pathname]?.includes(action) === true;
 }
 
 export function httpError(statusCode: number, message: string) { return Object.assign(new Error(message), { statusCode }); }
