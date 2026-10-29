@@ -4,6 +4,18 @@
 
 > 当前版本不再使用“执行流水线”。缺陷会直接生成任务中心任务，不会创建中间流水线、节点或任务包。
 
+## 官网与开放文档
+
+- [官网](https://autoworkflow.top/)：产品介绍、能力边界与工作流程。
+- [开放文档](https://autoworkflow.top/docs)：快速开始、任务、设备与 Agent、Jira、会话交接、自托管、HTTP API、故障排查及开发贡献。
+- [工作台](https://autoworkflow.top/tasks)：登录后管理个人任务与设备。
+
+官网与文档无需登录，使用独立的轻量入口，不加载工作台或读取账号数据。Vite 构建时生成完整 HTML、页面元数据、`/sitemap.xml` 与 `/robots.txt`；文档支持本地全文搜索、代码复制、页内目录、明暗主题和手机目录。内容维护于 `web/src/site/content.ts`，页面模板与独立样式位于同目录，运行 `pnpm build:client` 后随现有 Docker / CI 发布。不要编辑或提交 `public/build/`。
+
+首页 `/` 和 `/index.html` 展示官网；原工作台页面保留原路径。旧的 `/#tasks`、`/#devices` 等书签仍跳转到对应工作台；Google 登录回调参数继续进入登录流程，完成后打开 `/tasks`。不存在的文档返回 404，不回退到工作台。公开文档描述当前实现，API 尚未独立版本化。
+
+网站信息架构参考 [Linear 产品页](https://linear.app/features)、[Linear Docs](https://linear.app/docs) 和 [n8n 自托管文档](https://docs.n8n.io/deploy/host-n8n)，所有产品能力以本项目源码为准。
+
 ## 功能概览
 
 - **缺陷工作台**：手动或定时同步 Jira，按标题、编号或经办人搜索缺陷；双栏浏览列表与详情，窄屏自动上下排列。同步信息可展开查看，描述支持安全的基础富文本排版，更新时间显示为本地日期时间。

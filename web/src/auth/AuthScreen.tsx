@@ -10,7 +10,7 @@ interface AuthScreenProps { hasSession: boolean; reload?: () => void }
 
 const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-export function AuthScreen({ hasSession, reload = () => location.reload() }: AuthScreenProps) {
+export function AuthScreen({ hasSession, reload = () => ['/', '/index.html'].includes(location.pathname) ? location.assign('/tasks') : location.reload() }: AuthScreenProps) {
   const params = new URLSearchParams(location.search);
   const [active, setActive] = useState(!hasSession);
   const [mode, setMode] = useState<'login' | 'register'>('login');

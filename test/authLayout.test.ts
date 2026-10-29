@@ -16,7 +16,7 @@ test('login page and its entire JavaScript import graph are served without authe
     const address = app.server.address();
     assert.ok(address && typeof address === 'object');
     const base = `http://127.0.0.1:${address.port}`;
-    const page = await fetch(base);
+    const page = await fetch(base + '/tasks');
     assert.equal(page.status, 200);
     const html = await page.text();
     assert.match(html, /src="\/assets\/react-entry-[A-Za-z0-9_-]+\.js"/);

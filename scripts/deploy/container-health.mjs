@@ -2,6 +2,10 @@ const base = 'http://127.0.0.1:4173';
 try {
   const health = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(3000) });
   if (health.status !== 200) throw new Error('Database health check failed');
+  for (const route of ['/', '/docs', '/docs/quickstart', '/docs/self-hosting', '/docs/api']) {
+    const response = await fetch(`${base}${route}`, { signal: AbortSignal.timeout(3000) });
+    if (response.status !== 200 || !(await response.text()).includes('AgentFlow')) throw new Error('Public site health check failed');
+  }
   const page = await fetch(`${base}/devices`, { signal: AbortSignal.timeout(3000) });
   if (page.status !== 200) throw new Error('Page health check failed');
   const html = await page.text();

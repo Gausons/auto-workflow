@@ -5,6 +5,19 @@ import { sendJson } from './response.js';
 
 export function createStaticHandler(projectDir: string) {
   return async (req: IncomingMessage, res: ServerResponse, url: URL) => {
+    const publicPath = publicSiteFile(url);
+    if (publicPath && ['GET', 'HEAD'].includes(req.method || '')) {
+      let content: Buffer;
+      try { content = await readFile(path.join(projectDir, 'public', 'build', 'site', publicPath)); }
+      catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return sendJson(res, 404, { message: '文档不存在' });
+        throw error;
+      }
+      const type = publicPath.endsWith('.xml') ? 'application/xml; charset=utf-8' : publicPath.endsWith('.txt') ? 'text/plain; charset=utf-8' : 'text/html; charset=utf-8';
+      res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache' });
+      res.end(req.method === 'HEAD' ? undefined : content);
+      return;
+    }
     if (isWebPagePath(url.pathname) && ['GET', 'HEAD'].includes(req.method || '')) {
       const template = await readFile(path.join(projectDir, 'public', 'index.html'), 'utf8');
       const assets = await webEntryAssets(projectDir);
@@ -30,6 +43,15 @@ export function createStaticHandler(projectDir: string) {
     res.writeHead(200, { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'no-cache' });
     res.end(req.method === 'HEAD' ? undefined : content);
   };
+}
+
+function publicSiteFile(url: URL): string | null {
+  if (url.pathname === '/robots.txt' || url.pathname === '/sitemap.xml') return url.pathname.slice(1);
+  // Google callbacks still render the original login flow at its existing URL.
+  if ((url.pathname === '/' || url.pathname === '/index.html') && !url.searchParams.has('auth_error') && !url.searchParams.has('google_login')) return 'index.html';
+  if (/^\/docs(?:\/[a-z0-9-]+)?\/?$/.test(url.pathname)) return `${url.pathname.slice(1).replace(/\/$/, '')}/index.html`;
+  if (url.pathname.startsWith('/docs/')) return 'missing/index.html';
+  return null;
 }
 
 function isWebPagePath(value: string) {
