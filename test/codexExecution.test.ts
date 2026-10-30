@@ -313,6 +313,34 @@ test('remote device claims once, reports real thread state, and rejects other de
   await worker.sync(); assert.equal((await center.snapshot()).tasks[0].status, 'review'); worker.close();
 });
 
+test('old ACP error reports remain idempotent after normalization and reject conflicting terminal results', async t => {
+  const db = openDatabase(); t.after(() => db.close());
+  db.createTenant({ id: 'default', token: 'x'.repeat(32) }); db.createTenant({ id: 'other', token: 'y'.repeat(32) });
+  const owner = { id: 'owner' }, history = { catalog: async () => ({ sessions: [], providers: [] }) };
+  const center = createTaskCenter({ database: db, tenantId: 'default', history });
+  await center.command({ action: 'heartbeat', deviceId: 'remote', name: '远端', agents: ['codex'], sessions: [], codexProjects: [{ id: 'acp:codex', name: 'Codex', cwd: process.cwd(), agent: 'codex', protocol: 'acp' }] }, owner);
+  await center.command({ action: 'create', title: '你好' }, owner);
+  const options = { database: db, tenantId: 'default', workspace: () => process.cwd(), runnerFactory: () => ({ projects: async () => [], start() { assert.fail('must not dispatch a prompt'); }, close() {} }) };
+  const service = createCodexExecution(options); t.after(() => service.close());
+  const task = (await center.snapshot()).tasks[0];
+  const { executionId } = await service.execute({ taskId: task.id, revision: task.revision, deviceId: 'remote', projectId: 'acp:codex', cwd: process.cwd() });
+  await service.action({ action: 'claim', executionId }, owner);
+  const report = { action: 'report', executionId, report: { agent: 'codex', protocol: 'acp', sessionId: 'native-error', status: 'completed', output: JSON.stringify({ type: 'error', status: 400, error: { type: 'invalid_request_error', code: 'model_not_found', message: 'Model is not supported' } }) } } as const;
+  await assert.rejects(service.action(report, { id: 'other-owner' }), { statusCode: 403 });
+  const foreign = createCodexExecution({ ...options, tenantId: 'other' }); t.after(() => foreign.close());
+  await assert.rejects(foreign.action(report, owner), { statusCode: 404 });
+  await service.action(report, owner);
+  assert.equal(db.readTaskCenter('default').executions[0].status, 'failed');
+  const revision = db.readTaskCenter('default').tasks[0].revision;
+  await Promise.all([service.action(report, owner), service.action(report, owner)]);
+  assert.equal(db.readTaskCenter('default').tasks[0].revision, revision);
+  await assert.rejects(service.action({ ...report, report: { ...report.report, output: '成功' } }, owner), { statusCode: 409 });
+  db.mutateTaskCenter('default', data => { data.executions[0].status = 'completed'; data.tasks[0].status = 'review'; });
+  await service.action(report, owner);
+  assert.equal(db.readTaskCenter('default').executions[0].status, 'failed');
+  assert.equal(db.readTaskCenter('default').tasks[0].status, 'error');
+});
+
 test('resumes the original thread without creating or renaming it, and routes consecutive turns correctly', async () => {
   const client = new FakeClient(), updates: RunnerUpdate[] = [], opened: string[] = [];
   const call = client.call.bind(client); let turnNumber = 0;

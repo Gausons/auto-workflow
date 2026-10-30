@@ -629,7 +629,13 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
             if (saved.resumeThreadId && report.threadId && saved.resumeThreadId !== report.threadId) throw httpError(409, '不能替换待恢复的 Codex 会话');
             if (saved.threadId && report.threadId !== undefined && saved.threadId !== report.threadId) throw httpError(409, '不能替换已绑定的 Codex 会话');
             if (saved.sessionId && report.sessionId !== undefined && saved.sessionId !== report.sessionId) throw httpError(409, '不能替换已绑定的 ACP 会话');
-            if (['completed', 'failed', 'interrupted'].includes(saved.status) && reportStatus !== saved.status) throw httpError(409, '执行已经结束');
+            // Compare effective results so a lost acknowledgement from an old
+            // connector can retry its end_turn/error report after normalization.
+            const incomingError = (report.agent ?? saved.agent) === 'codex' && (report.protocol ?? saved.protocol) === 'acp' && reportStatus === 'completed' && typeof (report.output ?? saved.output) === 'string'
+              ? codexProviderError(report.output ?? saved.output) : undefined;
+            const previousError = saved.agent === 'codex' && saved.protocol === 'acp' && saved.status === 'completed' ? codexProviderError(saved.output) : undefined;
+            const terminalStatus = previousError ? 'failed' : saved.status;
+            if (['completed', 'failed', 'interrupted'].includes(terminalStatus) && (incomingError ? 'failed' : reportStatus) !== terminalStatus) throw httpError(409, '执行已经结束');
             const patch: Partial<ExecutionRecord> & Record<string, unknown> = {};
             if (report.contextEvidenceError !== undefined) {
               if (!saved.conversationId || typeof report.contextEvidenceError !== 'string' || !report.contextEvidenceError.trim() || report.contextEvidenceError.length > 2000) throw httpError(400, '执行记录同步错误无效');
