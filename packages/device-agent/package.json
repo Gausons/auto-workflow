@@ -1,6 +1,6 @@
 {
   "name": "agent-workbench-connector",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Agent Workbench 开发机连接器：远端 Agent 执行、会话同步与 Git 分支管理",
   "type": "module",
   "license": "MIT",
