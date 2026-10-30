@@ -171,9 +171,16 @@ jobs:
           AGENT_VERSION: ${{ steps.agent.outputs.version }}
         run: |
           mkdir -p "$RUNNER_TEMP/agent-smoke"
-          pnpm --dir "$RUNNER_TEMP/agent-smoke" add "agent-workbench-connector@$AGENT_VERSION" --ignore-scripts --registry=https://registry.npmjs.org
+          # npm may acknowledge publication before the public registry serves it.
+          # Retry only the consumer install; never run npm publish again here.
+          for attempt in $(seq 1 12); do
+            if pnpm --dir "$RUNNER_TEMP/agent-smoke" add "agent-workbench-connector@$AGENT_VERSION" --ignore-scripts --registry=https://registry.npmjs.org; then break; fi
+            if [[ "$attempt" == 12 ]]; then echo 'Public installation could not be verified; do not republish this version.' >&2; exit 1; fi
+            sleep 10
+          done
           installed=$("$RUNNER_TEMP/agent-smoke/node_modules/.bin/agent-workbench-connector" --version)
           [[ "$installed" == "$AGENT_VERSION" ]]
+          "$RUNNER_TEMP/agent-smoke/node_modules/.bin/agent-workbench-connector" --help | grep -q -- '--status'
 
   deploy:
     name: Deploy production

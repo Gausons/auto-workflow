@@ -40,6 +40,7 @@ describe('DevicesPage', () => {
     const fetchMock = setup(['read', 'work.execute']);
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: '连接设备' }));
+    expect(screen.getByText(/设备上线后自动转入后台，可关闭终端/)).toBeTruthy();
     expect(screen.queryByLabelText('一键部署命令')).toBeNull();
     await user.click(screen.getByRole('button', { name: '生成并复制部署命令' }));
     const command = (await screen.findByLabelText('一键部署命令') as HTMLTextAreaElement).value;

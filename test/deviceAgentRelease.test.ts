@@ -20,6 +20,10 @@ test('agent publication is tag-only, gated by checks, isolated from production a
   assert.match(job, /publish "\$AGENT_ARCHIVE" --access public --tag latest --ignore-scripts --registry=https:\/\/registry.npmjs.org/);
   assert.doesNotMatch(job, /agent:pack|pnpm install|DEPLOY_SSH_KEY/);
   assert.match(job, /Verify public installation/);
+  const verification = job.split('- name: Verify public installation')[1]!;
+  assert.match(verification, /for attempt in \$\(seq 1 12\)/);
+  assert.match(verification, /--help \| grep -q -- '--status'/);
+  assert.doesNotMatch(verification, /" publish /);
   assert.equal(workflow.match(/secrets\.NPM_TOKEN/g)?.length, 1);
 });
 

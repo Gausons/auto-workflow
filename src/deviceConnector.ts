@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { homedir, hostname } from 'node:os';
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createAgentHistory } from './agentHistory/index.js';
@@ -194,7 +194,14 @@ export async function syncDeviceOnce({ request, history, deviceId, name, outputD
   return { sessions: catalog.sessions.length, received };
 }
 
-export async function runDeviceConnector({ environment = { ...process.env }, once = false, stateRoot = process.cwd() }: { environment?: Environment; once?: boolean; stateRoot?: string } = {}) {
+interface ConnectorOptions {
+  environment?: Environment; once?: boolean; stateRoot?: string; signal?: AbortSignal;
+  onStateDirectory?: (directory: string, identity: { origin: string; tenantId: string; userId: string }) => Promise<() => Promise<void>>;
+  onReady?: () => void | Promise<void>;
+}
+
+export async function runDeviceConnector({ environment = { ...process.env }, once = false, stateRoot = process.cwd(), signal, onStateDirectory, onReady }: ConnectorOptions = {}) {
+  signal?.throwIfAborted();
   const defaults = deviceConnectorDefaults(environment);
   if (defaults.execute && once) throw new Error('Agent 执行模式需要保持连接器运行；如需单次同步，请设置 WORKBENCH_EXECUTE_CODEX=false');
   if (!environment.WORKBENCH_URL) throw new Error('请设置 WORKBENCH_URL，连接参数见 README「多设备执行」');
@@ -214,15 +221,27 @@ export async function runDeviceConnector({ environment = { ...process.env }, onc
   const tenantId = record(identity.tenant).id, userId = record(identity.user).id;
   if (typeof tenantId !== 'string' || typeof userId !== 'string' || !Array.isArray(identity.permissions) || !identity.permissions.includes('work.execute')) throw new Error('接入设备需要操作员或管理员权限');
   const connectionIdentity = { origin: base.origin, tenantId, userId };
-  const stateDir = await resolveDeviceStateDirectory(environment, connectionIdentity, stateRoot);
-  await mkdir(stateDir, { recursive: true, mode: 0o700 });
+  const directory = await resolveDeviceStateDirectory(environment, connectionIdentity, stateRoot);
+  signal?.throwIfAborted();
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const stateDir = await realpath(directory);
   await bindDeviceConnection(stateDir, connectionIdentity);
+  const release = await onStateDirectory?.(stateDir, connectionIdentity);
+  try { await runAuthenticatedConnector({ environment, once, signal, onReady, defaults, base, token, stateDir }); }
+  finally { await release?.(); }
+}
+
+async function runAuthenticatedConnector({ environment, once, signal, onReady, defaults, base, token, stateDir }: {
+  environment: Environment; once: boolean; signal?: AbortSignal; onReady?: ConnectorOptions['onReady'];
+  defaults: ReturnType<typeof deviceConnectorDefaults>; base: URL; token: string; stateDir: string;
+}) {
   let deviceId;
   try { deviceId = (await readFile(path.join(stateDir, 'id'), 'utf8')).trim(); }
   catch (caught: unknown) { const error = asError(caught); if (error.code !== 'ENOENT') throw error; deviceId = randomUUID(); await writeFile(path.join(stateDir, 'id'), deviceId, { flag: 'wx', mode: 0o600 }); }
   const history = createAgentHistory({ environment, workspace: () => defaults.workspace });
   const delivery = createSessionDelivery({ history, environment });
   const stopping = new AbortController();
+  const abort = () => stopping.abort();
   let shuttingDown = false, heartbeatAgents = ['codex'];
   const request: Request = async (method, body, endpoint = '/api/task-center') => {
     const binary = body instanceof Uint8Array;
@@ -262,13 +281,17 @@ export async function runDeviceConnector({ environment = { ...process.env }, onc
   };
   const worker = defaults.execute ? new RemoteCodexWorker({ request: workerRequest, signal: stopping.signal, onPending: () => wakeControls(), deviceId, directory: path.join(stateDir, 'executions'), workspace: defaults.workspace, contextSource: { catalog: () => history.catalog(), delivery } }) : null;
   const stop = () => stopping.abort();
+  signal?.addEventListener('abort', abort, { once: true });
+  if (signal?.aborted) abort();
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
   console.log(`设备：${environment.WORKBENCH_DEVICE_NAME || hostname()}；模式：${worker ? '远程执行' : '仅同步'}；交接包目录：${outputDir}`);
   const reportError = (caught: unknown) => {
     const error = asError(caught);
     if ((typeof error.status === 'number' && [401, 403].includes(error.status)) || once) { stopping.abort(); throw error; }
-    console.error(`同步未完成：${error.message}；稍后重试`);
+    let message = error.message;
+    for (const secret of [token, environment.WORKBENCH_PASSWORD]) if (secret) message = message.replaceAll(secret, '[已隐藏]');
+    console.error(`同步未完成：${message}；稍后重试`);
   };
   const heartbeat = async () => {
     await request('POST', { action: 'heartbeat', deviceId, name: environment.WORKBENCH_DEVICE_NAME || hostname(), agents: heartbeatAgents,
@@ -292,8 +315,13 @@ export async function runDeviceConnector({ environment = { ...process.env }, onc
   };
   const loops: Promise<void>[] = [];
   try {
+    if (!once) {
+      stopping.signal.throwIfAborted();
+      await heartbeat();
+      stopping.signal.throwIfAborted();
+      await onReady?.();
+    }
     if (worker) {
-      try { await heartbeat(); } catch (error) { if (!stopping.signal.aborted) reportError(error); }
       loops.push(runDeviceControl({ signal: stopping.signal, work: () => worker.sync(false), git: () => worker.syncGit(), controls: () => worker.syncControls(), heartbeat,
         onControlsWake: wake => { wakeControls = wake; },
         onError: reportError,
@@ -308,6 +336,7 @@ export async function runDeviceConnector({ environment = { ...process.env }, onc
     await Promise.allSettled(loops);
     process.removeListener('SIGINT', stop);
     process.removeListener('SIGTERM', stop);
+    signal?.removeEventListener('abort', abort);
     shuttingDown = true;
     await worker?.shutdown();
   }

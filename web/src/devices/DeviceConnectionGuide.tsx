@@ -44,12 +44,12 @@ export function DeviceConnectionGuide({ username = '' }: { username?: string }) 
     </>}
     {expired && <p role="status">部署命令已过期，请重新生成。</p>}
     {copyError && command && <p role="alert">自动复制失败，请点击“复制部署命令”或选中上方命令手动复制。</p>}
-    <p className="tc-meta">适用于 macOS、Linux 和 Windows PowerShell。需已安装 Node.js 22.16+ 及已登录的 Agent。连接后保持终端运行。</p>
+    <p className="tc-meta">适用于 macOS、Linux 和 Windows PowerShell。需已安装 Node.js 22.16+ 及已登录的 Agent。设备上线后自动转入后台，可关闭终端。</p>
     <details className={styles.details}><summary>连接选项与使用说明</summary>
       <p>工作台：{location.origin} · 连接账号：{username || '当前账号'}。</p>
       <p>临时令牌有效期最长 10 分钟，重新生成会使旧命令失效。命令含一次性接入凭据，请勿分享；不会包含浏览器登录令牌，Google 账号也可直接接入。</p>
-      <p>兑换后的设备会话有效 24 小时，仅在进程内存中使用，不保存到文件。退出、过期或兑换失败后，请重新生成命令；不会自动重试兑换。</p>
-      <p>默认使用用户主目录，允许远程执行并同步历史摘要。已在运行的连接器请先按 Ctrl+C 退出，再执行本命令。</p>
+      <p>兑换后的设备会话有效 24 小时，仅在后台进程内存中使用，不保存到文件。停止、过期或兑换失败后，请重新生成命令；不会自动重试兑换，也不会在重启电脑后自动启动。</p>
+      <p>默认使用用户主目录，允许远程执行并同步历史摘要。终端会显示日志路径和停止命令；使用 <code>npx --yes agent-workbench-connector@latest --status</code> 查看状态，使用 <code>--stop 连接标识</code> 正常停止。旧版前台连接器请先按 Ctrl+C 退出。</p>
       <a href="/docs/devices" target="_blank" rel="noreferrer">查看高级配置与 Agent 安装说明 ↗</a>
     </details>
     {['localhost', '127.0.0.1', '[::1]'].includes(location.hostname) && <p className="tc-callout">当前地址仅适用于本机。跨设备使用时，请先通过开发机能够访问的工作台 HTTPS 地址打开本页，再生成命令。</p>}
