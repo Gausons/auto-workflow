@@ -4,6 +4,7 @@ import { taskContent } from '../shared/taskContent.js';
 import { gitBranches, switchGitBranch, decodeAttachments, saveAttachments } from './taskWorkspace.js';
 import { readFile, realpath, stat, rm } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
+import { codexProviderError } from './agentExecutionError.js';
 import { CodexDesktopBridge, readDesktopTerminal } from './codexDesktopBridge.js';
 import { CodexAppServer } from './codexAppServer.js';
 import { AcpPreferredRunner, AcpTaskRunner, AgentRunnerSet, configuredAcpAgents } from './acpAgent.js';
@@ -354,6 +355,8 @@ export class CodexRunner {
 }
 
 export function recordExecution(data: TaskCenterData, job: RunnerJob) {
+      const error = job.agent === 'codex' && job.protocol === 'acp' && job.status === 'completed' ? codexProviderError(job.output) : undefined;
+      if (error) job = { ...job, status: 'failed', message: error };
       const saved = data.executions?.find((item) => item.id === job.id); if (!saved) return;
       const previous = saved.status;
       Object.assign(saved, job);
@@ -366,8 +369,9 @@ export function recordExecution(data: TaskCenterData, job: RunnerJob) {
       }
       if (nativeSessionId && !job.historySessionId && !job.conversationId) {
         const agent = job.agent || 'codex';
-        const id = createHash('sha256').update(`agent-execution:${agent}:${nativeSessionId}`).digest('hex');
-        let session = data.sessions.find((item) => item.id === id);
+        const deviceId = job.deviceId || 'local';
+        let session = data.sessions.find(item => ['agentExecution', 'codexExecution'].includes(item.source || '') && item.deviceId === deviceId && item.agent === agent && item.nativeId === nativeSessionId);
+        const id = session?.id || createHash('sha256').update(JSON.stringify(['agent-execution', deviceId, agent, nativeSessionId])).digest('hex');
         const newlyCreated = !session;
         if (!session) { session = { id, source: 'agentExecution', deviceId: job.deviceId || 'local', agent, agentLabel: job.agentLabel || (agent === 'codex' ? 'Codex' : agent), nativeId: nativeSessionId, title: job.title, cwd: job.cwd, partial: true, protocol: job.protocol || 'legacy', createdAt: job.createdAt || timestamp(), updatedAt: job.updatedAt || timestamp() }; data.sessions.push(session); }
         Object.assign(session, { createdAt: session.createdAt || job.createdAt, sourceSessionId: job.sourceSessionId || null, status: job.status, updatedAt: job.updatedAt, excerpt: `${job.prompt}\n\n${job.output || ''}` });

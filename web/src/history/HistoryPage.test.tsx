@@ -115,6 +115,18 @@ describe('HistoryPage', () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([path]) => String(path).includes('agent=codex') && String(path).includes('q=%E5%9B%9E%E5%BD%92'))).toBe(true));
   });
 
+  it('shows execution failures beside synced user messages without reporting success', async () => {
+    const remote = { ...session, deviceId: 'remote', status: 'failed', recordMode: 'synced', executionError: 'model_not_found: <script>模型不支持</script>', syncedRange: { format: 2, offset: 0, total: 1, sourcePartial: false, truncated: false } };
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(path.startsWith('/api/agent-sessions?') ? { ...list, sessions: [remote] }
+      : path.startsWith(`/api/agent-sessions/${id}`) ? { session: remote, messages: [{ role: 'user', text: '你好' }], total: 1 }
+        : { permissions: ['read'] }), { status: 200 }))));
+    renderHistory(`#history/${id}`);
+    expect((await screen.findByRole('alert')).textContent).toContain('本轮执行失败：model_not_found');
+    expect(await screen.findByText('你好')).toBeTruthy();
+    expect(document.querySelector('script')).toBeNull();
+    expect(screen.queryByText(/来源连接器仍在同步旧版/)).toBeNull();
+  });
+
   it.each([true, false])('labels remote excerpts without reporting corrupt records (has excerpt: %s)', async hasExcerpt => {
     const remote = { ...session, deviceId: 'remote', partial: true, recordMode: 'excerpt', messageCount: hasExcerpt ? 1 : 0 };
     vi.stubGlobal('fetch', vi.fn().mockImplementation((path: string) => Promise.resolve(new Response(JSON.stringify(path.startsWith('/api/agent-sessions?') ? { ...list, sessions: [remote] }
@@ -122,7 +134,7 @@ describe('HistoryPage', () => {
         : { permissions: ['read'] }), { status: 200 }))));
     renderHistory(`#history/${id}`);
 
-    expect(await screen.findByText(hasExcerpt ? /来源连接器仍在同步旧版文本摘要/ : /尚未同步远程会话正文/)).toBeTruthy();
+    expect(await screen.findByText(hasExcerpt ? /此会话当前只有文本摘要/ : /尚未同步远程会话正文/)).toBeTruthy();
     expect(await screen.findByRole('button', { name: hasExcerpt ? /仅同步摘要/ : /正文未同步/ })).toBeTruthy();
     expect(screen.getByText(hasExcerpt ? '已显示同步摘要 · 非完整历史' : '暂无同步摘要')).toBeTruthy();
     expect(screen.queryByText(/部分记录损坏/)).toBeNull();

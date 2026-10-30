@@ -7,6 +7,8 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as acp from '@agentclientprotocol/sdk';
 import { httpError } from './rbac.js';
+import { resolveCodexExecutable } from './codexExecutable.js';
+import { codexProviderError } from './agentExecutionError.js';
 import type { AgentProject, Execution, ExecutionStatus, PromptImageReference } from '../shared/taskTypes.js';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { Environment } from './issueSources/types.js';
@@ -89,6 +91,7 @@ function childEnvironment(agent: string, environment: Environment): Environment 
   const result = { ...environment };
   // The official Codex adapter otherwise starts conservatively in read-only mode.
   if (agent === 'codex' && !result.INITIAL_AGENT_MODE) result.INITIAL_AGENT_MODE = 'agent';
+  if (agent === 'codex' && !result.CODEX_PATH) result.CODEX_PATH = resolveCodexExecutable({ environment });
   return result;
 }
 
@@ -380,10 +383,11 @@ export class AcpTaskRunner {
       }
       acceptingUpdates = true; promptDispatched = true;
       void connection.prompt(job.prompt!, job.promptImages, job.contextMarkdownPath).then((result) => {
-        const status = result.stopReason === 'end_turn' ? 'completed' : result.stopReason === 'cancelled' ? 'interrupted' : 'failed';
-        this.publish(job, { status, request: null, ...(job.promptImages?.length ? { contextImageDelivery: connection.supportsImages?.() ? 'native' : 'file-reference' } : {}), message: status === 'completed' ? 'ACP 本轮执行完成' : `ACP 执行结束：${result.stopReason}` });
+        const error = agent === 'codex' ? codexProviderError(job.output) : undefined;
+        const status = error ? 'failed' : result.stopReason === 'end_turn' ? 'completed' : result.stopReason === 'cancelled' ? 'interrupted' : 'failed';
+        this.publish(job, { status, request: null, ...(job.promptImages?.length ? { contextImageDelivery: connection.supportsImages?.() ? 'native' : 'file-reference' } : {}), message: error || (status === 'completed' ? 'ACP 本轮执行完成' : `ACP 执行结束：${result.stopReason}`) });
         this.connections.delete(job.id);
-        if (job.conversationId) this.retained.set(session.sessionId, connection); else connection.close();
+        if (job.conversationId && status === 'completed') this.retained.set(session.sessionId, connection); else { this.retained.delete(session.sessionId); connection.close(); }
       }).catch((error: unknown) => {
         this.publish(job, { status: 'unknown', request: null, message: asError(error).message });
         this.retained.delete(session.sessionId); this.connections.delete(job.id); connection.close();

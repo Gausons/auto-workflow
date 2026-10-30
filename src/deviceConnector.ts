@@ -279,7 +279,7 @@ async function runAuthenticatedConnector({ environment, once, signal, onReady, d
     }
     return request(method, body, method === 'GET' && !endpoint ? `/api/task-center/device-state?${deviceParams}` : endpoint);
   };
-  const worker = defaults.execute ? new RemoteCodexWorker({ request: workerRequest, signal: stopping.signal, onPending: () => wakeControls(), deviceId, directory: path.join(stateDir, 'executions'), workspace: defaults.workspace, contextSource: { catalog: () => history.catalog(), delivery } }) : null;
+  const worker = defaults.execute ? new RemoteCodexWorker({ environment, request: workerRequest, signal: stopping.signal, onPending: () => wakeControls(), deviceId, directory: path.join(stateDir, 'executions'), workspace: defaults.workspace, contextSource: { catalog: () => history.catalog(), delivery } }) : null;
   const stop = () => stopping.abort();
   signal?.addEventListener('abort', abort, { once: true });
   if (signal?.aborted) abort();

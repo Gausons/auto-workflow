@@ -117,6 +117,7 @@ export interface Session {
   cwd: string;
   status?: string;
   excerpt?: string;
+  executionError?: string;
   recordMode?: 'excerpt' | 'synced';
   remoteHistory?: RemoteHistory;
   syncedRange?: Omit<RemoteHistory, 'messages'>;

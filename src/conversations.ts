@@ -13,6 +13,7 @@ import { httpError } from './rbac.js';
 import { remoteContinuationProject } from './remoteSession.js';
 import { paginateHistoryTurns } from './historyPagination.js';
 import { remoteHistorySummary } from './remoteHistory.js';
+import { executionSession, sameNativeSession, sessionExecutionResult } from './sessionIdentity.js';
 import { verifyBundle, verifySnapshot } from '@auto-workflow/context-engine';
 import { detachSnapshot, restoreDetachedSnapshot, verifyDetachedManifest, type DetachedManifest } from '@auto-workflow/context-engine/detached-bundle';
 
@@ -176,7 +177,9 @@ export function createConversations({ database, tenantId, history, delivery, exe
       const catalog = await history.catalog(), data = read();
       const continued = data.sessions.filter(session => session.source === 'conversation');
       const nativeKeys = new Set(continued.filter(session => session.nativeId).map(session => `${session.deviceId}:${session.agent}:${session.nativeId}`));
-      const remote = data.sessions.filter(session => session.deviceId !== 'local' && session.source !== 'conversation' && !nativeKeys.has(`${session.deviceId}:${session.agent}:${session.nativeId}`));
+      const remote = data.sessions.filter(session => session.deviceId !== 'local' && session.source !== 'conversation' && !nativeKeys.has(`${session.deviceId}:${session.agent}:${session.nativeId}`))
+        .filter(session => !executionSession(session) || !data.sessions.some(other => other.source !== 'conversation' && !executionSession(other) && sameNativeSession(session, other)))
+        .map(session => sessionExecutionResult(session, data));
       const added = [...continued, ...remote].map(session => ({ ...remoteHistorySummary(session), recordMode: session.source === 'conversation' ? undefined : session.recordMode === 'synced' ? 'synced' as const : 'excerpt' as const, sessionId: session.nativeId, workspaces: session.cwd ? [session.cwd] : [], model: session.model || '', branch: session.branch || '', messageCount: session.source === 'conversation' ? currentMessages(data, session.id).length : session.syncedRange?.total ?? (session.excerpt ? 1 : 0) }));
       const sessions = [...catalog.sessions.filter(session => !nativeKeys.has(`local:${session.agent}:${session.sessionId}`)), ...added];
       const providers = [...(catalog.providers || [])];
@@ -202,8 +205,10 @@ export function createConversations({ database, tenantId, history, delivery, exe
     },
     remoteDetail(id: string, params = new URLSearchParams()) {
       const data = read();
-      const s = data.sessions.find(session => session.id === id && session.deviceId !== 'local' && session.source !== 'conversation');
-      if (!s) return null;
+      const source = data.sessions.find(session => session.id === id && session.deviceId !== 'local' && session.source !== 'conversation');
+      if (!source) return null;
+      const body = executionSession(source) ? data.sessions.find(other => !executionSession(other) && other.source !== 'conversation' && sameNativeSession(source, other)) || source : source;
+      const s = sessionExecutionResult(body, data);
       const offset = Number(params.get('offset') || 0), limit = Number(params.get('limit') || 100);
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw httpError(400, '分页参数无效');
       if (s.recordMode === 'synced') {

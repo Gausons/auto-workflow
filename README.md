@@ -233,7 +233,9 @@ ACP_CLAUDE_ARGS=[]
 
 `LOCAL_EXECUTION_ENABLED=false` 表示服务器仅运行工作台：不探测或启动本地 Agent，设备页隐藏该服务设备卡片，远端连接器同步、排队执行和历史读取保持可用。该部署开关对所有账号生效，账号配置不能覆盖；默认启用本地执行。云端部署脚本显式关闭此开关，并兼容旧部署的 `ACP_ENABLED=false` 与 `CODEX_EXECUTABLE=/nonexistent/codex` 组合。其他错误的可执行文件路径仍按真实故障报告。
 
-Codex 会话通过 `model/list` 动态读取桌面端的完整模型目录和默认模型，不维护静态白名单。macOS 会优先使用 Codex / ChatGPT 桌面端内置的 Codex 可执行文件（包括 `Resources/codex-cli/bin/codex`）；旧配置若仍指向同一桌面应用的 `Resources/codex`，且该文件已迁移，会自动解析到新位置。若 ACP 适配器尚未支持桌面端新增的模型，选择该模型的会话会使用原生 Codex 通道执行。如需固定其他安装，可通过 `CODEX_EXECUTABLE` 显式覆盖。新建任务时沿用默认模型也可以单独调整该模型支持的思考强度。
+Codex 会话通过 `model/list` 动态读取桌面端的完整模型目录和默认模型，不维护静态白名单。macOS 会优先使用 Codex / ChatGPT 桌面端内置的 Codex 可执行文件（包括 `Resources/codex-cli/bin/codex`）；旧配置若仍指向同一桌面应用的 `Resources/codex`，且该文件已迁移，会自动解析到新位置。ACP 适配器通过 `CODEX_PATH` 使用同一 Codex 安装，避免其自带旧 CLI 与桌面端模型不一致；显式 `CODEX_PATH` 仍优先。如需固定其他安装，可通过 `CODEX_EXECUTABLE` 覆盖。本机与远端连接器均同步模型目录；若 ACP 适配器尚未支持所选模型，会在发送指令前选择原生 Codex 通道。发送后遇到模型拒绝等错误会保留失败状态，不自动重试或切换通道。新建任务时沿用默认模型也可以单独调整该模型支持的思考强度。
+
+同一设备、Agent 和原生会话 ID 的执行摘要与连接器历史会在列表中合并展示，优先显示同步正文；原任务关联、会话链接及来源记录保留。已知 ACP 旧适配器将模型拒绝包装成正常结束的记录会在读取时显示为失败，不重发指令；只有用户消息的同步正文也会显示对应执行错误。
 
 历史会话默认读取 `CODEX_HOME/sessions`、`CODEX_HOME/archived_sessions` 和 `~/.claude/projects`。可覆盖为指定目录：
 
@@ -280,7 +282,7 @@ agent-workbench-connector --env-file ./agent.env
 
 配置文件方式的 `agent-workbench-connector` 默认读取 `~/.bugflow/agent.env`（存在时），支持 `--env-file`、`--help`、`--version` 和仅同步模式的 `--once`；一键连接支持后台状态查看 `--status`、正常停止 `--stop <连接标识>` 与前台排查 `--foreground`。已有环境变量优先，不自动读取当前目录的 `.env`。默认设备状态位于 `~/.workflow-data/devices/<连接标识>/`，从不同目录启动不会改变设备身份。迁移已有连接器时，先正常停止旧进程，再将 `WORKBENCH_DEVICE_DIR` 指向旧状态目录的绝对路径以保留身份和执行日志；不要同时运行两个处理同一设备的进程。升级包不会删除设备状态。
 
-维护者运行 `pnpm agent:pack` 生成 `dist/device-agent/agent-workbench-connector-0.3.2.tgz`；CI 也保存独立安装包供下载。构建只复用已有 Vite 和 ACP SDK，不发布整个工作台，不包含 `.env`、数据库和本地会话。npm 发布由 `agent-vX.Y.Z` 标签触发，完整 CI 通过后发布同一次构建的安装包，普通构建不会发布。配置见下文“连接器 npm 发布”，包说明见 [device-agent](packages/device-agent/README.md)。仓库开发仍统一使用 pnpm，页面的 npx 命令用于开发机运行发行包。
+维护者运行 `pnpm agent:pack` 生成 `dist/device-agent/agent-workbench-connector-0.3.3.tgz`；CI 也保存独立安装包供下载。构建只复用已有 Vite 和 ACP SDK，不发布整个工作台，不包含 `.env`、数据库和本地会话。npm 发布由 `agent-vX.Y.Z` 标签触发，完整 CI 通过后发布同一次构建的安装包，普通构建不会发布。配置见下文“连接器 npm 发布”，包说明见 [device-agent](packages/device-agent/README.md)。仓库开发仍统一使用 pnpm，页面的 npx 命令用于开发机运行发行包。
 
 ### 从源码启动连接器（开发调试）
 

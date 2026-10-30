@@ -32,6 +32,14 @@ describe('TaskPage', () => {
     expect(screen.queryByRole('button', { name: '继续任务' })).toBeNull();
   });
 
+  it('keeps the task session link while opening synced history and showing an execution failure', async () => {
+    setup(['work.execute'], { ...snapshot, tasks: [{ ...task, status: 'error', sessionIds: ['execution-session'] }], sessions: [{ id: 'execution-session', historyId: 'synced-history', source: 'agentExecution', deviceId: 'remote', agent: 'codex', title: '失败会话', cwd: '/repo', status: 'failed', executionError: '当前执行通道不支持模型', updatedAt: task.updatedAt }] });
+    await screen.findByText('失败会话');
+    expect(screen.getByRole('link', { name: '打开会话 / 切换 Agent', hidden: true }).getAttribute('href')).toBe('#history/synced-history');
+    expect(screen.getByText('本轮执行失败：当前执行通道不支持模型')).toBeTruthy();
+    expect(screen.queryByText('本轮已完成')).toBeNull();
+  });
+
   it('updates with the current revision and never retries a conflict', async () => {
     const fetchMock = setup(['work.execute'], snapshot, 409);
     const user = userEvent.setup();

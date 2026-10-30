@@ -38,6 +38,7 @@ interface RemoteRunner {
   close(): void;
 }
 interface WorkerOptions {
+  environment?: NodeJS.ProcessEnv;
   request: Request;
   onPending?: () => void;
   signal?: AbortSignal;
@@ -62,7 +63,7 @@ export class RemoteCodexWorker {
   private invoked = new Set<string>();
   private selections = new Set<string>();
 
-  constructor({ request, signal, onPending, deviceId, directory, workspace, runnerFactory, directoryPicker = root => pickNativeDirectory(root, signal), contextSource }: WorkerOptions) {
+  constructor({ request, signal, onPending, deviceId, directory, workspace, runnerFactory, directoryPicker = root => pickNativeDirectory(root, signal), contextSource, environment = process.env }: WorkerOptions) {
     this.request = request; this.deviceId = deviceId; this.directory = directory; this.workspace = workspace; this.directoryPicker = directoryPicker; this.contextSource = contextSource;
     this.signal = signal;
     this.pending = new Map(); this.saved = new Map(); this.published = new Set(); this.queue = Promise.resolve(); this.loaded = false;
@@ -74,12 +75,12 @@ export class RemoteCodexWorker {
       }).catch((error: unknown) => { this.storageError = error; });
     };
     this.runner = (runnerFactory ? runnerFactory(update) : (() => {
-      const fallback = new CodexRunner({ executable: process.env.CODEX_EXECUTABLE || 'codex', onUpdate: update, desktopOpener: async () => {} });
-      const codex = new AcpTaskRunner({ agent: 'codex', environment: process.env, onUpdate: update,
+      const fallback = new CodexRunner({ executable: environment.CODEX_EXECUTABLE || 'codex', environment, onUpdate: update, desktopOpener: async () => {} });
+      const codex = new AcpTaskRunner({ agent: 'codex', environment, onUpdate: update,
         threadNamer: async (threadId: string, name: string) => (await fallback.connect()).call('thread/name/set', { threadId, name }) });
-      const entries: Array<[string, AcpPreferredRunner | AcpTaskRunner]> = [['codex', new AcpPreferredRunner({ primary: codex, fallback })]];
-      for (const agent of configuredAcpAgents(process.env)) {
-        if (agent !== 'codex') entries.push([agent, new AcpTaskRunner({ agent, environment: process.env, onUpdate: update })]);
+      const entries: Array<[string, AcpPreferredRunner | AcpTaskRunner]> = [['codex', new AcpPreferredRunner({ primary: codex, fallback, synchronizeModels: true })]];
+      for (const agent of configuredAcpAgents(environment)) {
+        if (agent !== 'codex') entries.push([agent, new AcpTaskRunner({ agent, environment, onUpdate: update })]);
       }
       return new AgentRunnerSet(entries);
     })()) as RemoteRunner;

@@ -17,6 +17,7 @@ import { contextPrompt, freezeContext, readContext } from '../src/contextCompile
 import { permissionForRoute } from '../src/rbac.js';
 import { syncDeviceOnce } from '../src/deviceConnector.js';
 import { contextEntryText } from '../shared/contextContent.js';
+import { applyTaskCenterDelta } from '../shared/taskCenterSync.js';
 type ExecutionOptions = Parameters<typeof createCodexExecution>[0];
 type Update = Parameters<NonNullable<ExecutionOptions['runnerFactory']>>[0];
 type RunnerJob = Parameters<Update>[0];
@@ -79,6 +80,57 @@ test('remote history identifies excerpts for existing records without changing t
   assert.equal(foreign.remoteDetail('remote-excerpt'), null);
   assert.equal((await foreign.historyList()).sessions.length, 0);
   assert.equal(f.launched.length, 0);
+});
+
+test('execution and synced native history appear once, retain task links and show the failed execution beside structured messages', async t => {
+  const f = await fixture(t);
+  const nativeId = randomUUID(), executionId = randomUUID(), owner = { id: 'owner' };
+  const center = createTaskCenter({ database: f.database, tenantId: 'default', history: f.history });
+  await center.command({ action: 'heartbeat', deviceId: 'remote', name: '远端', agents: ['codex', 'claude'], sessions: [
+    { nativeId, agent: 'codex', title: '你好', cwd: f.root, remoteHistory: { format: 2, offset: 0, total: 1, sourcePartial: false, truncated: false, messages: [{ role: 'user', text: '你好' }] } },
+    { nativeId, agent: 'claude', title: '不同 Agent 的会话', cwd: f.root }
+  ] }, owner);
+  const imported = f.database.readTaskCenter('default').sessions.find(item => item.nativeId === nativeId && item.agent === 'codex')!;
+  const { taskId } = await center.command({ action: 'create', title: '你好' }, owner);
+  assert.ok(taskId);
+  const syntheticId = 'e'.repeat(64);
+  f.database.mutateTaskCenter('default', data => {
+    data.sessions.push({ id: syntheticId, nativeId, deviceId: 'remote', agent: 'codex', source: 'agentExecution', title: '你好', cwd: f.root, status: 'failed', excerpt: '你好\n\n模型不支持', updatedAt: new Date().toISOString() });
+    data.tasks.find(item => item.id === taskId)!.sessionIds.push(syntheticId);
+    data.executions.push({ id: executionId, taskId, contextVersion: 1, deviceId: 'remote', agent: 'codex', protocol: 'acp', sessionId: nativeId, title: '你好', prompt: '你好', cwd: f.root, status: 'failed', message: '当前执行通道不支持该模型', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  });
+  const listed = (await f.service.historyList()).sessions.filter(item => item.sessionId === nativeId);
+  assert.equal(listed.length, 2, 'one entry per Agent; execution/history aliases must collapse');
+  const codex = listed.find(item => item.agent === 'codex')!;
+  assert.equal(codex.id, imported.id); assert.ok('recordMode' in codex); assert.equal(codex.recordMode, 'synced'); assert.equal(codex.status, 'failed');
+  const detail = f.service.remoteDetail(imported.id)!;
+  assert.deepEqual(detail.messages.map(item => item.text), ['你好']);
+  assert.equal(detail.session.status, 'failed'); assert.match(detail.session.executionError || '', /不支持该模型/);
+  assert.equal(f.service.remoteDetail(syntheticId)?.session.id, imported.id, 'existing execution links resolve to synced messages');
+  const snapshot = await center.snapshot();
+  assert.deepEqual(snapshot.tasks.find(item => item.id === taskId)?.sessionIds, [syntheticId]);
+  assert.equal(snapshot.sessions.find(item => item.id === syntheticId)?.historyId, imported.id);
+  assert.equal(f.database.readTaskCenter('default').sessions.filter(item => item.nativeId === nativeId && item.agent === 'codex').length, 2, 'source rows and existing IDs are retained');
+  assert.equal(f.launched.length, 0);
+  const foreign = createConversations({ ...f.options, tenantId: 'other', history: { catalog: async () => ({ sessions: [] }) } });
+  assert.equal(foreign.remoteDetail(imported.id), null);
+  const before = await center.snapshot();
+  f.database.mutateTaskCenter('default', data => {
+    const execution = data.executions.find(item => item.id === executionId)!;
+    execution.status = 'completed';
+    execution.output = JSON.stringify({ type: 'error', status: 400, error: { type: 'invalid_request_error', code: 'model_not_found', message: 'Model is not supported' } });
+    data.tasks.find(item => item.id === taskId)!.status = 'review';
+  });
+  const after = await center.snapshot();
+  assert.equal(after.tasks.find(item => item.id === taskId)?.status, 'error', 'old false completions are corrected without rerunning');
+  assert.equal(after.executions.find(item => item.id === executionId)?.status, 'failed');
+  assert.equal(f.database.readTaskCenter('default').executions.find(item => item.id === executionId)?.status, 'completed', 'read projection preserves the original execution record');
+  const delta = await center.changes(before.syncVersion || 0);
+  assert.equal(delta.reset, false);
+  const patched = applyTaskCenterDelta(before, delta);
+  assert.deepEqual(patched.tasks, after.tasks);
+  assert.deepEqual([...patched.sessions].sort((a, b) => a.id.localeCompare(b.id)), [...after.sessions].sort((a, b) => a.id.localeCompare(b.id)));
+  assert.match(f.service.remoteDetail(imported.id)?.session.executionError || '', /not supported/);
 });
 
 test('connector history renders the same structured messages as local history and isolates preview bodies', async t => {

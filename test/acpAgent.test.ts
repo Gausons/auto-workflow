@@ -34,6 +34,31 @@ test('enumerates built-in and configured ACP Agents without duplicate targets', 
   assert.equal(starts.length, 1); set.close();
 });
 
+test('Codex ACP starts the configured Codex installation and preserves an explicit adapter override', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'acp-codex-environment-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const sdk = pathToFileURL(path.resolve('node_modules/@agentclientprotocol/sdk/dist/acp.js')).href;
+  const fixture = path.join(root, 'adapter.mjs');
+  await writeFile(fixture, `
+    import { Readable, Writable } from 'node:stream';
+    import * as acp from ${JSON.stringify(sdk)};
+    acp.agent({ name: 'fixture' }).onRequest(acp.methods.agent.initialize, () => ({
+      protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: {}, authMethods: [],
+      agentInfo: { name: process.env.CODEX_PATH || 'unset', version: process.env.INITIAL_AGENT_MODE || 'unset' }
+    })).connect(acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin)));
+  `);
+  for (const [environment, expected] of [
+    [{ CODEX_EXECUTABLE: '/explicit/desktop codex' }, '/explicit/desktop codex'],
+    [{ CODEX_EXECUTABLE: '/explicit/codex', CODEX_PATH: '/custom/adapter codex' }, '/custom/adapter codex']
+  ] as const) {
+    const connection = new AcpAgentConnection({ agent: 'codex', launch: { command: process.execPath, args: [fixture] }, environment });
+    try {
+      const initialized = await connection.initialize();
+      assert.equal(initialized.agentInfo?.name, expected); assert.equal(initialized.agentInfo?.version, 'agent');
+    } finally { connection.close(); }
+  }
+});
+
 test('performs a real ACP v1 initialize, session/new, session/prompt and update exchange', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'bugflow-acp-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -172,6 +197,33 @@ test('Codex ACP task sessions are named and opened in the desktop client', async
   assert.equal(fake.promptImages, 1);
   assert.equal(updates.some(job => job.contextImageDelivery === 'file-reference'), true);
   assert.equal(updates.some(job => job.desktopOpened === true), true);
+});
+
+test('Codex provider errors returned as an ACP end_turn are failures and never trigger a second execution', async () => {
+  const failure = JSON.stringify({ type: 'error', status: 400, error: { type: 'invalid_request_error', code: 'model_not_found', message: "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account." } });
+  class ErrorConnection extends EventEmitter {
+    closed = false; promptStarted = false; prompts = 0;
+    async initialize() {}
+    async newSession() { return { sessionId: 'error-native' }; }
+    async configure() { return []; }
+    async prompt() {
+      this.promptStarted = true; this.prompts++;
+      for (const text of ['Warning: Model metadata for `gpt-6.1-sol` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\n\n', failure.slice(0, 40), failure.slice(40)]) {
+        this.emit('update', { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } });
+      }
+      return { stopReason: 'end_turn' };
+    }
+    close() { this.closed = true; }
+  }
+  const updates: Execution[] = [], connection = new ErrorConnection();
+  const runner = new AcpTaskRunner({ agent: 'codex', connectionFactory: () => connection, environment: {}, onUpdate: job => updates.push(job) });
+  const job = { id: 'provider-error', agent: 'codex', protocol: 'acp', cwd: '/repo', prompt: '你好', status: 'queued' };
+  await runner.start(job); await new Promise(resolve => setImmediate(resolve)); await runner.start(job);
+  assert.equal(updates.at(-1)?.status, 'failed');
+  assert.match(updates.at(-1)?.message || '', /model.*not supported/);
+  assert.equal(updates.some(update => update.status === 'completed'), false);
+  assert.equal(connection.prompts, 1); assert.equal(connection.closed, true);
+  runner.close();
 });
 
 test('managed ACP conversations reuse live sessions and load after reconnect without replaying old output', async t => {

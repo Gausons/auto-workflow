@@ -74,6 +74,7 @@ function SessionItem({ session, data, canEdit, open }: { session: Session; data:
   const device = data.devices.find(item => item.id === session.deviceId);
   return <details className="tc-session-thread" open={expanded} onToggle={event => setExpanded(event.currentTarget.open)}><summary><strong>{session.title || '会话来源暂不可用'}</strong><span className="tc-meta">{device?.name || '未知设备'} / {session.agentLabel || session.agent || '未知 Agent'} · {executionLabels[session.status || ''] || '历史会话'}{device?.online === false ? ' · 设备离线' : ''}{session.partial ? ' · 部分记录' : ''}</span></summary>
     <div className="tc-thread-content"><p className="tc-meta">{session.cwd || '未记录工作目录'}{session.sourceSessionId ? ` · 接续自 ${data.sessions.find(value => value.id === session.sourceSessionId)?.title || session.sourceSessionId}` : ''}</p>
+      {session.executionError && <p role="alert">本轮执行失败：{session.executionError}</p>}
       {expanded ? <SessionRecords session={session} /> : session.excerpt ? <pre>{session.excerpt}</pre> : <p className="tc-meta">展开后读取原始会话</p>}
       {canEdit && <div className="tc-actions"><a className="button secondary" href={`#history/${session.historyId || session.id}`}>打开会话 / 切换 Agent</a>{session.source !== 'conversation' && <button className="button secondary" type="button" onClick={() => open({ kind: 'unlink', id: session.id })}>解除关联</button>}<button className="button secondary" type="button" onClick={() => open({ kind: 'move', id: session.id })}>移动到其他任务</button></div>}
     </div>

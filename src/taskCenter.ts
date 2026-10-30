@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { taskContent, taskTitle } from '../shared/taskContent.js';
 import { hostname } from 'node:os';
 import { localExecutionEnabled } from './localExecution.js';
+import { executionSession, nativeSessionKey, sameNativeSession, sessionExecutionResult, executionResult } from './sessionIdentity.js';
 import { httpError } from './rbac.js';
 import { validateRemoteHistory, remoteHistorySummary } from './remoteHistory.js';
 import { sortTasks, taskCenterDelta, type TaskCenterChangeIds } from '../shared/taskCenterSync.js';
@@ -82,10 +83,19 @@ export function createTaskCenter({ database, tenantId, history, environment = {}
     };
   }
   function snapshot(local: LocalCatalog, data = database.readTaskCenter(tenantId)): TaskCenterData {
-    const synthetic = new Set(data.sessions.filter(s => ['codexExecution', 'agentExecution', 'conversation'].includes(s.source || '')).map(s => `${s.deviceId}:${s.nativeId}`));
-    const sessions = [...local.sessions.filter(s => !synthetic.has(`local:${s.nativeId}`)), ...data.sessions.filter(s => ['codexExecution', 'agentExecution', 'conversation'].includes(s.source || '') || !synthetic.has(`${s.deviceId}:${s.nativeId}`)).map(s => ['codexExecution', 'agentExecution', 'conversation'].includes(s.source || '') && s.source !== 'conversation' && s.deviceId === 'local' ? { ...s, historyId: local.sessions.find(l => l.nativeId === s.nativeId)?.historyId } : s)];
+    const synthetic = new Set(data.sessions.filter(s => s.nativeId && (executionSession(s) || s.source === 'conversation')).map(nativeSessionKey));
+    const sessions = [...local.sessions.filter(s => !synthetic.has(nativeSessionKey(s))), ...data.sessions.filter(s => executionSession(s) || s.source === 'conversation' || !synthetic.has(nativeSessionKey(s))).map(s => {
+      if (!executionSession(s)) return s;
+      const imported = [...local.sessions, ...data.sessions].find(other => !executionSession(other) && other.source !== 'conversation' && sameNativeSession(s, other));
+      return { ...s, historyId: imported?.historyId || imported?.id };
+    })].map(s => sessionExecutionResult(s, data));
+    const executions = (data.executions || []).map(executionResult);
     return { ...data, devices: [local.device, ...data.devices].map(d => ({ ...d, online: online(d), cardHidden: data.hiddenDeviceIds?.includes(d.id) || false })),
-      sessions: sessions.map(remoteHistorySummary), tasks: sortTasks(data.tasks.map(task => ({ ...task, content: taskContent(task) }))) };
+      executions, sessions: sessions.map(remoteHistorySummary), tasks: sortTasks(data.tasks.map(task => {
+        const latest = executions.filter(job => job.taskId === task.id).at(-1);
+        const corrected = latest?.status === 'failed' && data.executions?.find(job => job.id === latest.id)?.status === 'completed' && task.status === 'review';
+        return { ...task, ...(corrected ? { status: 'error' as const } : {}), content: taskContent(task) };
+      })) };
   }
   async function command(rawInput: unknown, actor: Actor) {
     if (!isRecord(rawInput)) throw httpError(400, '请求必须是对象');
@@ -272,7 +282,12 @@ export function createTaskCenter({ database, tenantId, history, environment = {}
     changes: async (since: number) => {
       const local = await catalog();
       const change = database.readTaskCenterChanges?.(tenantId, since);
-      return taskCenterDelta(snapshot(local, change?.data), since, change?.changes || {}, change?.reset ?? true);
+      const view = snapshot(local, change?.data), changed = { ...change?.changes };
+      // Alias metadata and execution status depend on other rows. Keep deltas
+      // consistent with a fresh snapshot when those dependencies change.
+      if (changed.sessions?.length || changed.executions?.length) changed.sessions = [...new Set([...(changed.sessions || []), ...view.sessions.map(s => s.id)])];
+      if (changed.executions?.length) changed.tasks = [...new Set([...(changed.tasks || []), ...view.tasks.map(task => task.id)])];
+      return taskCenterDelta(view, since, changed, change?.reset ?? true);
     }
   };
 }

@@ -118,8 +118,9 @@ function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) 
         <dt>会话跨度</dt><dd>{durationText}</dd>
       </dl></details>
       {session.recordMode === 'synced' && range && <details className="history-record-status"><summary>已同步 {first.total} / {range.total} 条记录</summary><p>{first.total ? `已同步第 ${range.offset + 1}–${range.offset + first.total} 条，共 ${range.total} 条记录。` : '此远程会话暂无可显示的记录。'}{session.partial ? '当前展示已同步内容，完整历史请在来源设备查看。' : ''}{range.truncated ? '部分文本或图片超过同步上限或无法预览，已标注缺失内容。' : ''}</p></details>}
+      {session.executionError && <p role="alert">本轮执行失败：{session.executionError}</p>}
       {session.recordMode === 'excerpt'
-        ? <p className="history-meta">{first.total > 0 ? '来源连接器仍在同步旧版文本摘要。更新并重启连接器，再点击“刷新会话”，即可按消息展示。' : '尚未同步远程会话正文，请确认来源设备连接器在线且已开启摘要同步，或在来源设备查看完整会话。'}</p>
+        ? <p className="history-meta">{first.total > 0 ? '此会话当前只有文本摘要，尚无按消息同步的正文。请确认来源设备在线并开启正文同步，再刷新会话。' : '尚未同步远程会话正文，请确认来源设备连接器在线且已开启摘要同步，或在来源设备查看完整会话。'}</p>
         : (session.recordMode === 'synced' ? range?.sourcePartial : session.partial) && <p className="history-warning">部分记录损坏、尚未写完或超出读取上限，当前展示部分内容。</p>}
       {detail.hasNextPage && <button className="button secondary" type="button" disabled={detail.isFetchingNextPage} onClick={() => void loadOlder()}>{detail.isFetchingNextPage ? '正在加载更早的问答…' : '加载更早的 10 轮问答'}</button>}
       {detail.isFetchNextPageError && <p role="alert">更早的问答加载失败：{errorMessage(detail.error)}，请重试。</p>}
