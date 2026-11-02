@@ -82,6 +82,29 @@ test('remote history identifies excerpts for existing records without changing t
   assert.equal(f.launched.length, 0);
 });
 
+test('turn-paginated remote excerpts expose native continuation only for eligible sessions', async t => {
+  const f = await fixture(t);
+  const center = createTaskCenter({ database: f.database, tenantId: 'default', history: f.history });
+  for (const excerpt of ['', 'user: 继续检查']) {
+    for (const condition of ['eligible', 'sync-only', 'unmatched-directory', 'archived'] as const) {
+      const nativeId = randomUUID();
+      await center.command({ action: 'heartbeat', deviceId: 'remote', name: '开发机', agents: ['codex'],
+        capabilities: { resumeCodex: condition !== 'sync-only' },
+        codexProjects: [{ id: 'codex', name: 'Codex', agent: 'codex', cwd: condition === 'unmatched-directory' ? path.join(f.root, 'other') : f.root }],
+        sessions: [{ nativeId, agent: 'codex', title: '远端摘要', cwd: f.root, excerpt, archived: condition === 'archived' }]
+      }, { id: 'owner' });
+      const session = f.database.readTaskCenter('default').sessions.find(item => item.nativeId === nativeId)!;
+      const paged = f.service.remoteDetail(session.id, new URLSearchParams({ turns: '10' }))!;
+      assert.equal(paged.session.canContinue, condition === 'eligible', `${condition}, excerpt: ${Boolean(excerpt)}`);
+      assert.equal(paged.session.canContinue, f.service.remoteDetail(session.id)?.session.canContinue);
+      assert.equal(paged.session.recordMode, 'excerpt');
+      assert.equal(paged.session.partial, true);
+      assert.equal(paged.total, excerpt ? 1 : 0);
+    }
+  }
+  assert.equal(f.launched.length, 0, 'reading continuation capability never starts an Agent');
+});
+
 test('execution and synced native history appear once, retain task links and show the failed execution beside structured messages', async t => {
   const f = await fixture(t);
   const nativeId = randomUUID(), executionId = randomUUID(), owner = { id: 'owner' };

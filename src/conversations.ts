@@ -218,7 +218,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
         return { session: { ...s, sessionId: s.nativeId, canContinue: Boolean(remoteContinuationProject(data, s)), syncedRange: preview.range }, messages: preview.messages, total: preview.total, offset, limit };
       }
       const messages = s.excerpt ? [{ role: 'assistant', text: s.excerpt, timestamp: s.updatedAt }] : [];
-      if (params.has('turns')) return { session: { ...s, recordMode: 'excerpt' as const, sessionId: s.nativeId, partial: true }, ...paginateHistoryTurns(messages, params) };
+      if (params.has('turns')) return { session: { ...s, recordMode: 'excerpt' as const, sessionId: s.nativeId, canContinue: Boolean(remoteContinuationProject(data, s)), partial: true }, ...paginateHistoryTurns(messages, params) };
       return { session: { ...s, recordMode: 'excerpt' as const, sessionId: s.nativeId, canContinue: Boolean(remoteContinuationProject(data, s)), partial: true }, messages: messages.slice(offset, offset + limit), total: messages.length, offset, limit };
     },
     detail(id: string, params = new URLSearchParams()) {

@@ -732,6 +732,32 @@ test('Agent request reply and unknown-result reconciliation never resubmit execu
   expect(executeWrites).toHaveLength(0);
 });
 
+test('remote excerpt history can send to the original session through turn pagination', async ({ page, request }) => {
+  const loginResult = await request.post('/api/auth/login', { data: { username: 'owner', password } });
+  const { token } = await loginResult.json() as { token: string };
+  const headers = { Authorization: `Bearer ${token}` };
+  const deviceId = 'excerpt-resume-device', nativeId = '621124dc-b586-4b33-8c22-da9e85b0021c';
+  const heartbeat = await request.post('/api/task-center', { headers, data: {
+    action: 'heartbeat', deviceId, name: '摘要续聊设备', agents: ['codex'], capabilities: { resumeCodex: true },
+    codexProjects: [{ id: 'excerpt-project', name: 'Codex', agent: 'codex', cwd: '/remote/excerpt-repo' }],
+    sessions: [{ nativeId, agent: 'codex', title: '摘要续聊回归', cwd: '/remote/excerpt-repo', excerpt: 'user: 检查历史问题' }]
+  } });
+  expect(heartbeat.ok()).toBeTruthy();
+  const list = await request.get('/api/agent-sessions', { headers });
+  const { sessions } = await list.json() as { sessions: Array<{ id: string; deviceId: string }> };
+  const session = sessions.find(item => item.deviceId === deviceId)!;
+  await login(page);
+  await page.goto(`/history/${session.id}`);
+  await expect(page.getByText('可续聊', { exact: true })).toBeVisible();
+  await expect(page.getByText(/此会话当前只有文本摘要/)).toBeVisible();
+  await page.getByRole('textbox', { name: '发送消息' }).fill('继续检查历史问题');
+  await page.getByRole('button', { name: '发送消息', exact: true }).click();
+  await expect(page.getByText(/已排队，准备继续原会话/)).toBeVisible();
+  const status = await request.get(`/api/agent-sessions/${session.id}/continue`, { headers });
+  const { execution } = await status.json() as { execution: { resumeThreadId: string; deviceId: string; prompt: string } };
+  expect(execution).toMatchObject({ resumeThreadId: nativeId, deviceId, prompt: '继续检查历史问题' });
+});
+
 test('device setup selects remote target and browser controls a remote original session', async ({ page, request, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write']);
   const loginResult = await request.post('/api/auth/login', { data: { username: 'owner', password } });
