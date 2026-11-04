@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import styles from './App.module.css';
 import { PageHeading } from '../components/PageHeading.js';
-import { createBrowserRouter, Link, Navigate, Outlet, useLocation, useNavigate, useParams } from 'react-router';
+import { createBrowserRouter, Link, Navigate, Outlet, useLocation, useMatch, useNavigate, useParams } from 'react-router';
 import { RouterProvider } from 'react-router/dom';
 import { apiRequest, clearSessionToken, hasSessionToken } from '../api/client.js';
 import { AuthScreen } from '../auth/AuthScreen.js';
@@ -72,6 +72,7 @@ function Shell() {
   const bootstrap = useQuery({ queryKey: ['app', 'bootstrap'], queryFn: ({ signal }) => apiRequest<Bootstrap>('/api/bootstrap', { signal }) }).data!;
   const location = useLocation();
   const navigate = useNavigate();
+  const activeSessionId = useMatch('/history/:id')?.params.id;
   const queryClient = useQueryClient();
   const view = location.pathname === '/tasks/new' ? 'new-task' : location.pathname.startsWith('/history') ? 'history' : location.pathname.startsWith('/settings') ? 'settings' : location.pathname.slice(1) || 'tasks';
   const title = location.pathname.startsWith('/history') ? titles['/history'] : location.pathname.startsWith('/settings') ? titles['/settings'] : titles[location.pathname] || titles['/tasks'];
@@ -112,7 +113,7 @@ function Shell() {
     try { await apiRequest('/api/auth/logout', { method: 'POST' }); } catch { /* local logout still clears the session */ }
     clearSessionToken(); window.location.assign('/tasks');
   }
-  return <div className={`app-shell ${styles.shell}`} id="workspaceShell">{bootstrap.permissions?.includes('read') && <CompletionNotifications key={`${bootstrap.tenant?.id}:${bootstrap.user?.username}`} onOpen={notice => {
+  return <div className={`app-shell ${styles.shell}`} id="workspaceShell">{bootstrap.permissions?.includes('read') && <CompletionNotifications key={`${bootstrap.tenant?.id}:${bootstrap.user?.username}`} activeSessionId={activeSessionId} onOpen={notice => {
     if (notice.sessionId) navigate(`/history/${encodeURIComponent(notice.sessionId)}`);
     else if (notice.taskId) window.dispatchEvent(new CustomEvent('bugflow:open-task', { detail: { taskId: notice.taskId } }));
   }} />}<aside className={`sidebar ${styles.sidebar}`}><div className={`brand ${styles.brand}`}><svg className={`brand-mark ${styles.brandMark}`} viewBox="0 0 36 36" aria-hidden="true"><rect x="4" y="5" width="28" height="26" rx="6" /><path d="M11 14h18M11 21h10M24 20l4 4-4 4" /></svg><div><strong>AgentFlow</strong><span>多设备 Agent 工作台</span></div></div>

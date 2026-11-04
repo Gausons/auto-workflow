@@ -103,6 +103,53 @@ it('does not miss transitions batched into one React render and does not redispl
   expect(screen.queryByRole('status')).toBeNull();
 });
 
+it.each(['conversationId', 'historySessionId', 'external'] as const)('skips the viewed session completion (%s), does not replay it on leaving, and reports the next turn elsewhere', async source => {
+  const client = new QueryClient();
+  const snapshot = (status: 'running' | 'completed', id = 'job') => data({
+    sessions: [session(status, { updatedAt: id === 'job' ? time : '2020-01-01T11:00:00Z' })],
+    executions: source === 'external' ? [] : [job(status, { id, [source]: 'session' })]
+  });
+  client.setQueryData(key, snapshot('running'));
+  const view = (activeSessionId?: string) => <QueryClientProvider client={client}><CompletionNotifications activeSessionId={activeSessionId} onOpen={() => {}} /></QueryClientProvider>;
+  const mounted = render(view('session'));
+  await act(async () => client.setQueryData(key, snapshot('completed')));
+  expect(screen.queryByRole('status')).toBeNull();
+  mounted.rerender(view());
+  await act(async () => client.setQueryData(key, snapshot('completed')));
+  expect(screen.queryByRole('status')).toBeNull();
+  await act(async () => client.setQueryData(key, snapshot('running', 'next')));
+  await act(async () => client.setQueryData(key, snapshot('completed', 'next')));
+  expect(await screen.findByText('会话本轮已完成')).toBeTruthy();
+});
+
+it('keeps observing when switching sessions and still reports completions of other sessions and tasks', async () => {
+  const client = new QueryClient();
+  client.setQueryData(key, data({ tasks: [task()], sessions: [session()] }));
+  const view = (activeSessionId: string) => <QueryClientProvider client={client}><CompletionNotifications activeSessionId={activeSessionId} onOpen={() => {}} /></QueryClientProvider>;
+  const mounted = render(view('session'));
+  mounted.rerender(view('other-session'));
+  await act(async () => client.setQueryData(key, data({ tasks: [task()], sessions: [session('completed')] })));
+  expect(await screen.findByText('会话本轮已完成')).toBeTruthy();
+  await act(async () => client.setQueryData(key, data({ tasks: [task('completed')], sessions: [session('completed')] })));
+  expect(await screen.findByText('任务已完成')).toBeTruthy();
+});
+
+it.each(['task', 'session'] as const)('skips associated task completions via the %s link while viewing its session', async link => {
+  const client = new QueryClient();
+  const snapshot = (status: Task['status']) => data({
+    tasks: [{ ...task(status), sessionIds: link === 'task' ? ['session'] : [] }],
+    sessions: [session('completed', link === 'session' ? { taskId: 'task' } : {})]
+  });
+  client.setQueryData(key, snapshot('running'));
+  const view = (activeSessionId?: string) => <QueryClientProvider client={client}><CompletionNotifications activeSessionId={activeSessionId} onOpen={() => {}} /></QueryClientProvider>;
+  const mounted = render(view('session'));
+  await act(async () => client.setQueryData(key, snapshot('completed')));
+  expect(screen.queryByRole('status')).toBeNull();
+  mounted.rerender(view());
+  await act(async () => client.setQueryData(key, snapshot('completed')));
+  expect(screen.queryByRole('status')).toBeNull();
+});
+
 it.each([401, 403])('shows no notifications for a denied initial snapshot (%s)', async status => {
   vi.stubGlobal('fetch', vi.fn(async () => Response.json({ message: 'denied' }, { status })));
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

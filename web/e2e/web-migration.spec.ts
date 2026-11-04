@@ -1199,4 +1199,26 @@ test('completion notifications stay live on other pages, link to the result and 
   await expect(page).toHaveURL(/\/history\/[a-f0-9]{64}$/);
   await expect(page.getByRole('heading', { name: '后台会话完成回归', exact: true })).toBeVisible();
   await expect(notices.getByRole('status')).toHaveCount(0);
+
+  const updateSession = async (status: string) => {
+    const changed = page.waitForResponse(response => new URL(response.url()).pathname === '/api/task-center/changes');
+    expect((await request.post('/api/task-center', { headers, data: heartbeat(status) })).ok()).toBeTruthy();
+    await changed;
+    await expect(page.locator('.history-card').filter({ hasText: '后台会话完成回归' })).toContainText(status === 'running' ? '正在回复' : '本轮结束');
+  };
+  // Finishing in the open session is already visible, and must not replay on navigation.
+  await updateSession('running');
+  await updateSession('completed');
+  await expect(notices.getByRole('status')).toHaveCount(0);
+  await page.getByRole('link', { name: '设置', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '设置', exact: true })).toBeVisible();
+  await expect(notices.getByRole('status')).toHaveCount(0);
+
+  // A later completion after leaving the session still notifies normally.
+  const running = page.waitForResponse(response => new URL(response.url()).pathname === '/api/task-center/changes');
+  expect((await request.post('/api/task-center', { headers, data: heartbeat('running') })).ok()).toBeTruthy();
+  await running;
+  expect((await request.post('/api/task-center', { headers, data: heartbeat('completed') })).ok()).toBeTruthy();
+  await expect(notices.getByText('会话本轮已完成')).toBeVisible();
+  await expect(notices.getByText('后台会话完成回归')).toBeVisible();
 });

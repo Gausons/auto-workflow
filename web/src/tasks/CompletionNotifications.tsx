@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest, ApiError } from '../api/client.js';
 import type { TaskCenterData } from '../../../shared/taskTypes.js';
@@ -8,8 +8,10 @@ import styles from './CompletionNotifications.module.css';
 
 const denied = (error: unknown) => error instanceof ApiError && [401, 403].includes(error.status);
 const snapshotKey = ['task-center', 'snapshot'] as const;
-export function CompletionNotifications({ onOpen }: { onOpen(notice: CompletionNotice): void }) {
+export function CompletionNotifications({ activeSessionId, onOpen }: { activeSessionId?: string; onOpen(notice: CompletionNotice): void }) {
   const client = useQueryClient();
+  const activeSession = useRef(activeSessionId);
+  useLayoutEffect(() => { activeSession.current = activeSessionId; }, [activeSessionId]);
   const [notices, setNotices] = useState<CompletionNotice[]>([]);
   const snapshot = useQuery({ queryKey: snapshotKey, queryFn: ({ signal }) => apiRequest<TaskCenterData>('/api/task-center', { signal }), staleTime: Infinity });
   useTaskCenterUpdates(!denied(snapshot.error), snapshot.data?.syncVersion);
@@ -19,7 +21,15 @@ export function CompletionNotifications({ onOpen }: { onOpen(notice: CompletionN
       const query = client.getQueryState<TaskCenterData>(snapshotKey);
       if (denied(query?.error)) { setNotices([]); return; }
       if (!query?.data) return;
-      const additions = observe(query.data);
+      const data = query.data;
+      // Always consume completions so ones already seen in the session do not replay after navigation.
+      const additions = observe(data).filter(notice => {
+        const id = activeSession.current;
+        if (!id) return true;
+        if (notice.sessionId) return notice.sessionId !== id;
+        return !data.tasks.some(task => task.id === notice.taskId && task.sessionIds.includes(id)) &&
+          !data.sessions.some(session => session.id === id && session.taskId === notice.taskId);
+      });
       if (additions.length) setNotices(current => [...additions.filter(item => !current.some(existing => existing.id === item.id)), ...current]);
     };
     consume();
