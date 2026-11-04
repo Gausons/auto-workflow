@@ -86,6 +86,23 @@ test('periodic reconciliation survives missing notifications and transient contr
   assert.equal(errors, 1); assert.ok(controls >= 2);
 });
 
+test('reconnecting immediately republishes device presence without waiting for the heartbeat interval', { timeout: 5000 }, async () => {
+  const stop = new AbortController(), first = deferred(), restored = deferred();
+  let wake = () => {}, heartbeats = 0;
+  const running = runDeviceControl({ signal: stop.signal, heartbeatMs: 60_000, pollMs: 60_000,
+    async work() {}, async controls() {},
+    async heartbeat() { if (++heartbeats === 1) first.resolve(); else restored.resolve(); },
+    onError(error) { throw error; },
+    async subscribe(notify, signal) { wake = notify; await new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true })); }
+  });
+  try {
+    await first.promise;
+    wake();
+    await restored.promise;
+    assert.equal(heartbeats, 2);
+  } finally { stop.abort(); await running; }
+});
+
 test('revoked WebSocket credentials stop reconnects', { timeout: 5000 }, async t => {
   let connections = 0;
   const url = await socketServer(t, socket => { connections++; socket.once('message', () => socket.send(JSON.stringify({ type: 'error', status: 401, message: 'expired' }))); });

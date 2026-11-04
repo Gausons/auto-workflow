@@ -9,8 +9,65 @@ import { WebSocket } from 'ws';
 import { createApp, openDatabase, rawDatabase, hashToken } from '../scripts/testing/database.js';
 import { realtimeProtocol } from '../shared/realtime.js';
 import { DEVICE_DEPLOYMENT_DURATION_MS } from '../src/identity.js';
+import { setTimeout as delay } from 'node:timers/promises';
+import { runDeviceControl, watchDeviceUpdates } from '../src/deviceControlClient.js';
 
 interface Result { token?: string; deploymentToken?: string; expiresAt?: number; permissions?: string[]; tenant?: { id: string }; user?: { id: string }; error?: string }
+
+test('a deployed server can restart while its connector retains authorization and restores presence', { timeout: 30_000 }, async t => {
+  const rootDir = await mkdtemp(path.join(tmpdir(), 'workflow-device-restart-'));
+  const environment = { LOCAL_EXECUTION_ENABLED: 'false', ACP_ENABLED: 'false', CODEX_EXECUTABLE: path.join(rootDir, 'missing-codex') };
+  let app: ReturnType<typeof createApp> | undefined = createApp({ rootDir, environment });
+  const stop = new AbortController();
+  let running: Promise<void> | undefined;
+  t.after(async () => { stop.abort(); await running; await app?.close(); await rm(rootDir, { recursive: true, force: true }); });
+  app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
+  const address = app.server.address(); assert.ok(address && typeof address !== 'string');
+  const base = `http://127.0.0.1:${address.port}`;
+  const db = openDatabase(app.databaseKey);
+  const browser = db.loginWithGoogle({ subject: 'restart-google', email: 'restart@example.com', displayName: 'Restart' });
+  const connector = db.exchangeDeviceDeployment(db.issueDeviceDeployment(browser.token).deploymentToken);
+  const tenantId = db.authenticateSession(connector.token)!.tenant.id;
+  db.close();
+  const headers = { Authorization: `Bearer ${connector.token}`, 'Content-Type': 'application/json' };
+  let heartbeats = 0, ready = 0;
+  const heartbeat = async () => {
+    const response = await fetch(base + '/api/task-center', { method: 'POST', headers,
+      body: JSON.stringify({ action: 'heartbeat', deviceId: 'restart-device', name: '重启测试设备', agents: [], sessions: [] }) });
+    await response.json();
+    if (!response.ok) throw Object.assign(new Error('heartbeat rejected'), { status: response.status });
+    heartbeats++;
+  };
+  await heartbeat();
+  running = runDeviceControl({ signal: stop.signal, heartbeatMs: 60_000, pollMs: 60_000,
+    async work() {}, async controls() {}, heartbeat,
+    onError(error) { if (error instanceof Error && 'status' in error && [401, 403].includes(Number(error.status))) throw error; },
+    subscribe: (wake, signal) => watchDeviceUpdates({ url: new URL('/api/realtime', base), token: connector.token,
+      deviceId: 'restart-device', signal, wake, onReady() { ready++; }, onError() {} })
+  });
+  const waitFor = async (condition: () => boolean) => {
+    const deadline = Date.now() + 10_000;
+    while (!condition()) { assert.ok(Date.now() < deadline, 'connector did not recover'); await delay(20); }
+  };
+  await waitFor(() => ready === 1 && heartbeats >= 2);
+  await app.close(); app = undefined;
+  // Ensure a reconnect attempt encounters an unavailable server.
+  await delay(1200);
+  app = createApp({ rootDir, environment });
+  // Simulate a deployment long enough for the old presence timestamp to expire.
+  const reopened = openDatabase(app.databaseKey);
+  try {
+    assert.equal(reopened.authenticateSession(connector.token)?.scope, 'connector');
+    reopened.mutateTaskCenter(tenantId, data => { data.devices[0].lastSeen = new Date(0).toISOString(); });
+  } finally { reopened.close(); }
+  const before = heartbeats;
+  app.server.listen(address.port, '127.0.0.1'); await once(app.server, 'listening');
+  await waitFor(() => ready >= 2 && heartbeats > before);
+  const response = await fetch(base + '/api/task-center', { headers });
+  assert.equal(response.status, 200);
+  const snapshot = await response.json() as { devices: Array<{ id: string; online: boolean }> };
+  assert.equal(snapshot.devices.find(device => device.id === 'restart-device')?.online, true);
+});
 
 test('temporary device authorization binds the signed-in user and rejects unauthorized, duplicate and privileged requests', async t => {
   const rootDir = await mkdtemp(path.join(tmpdir(), 'workflow-deployment-'));

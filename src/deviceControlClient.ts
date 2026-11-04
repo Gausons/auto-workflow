@@ -122,7 +122,7 @@ export async function runDeviceControl(options: {
   };
   const loops = [loop(work, options.work), loop(controls, options.controls), loop(heartbeat, options.heartbeat),
     ...(options.git ? [loop(git, options.git)] : []),
-    options.subscribe(() => { work.wake(); controls.wake(); git.wake(); }, signal)];
+    options.subscribe(() => { work.wake(); controls.wake(); git.wake(); heartbeat.wake(); }, signal)];
   try { await Promise.all(loops); }
   catch (error) { options.onError(error); throw error; }
   finally { options.onControlsWake?.(() => {}); stop.abort(); options.signal.removeEventListener('abort', abort); await Promise.allSettled(loops); }
