@@ -732,15 +732,19 @@ test('Agent request reply and unknown-result reconciliation never resubmit execu
   expect(executeWrites).toHaveLength(0);
 });
 
-test('remote excerpt history can send to the original session through turn pagination', async ({ page, request }) => {
+for (const synced of [false, true]) test(`Codex history in a nested repository can continue the original session (${synced ? 'synced messages' : 'excerpt'})`, async ({ page, request }) => {
   const loginResult = await request.post('/api/auth/login', { data: { username: 'owner', password } });
   const { token } = await loginResult.json() as { token: string };
   const headers = { Authorization: `Bearer ${token}` };
-  const deviceId = 'excerpt-resume-device', nativeId = '621124dc-b586-4b33-8c22-da9e85b0021c';
+  const deviceId = synced ? 'nested-synced-resume-device' : 'excerpt-resume-device';
+  const nativeId = synced ? '461124dc-b586-4b33-8c22-da9e85b0021c' : '621124dc-b586-4b33-8c22-da9e85b0021c';
+  const cwd = '/Users/dev/Work/yonclaw1.0';
   const heartbeat = await request.post('/api/task-center', { headers, data: {
     action: 'heartbeat', deviceId, name: '摘要续聊设备', agents: ['codex'], capabilities: { resumeCodex: true },
-    codexProjects: [{ id: 'excerpt-project', name: 'Codex', agent: 'codex', cwd: '/remote/excerpt-repo' }],
-    sessions: [{ nativeId, agent: 'codex', title: '摘要续聊回归', cwd: '/remote/excerpt-repo', excerpt: 'user: 检查历史问题' }]
+    codexProjects: [{ id: 'excerpt-project', name: 'Codex', agent: 'codex', cwd: '/Users/dev' }],
+    sessions: [{ nativeId, agent: 'codex', title: 'Codex 项目续聊回归', cwd, excerpt: 'user: 检查历史问题',
+      ...(synced ? { remoteHistory: { format: 2, offset: 0, total: 2, sourcePartial: false, truncated: false,
+        messages: [{ role: 'user', text: '检查历史问题' }, { role: 'assistant', text: '已完成本轮检查' }] } } : {}) }]
   } });
   expect(heartbeat.ok()).toBeTruthy();
   const list = await request.get('/api/agent-sessions', { headers });
@@ -749,13 +753,14 @@ test('remote excerpt history can send to the original session through turn pagin
   await login(page);
   await page.goto(`/history/${session.id}`);
   await expect(page.getByText('可续聊', { exact: true })).toBeVisible();
-  await expect(page.getByText(/此会话当前只有文本摘要/)).toBeVisible();
+  if (synced) await expect(page.locator('.history-message.assistant')).toContainText('已完成本轮检查');
+  else await expect(page.getByText(/此会话当前只有文本摘要/)).toBeVisible();
   await page.getByRole('textbox', { name: '发送消息' }).fill('继续检查历史问题');
   await page.getByRole('button', { name: '发送消息', exact: true }).click();
   await expect(page.getByText(/已排队，准备继续原会话/)).toBeVisible();
   const status = await request.get(`/api/agent-sessions/${session.id}/continue`, { headers });
-  const { execution } = await status.json() as { execution: { resumeThreadId: string; deviceId: string; prompt: string } };
-  expect(execution).toMatchObject({ resumeThreadId: nativeId, deviceId, prompt: '继续检查历史问题' });
+  const { execution } = await status.json() as { execution: { resumeThreadId: string; deviceId: string; prompt: string; cwd: string } };
+  expect(execution).toMatchObject({ resumeThreadId: nativeId, deviceId, cwd, prompt: '继续检查历史问题' });
 });
 
 test('device setup selects remote target and browser controls a remote original session', async ({ page, request, context }) => {

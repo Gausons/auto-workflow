@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, writeFile, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createCodexExecution } from '../src/codexExecution.js';
@@ -15,15 +15,17 @@ type Service = ReturnType<typeof createCodexExecution>;
 type Options = ConstructorParameters<typeof RemoteCodexWorker>[0];
 type Report = Parameters<Parameters<NonNullable<Options['runnerFactory']>>[0]>[0];
 
-async function fixture(t: import('node:test').TestContext) {
+async function fixture(t: import('node:test').TestContext, nested = false) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'remote-continuation-'));
+  const cwd = nested ? path.join(root, 'Work', 'yonclaw1.0') : root;
+  await mkdir(cwd, { recursive: true });
   const db = openDatabase();
   db.createTenant({ id: 'default', token: 'x'.repeat(32) });
   db.createTenant({ id: 'other', token: 'y'.repeat(32) });
   const owner = { id: 'connector-owner' }, nativeId = randomUUID();
   const center = createTaskCenter({ database: db, tenantId: 'default', history: { catalog: async () => ({ sessions: [], providers: [] }) } });
   const heartbeat = { action: 'heartbeat', deviceId: 'remote', name: '开发机', agents: ['codex'], capabilities: { resumeCodex: true },
-    sessions: [{ nativeId, agent: 'codex', title: '原会话', cwd: root }], codexProjects: [{ id: 'p', name: '项目', agent: 'codex', cwd: root }] };
+    sessions: [{ nativeId, agent: 'codex', title: '原会话', cwd }], codexProjects: [{ id: 'p', name: '项目', agent: 'codex', cwd: root }] };
   await center.command(heartbeat, owner);
   const session = db.readTaskCenter('default').sessions[0]!;
   const service = createCodexExecution({ database: db, tenantId: 'default', workspace: () => root, runnerFactory: () => ({ projects: async () => [], start() { assert.fail('must not execute on server'); }, close() {} }) });
@@ -31,7 +33,7 @@ async function fixture(t: import('node:test').TestContext) {
   let update: (job: Report) => void = () => {};
   let invalidSource = false;
   const workerOptions: Options = { deviceId: 'remote', workspace: root, directory: path.join(root, 'journal'),
-    contextSource: { catalog: async () => ({ sessions: invalidSource ? [] : [{ id: session.id, sessionId: nativeId, agent: 'codex', cwd: root }] }), delivery: { detail: async () => { throw new Error('unused'); }, record: async () => { throw new Error('should not read transcript for native resume'); } } },
+    contextSource: { catalog: async () => ({ sessions: invalidSource ? [] : [{ id: session.id, sessionId: nativeId, agent: 'codex', cwd }] }), delivery: { detail: async () => { throw new Error('unused'); }, record: async () => { throw new Error('should not read transcript for native resume'); } } },
     request: (method, body) => method === 'GET' ? center.snapshot() : service.action(body as Parameters<Service['action']>[0], owner),
     runnerFactory: callback => {
       update = callback;
@@ -44,8 +46,8 @@ async function fixture(t: import('node:test').TestContext) {
   return { root, db, owner, nativeId, center, heartbeat, session, service, started, responses, worker, workerOptions, update: (job: Report) => update(job), invalidateSource: () => { invalidSource = true; } };
 }
 
-test('remote original-session sends are tenant-scoped, idempotent and mutually exclusive', async t => {
-  const f = await fixture(t), input = { requestId: randomUUID(), message: '继续检查' };
+for (const nested of [false, true]) test(`remote original-session sends are tenant-scoped, idempotent and mutually exclusive (${nested ? 'nested repository' : 'project root'})`, async t => {
+  const f = await fixture(t, nested), input = { requestId: randomUUID(), message: '继续检查' };
   const [first, duplicate] = await Promise.all([f.service.continueHistory(f.session.id, input), f.service.continueHistory(f.session.id, input)]);
   assert.deepEqual(first, duplicate);
   assert.equal(f.db.readTaskCenter('default').executions.length, 1);
@@ -60,6 +62,8 @@ test('remote original-session sends are tenant-scoped, idempotent and mutually e
   await Promise.all([worker.sync(), worker.sync()]);
   assert.equal(f.started.length, 1);
   assert.equal(f.started[0]?.resumeThreadId, f.nativeId);
+  assert.equal(f.started[0]?.cwd, f.session.cwd);
+  assert.equal(f.started[0]?.projectId, 'p');
   assert.equal(f.started[0]?.protocol, 'legacy');
   await assert.rejects(f.service.action({ action: 'report', executionId: first.executionId, report: { status: 'running', threadId: randomUUID() } }, f.owner), { statusCode: 409 });
   f.update({ ...f.started[0]!, threadId: f.nativeId, status: 'waiting', request: { method: 'item/commandExecution/requestApproval', params: { command: 'test' } } });
@@ -74,6 +78,46 @@ test('remote original-session sends are tenant-scoped, idempotent and mutually e
   await worker.sync();
   assert.equal(f.started.length, 2);
   assert.equal(f.started[1]?.resumeThreadId, f.nativeId);
+});
+
+test('original-session continuation matches allowed roots across device path formats without granting sibling paths', async t => {
+  const f = await fixture(t);
+  const data = f.db.readTaskCenter('default'), device = data.devices.find(item => item.id === 'remote')!;
+  for (const [root, cwd, allowed] of [
+    ['/Users/dev', '/Users/dev/Work/yonclaw1.0', true],
+    ['/Users/dev', '/Users/dev-other/repo', false],
+    ['/Users/dev', '/Users/dev/../other/repo', false],
+    ['/Users/dev', 'relative/repo', false],
+    ['C:\\Users\\dev', 'c:\\Users\\dev\\Work\\repo', true],
+    ['C:\\Users\\dev', 'D:\\Users\\dev\\repo', false],
+    ['C:\\Users\\dev', 'C:\\Users\\dev-other\\repo', false]
+  ] as const) {
+    device.codexProjects = [{ id: 'root', name: '允许目录', agent: 'codex', cwd: root }];
+    assert.equal(Boolean(remoteContinuationProject(data, { ...f.session, cwd })), allowed, cwd);
+  }
+  device.codexProjects = [
+    { id: 'root', name: '根目录', agent: 'codex', cwd: f.root },
+    { id: 'exact', name: '项目', agent: 'codex', cwd: path.join(f.root, 'repo') }
+  ];
+  assert.equal(remoteContinuationProject(data, { ...f.session, cwd: path.join(f.root, 'repo') })?.id, 'exact');
+  device.codexProjects = [{ id: 'claude', name: 'Claude', agent: 'claude', cwd: f.root }];
+  assert.equal(remoteContinuationProject(data, f.session), undefined);
+});
+
+test('native continuation rejects a symlink escaping the advertised root before starting an Agent', async t => {
+  const f = await fixture(t);
+  const outside = await mkdtemp(path.join(os.tmpdir(), 'continuation-outside-'));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  const cwd = path.join(f.root, 'escape');
+  await symlink(outside, cwd, 'dir');
+  await f.center.command({ ...f.heartbeat, sessions: [{ ...f.heartbeat.sessions[0]!, cwd }] }, f.owner);
+  await f.service.continueHistory(f.session.id, { requestId: randomUUID(), message: '继续原会话' });
+  const worker = f.worker();
+  await worker.sync(); await worker.sync();
+  assert.equal(f.started.length, 0);
+  const failed = (await f.service.historyExecution(f.session.id)).execution;
+  assert.equal(failed?.status, 'failed');
+  assert.match(failed?.message || '', /允许的目录范围/);
 });
 
 test('old, sync-only and archived devices cannot expose native resume', async t => {

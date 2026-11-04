@@ -144,14 +144,14 @@ test('remote original-session HTTP enforces authentication and keeps execution o
   const viewer = (await req('/api/auth/login', 'POST', { tenantId: 'default', username: 'viewer', password })).data.token; assert.ok(viewer);
   const nativeId = randomUUID();
   const heartbeat = { action: 'heartbeat', deviceId: 'remote', name: '远端设备', agents: ['codex'], capabilities: { resumeCodex: true },
-    codexProjects: [{ id: 'p', name: '项目', agent: 'codex', cwd: root }], sessions: [{ nativeId, agent: 'codex', cwd: root, title: '远端原会话' }] };
+    codexProjects: [{ id: 'p', name: '项目', agent: 'codex', cwd: root }], sessions: [{ nativeId, agent: 'codex', cwd: path.join(root, 'repo'), title: '远端原会话' }] };
   assert.equal((await req('/api/task-center', 'POST', heartbeat)).status, 401);
   assert.equal((await req('/api/task-center', 'POST', heartbeat, viewer)).status, 403);
   assert.equal((await req('/api/task-center', 'POST', heartbeat, token)).status, 200);
   const sessions = (await req('/api/agent-sessions', 'GET', undefined, token)).data.sessions;
   assert.ok(sessions?.[0]);
   const id = sessions[0].id, route = `/api/agent-sessions/${id}/continue`;
-  const detail = (await req(`/api/agent-sessions/${id}`, 'GET', undefined, token)).data;
+  const detail = (await req(`/api/agent-sessions/${id}?turns=10`, 'GET', undefined, token)).data;
   assert.equal((detail.session as { canContinue: boolean }).canContinue, true);
   const input = { requestId: randomUUID(), message: '继续远端原会话' };
   assert.equal((await req(route, 'POST', input)).status, 401);
