@@ -1,6 +1,6 @@
 import type { Task, TaskCenterData } from './taskTypes.js';
 
-export const taskCenterCollections = ['tasks', 'devices', 'sessions', 'handoffs', 'executions', 'directoryRequests', 'gitRequests'] as const;
+export const taskCenterCollections = ['tasks', 'devices', 'sessions', 'handoffs', 'executions', 'directoryRequests', 'gitRequests', 'groupChatRooms'] as const;
 export type TaskCenterCollection = typeof taskCenterCollections[number];
 export type TaskCenterChangeIds = Partial<Record<TaskCenterCollection, string[]>>;
 export type TaskCenterChanges = { [K in TaskCenterCollection]?: { upsert: NonNullable<TaskCenterData[K]>; removed: string[] } };
@@ -35,7 +35,8 @@ export function applyTaskCenterDelta(current: TaskCenterData, delta: TaskCenterD
     handoffs: merge(current.handoffs, changes.handoffs),
     executions: merge(current.executions || [], changes.executions),
     directoryRequests: merge(current.directoryRequests || [], changes.directoryRequests),
-    gitRequests: merge(current.gitRequests || [], changes.gitRequests)
+    gitRequests: merge(current.gitRequests || [], changes.gitRequests),
+    ...(changes.groupChatRooms ? { groupChatRooms: merge(current.groupChatRooms || [], changes.groupChatRooms) } : {})
   };
 }
 
@@ -54,6 +55,7 @@ export function taskCenterDelta(snapshot: TaskCenterData, fromVersion: number, c
     ...(changedIds.handoffs && { handoffs: patch(snapshot.handoffs, changedIds.handoffs) }),
     ...(changedIds.executions && { executions: patch(snapshot.executions || [], changedIds.executions) }),
     ...(changedIds.directoryRequests && { directoryRequests: patch(snapshot.directoryRequests || [], changedIds.directoryRequests) }),
+    ...(changedIds.groupChatRooms && { groupChatRooms: patch(snapshot.groupChatRooms || [], changedIds.groupChatRooms) }),
     ...(changedIds.gitRequests && { gitRequests: patch(snapshot.gitRequests || [], changedIds.gitRequests) })
   } };
 }

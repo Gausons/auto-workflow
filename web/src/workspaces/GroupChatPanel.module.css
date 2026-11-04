@@ -1,0 +1,46 @@
+.panel { padding-top: 28px; min-width: 0; font-size: 13px; }
+.heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 24px; }
+.panel p { line-height: 1.7; }
+.heading p, .createForm > p, .chat header p, .readOnly { color: #777f71; }
+.panel button { border: 1px solid #dce1d6; background: #f6f8f2; color: #374a31; padding: 9px 12px; border-radius: 8px; }
+.panel button:disabled { opacity: .5; }
+.error { color: #973b31; background: #fff3f1; padding: 12px; border-radius: 8px; }
+.createForm { padding: 22px; background: #f8faf5; border: 1px solid #dce2d6; border-radius: 12px; margin-bottom: 24px; }
+.createForm label { display: grid; gap: 8px; min-width: 0; }
+.participant { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(140px, 2fr); gap: 14px; border: 1px solid #dce2d6; border-radius: 10px; padding: 16px; margin: 16px 0; min-width: 0; }
+.participant legend { padding: 0 6px; color: #6c7a63; }
+.participant label:last-of-type { grid-column: 1/-1; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.actions small { flex: 1; min-width: 130px; color: #7c8377; line-height: 1.6; }
+.empty { padding: 35px 18px; color: #7c8377; text-align: center; }
+.layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); border: 1px solid #e3e7dc; border-radius: 12px; overflow: hidden; }
+.roomList { display: flex; flex-direction: column; gap: 8px; padding: 12px; background: #f8faf5; border-right: 1px solid #e3e7dc; max-height: 720px; overflow: auto; }
+.roomList button { text-align: left; background: transparent; border-color: transparent; overflow-wrap: anywhere; }
+.roomList button[aria-pressed='true'] { background: #eaf0e3; border-color: #d6e0cc; }
+.roomList small { display: block; font-size: 11px; margin-top: 7px; color: #7c8377; }
+.chat { min-width: 0; }
+.chat header { padding: 20px 24px; border-bottom: 1px solid #e8ebe2; overflow-wrap: anywhere; }
+.chat header p { margin: 8px 0; }
+.chat header > span { color: #6e805f; font-size: 12px; }
+.messages { height: 420px; overflow-y: auto; padding: 20px; overscroll-behavior: contain; }
+.messages article { padding: 16px; border-radius: 10px; margin-bottom: 14px; border: 1px solid #e6eadf; overflow-wrap: anywhere; }
+.messages article p { white-space: pre-wrap; margin: 12px 0 0; }
+.messages article small { display: block; margin-top: 10px; color: #867858; }
+.userMessage { background: #f1f5ec; }
+.agentMessage { background: #fff; }
+.messageMeta { display: flex; gap: 12px; justify-content: space-between; }
+.messageMeta span { color: #8a9380; font-size: 11px; }
+.panel .executionLink { padding: 0; margin-top: 10px; border: 0; background: none; font-size: 11px; text-decoration: underline; }
+.composer { padding: 20px; border-top: 1px solid #e8ebe2; display: grid; gap: 12px; }
+.composer label { font-size: 12px; color: #6e7865; }
+.composer textarea { width: 100%; resize: vertical; min-height: 80px; border: 1px solid #dce1d6; border-radius: 8px; padding: 12px; background: #fff; color: #343930; font: inherit; box-sizing: border-box; }
+.readOnly { margin: 0; padding: 18px; border-top: 1px solid #e8ebe2; }
+@media (max-width: 700px) {
+  .heading { align-items: flex-start; flex-direction: column; }
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .roomList { max-height: 180px; border-right: 0; border-bottom: 1px solid #e3e7dc; }
+  .participant { grid-template-columns: minmax(0, 1fr); }
+  .messages { height: 360px; padding: 12px; }
+  .chat header, .composer { padding: 16px; }
+  .createForm { padding: 14px; }
+}

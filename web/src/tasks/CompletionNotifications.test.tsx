@@ -174,3 +174,20 @@ it('retains notices through a transient refresh failure, recovers updates, and h
   await act(async () => { await client.refetchQueries({ queryKey: key }); });
   expect(screen.queryByRole('status')).toBeNull();
 });
+
+it('consumes completions in the viewed group room and still reports new completions after leaving', async () => {
+  const client = new QueryClient();
+  const room = { id: 'room', name: '方案评审', revision: 1, createdBy: 'owner', createRequestId: 'create', createFingerprint: '', createdAt: time, updatedAt: time, participants: [], messages: [{ id: 'reply', roundId: 'round', role: 'agent' as const, authorId: 'agent', authorName: '评审员', text: '', createdAt: time, status: 'running' as const, taskId: 'task', executionId: 'job' }] };
+  client.setQueryData(key, data({ tasks: [task()], executions: [job()], groupChatRooms: [room] }));
+  render(<QueryClientProvider client={client}><CompletionNotifications onOpen={() => {}} /></QueryClientProvider>);
+  window.dispatchEvent(new CustomEvent('bugflow:active-group-chat', { detail: { roomId: 'room' } }));
+  await act(async () => client.setQueryData(key, data({ tasks: [task('review')], executions: [job('completed')], groupChatRooms: [room] })));
+  expect(screen.queryByText('任务本轮执行完成')).toBeNull();
+  window.dispatchEvent(new CustomEvent('bugflow:active-group-chat', { detail: { roomId: '' } }));
+  await act(async () => client.setQueryData(key, data({ tasks: [task('review')], executions: [job('completed')], groupChatRooms: [room] })));
+  expect(screen.queryByText('任务本轮执行完成')).toBeNull();
+  await act(async () => client.setQueryData(key, data({ tasks: [task()], executions: [job('completed'), job('running', { id: 'next' })], groupChatRooms: [room] })));
+  await act(async () => client.setQueryData(key, data({ tasks: [task('review')], executions: [job('completed'), job('completed', { id: 'next' })], groupChatRooms: [room] })));
+  expect(await screen.findByText('任务本轮执行完成')).toBeTruthy();
+  client.clear();
+});

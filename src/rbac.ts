@@ -23,6 +23,8 @@ export function permissionForRealtimeChannel(channel: unknown): string | null {
 }
 
 export function permissionForRoute(method: string | undefined, pathname: string): string | null {
+  if ((pathname === '/api/workspaces/chats' || /^\/api\/workspaces\/chats\/[a-f0-9-]{36}$/.test(pathname)) && method === 'GET') return 'read';
+  if ((pathname === '/api/workspaces/chats' || /^\/api\/workspaces\/chats\/[a-f0-9-]{36}\/(messages|stop)$/.test(pathname)) && method === 'POST') return 'work.execute';
   if (pathname === '/api/workspaces' && ['GET', 'POST'].includes(method || '')) return 'read';
   if (pathname === '/api/workspaces/switch' && method === 'POST') return 'read';
   if (pathname === '/api/workspaces/members' && method === 'GET') return 'read';

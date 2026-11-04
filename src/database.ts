@@ -312,6 +312,7 @@ export function openDatabase(environment: Record<string, string | undefined>) {
         .run(tenantId, sessionId, digest, complete ? '' : payload, size, complete ? 'true' : 'false');
       return history;
     },
+    isTeamWorkspace: (tenantId: string) => Boolean(db.prepare('SELECT 1 FROM team_workspaces WHERE tenant_id = ?').get(tenantId)),
     readTaskCenter,
     readTaskCenterChanges: (tenantId: string, since: number) => transaction(() => {
       const data = readTaskCenter(tenantId), version = data.syncVersion || 0;

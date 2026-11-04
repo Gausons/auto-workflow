@@ -11,6 +11,12 @@ const snapshotKey = ['task-center', 'snapshot'] as const;
 export function CompletionNotifications({ activeSessionId, onOpen }: { activeSessionId?: string; onOpen(notice: CompletionNotice): void }) {
   const client = useQueryClient();
   const activeSession = useRef(activeSessionId);
+  const activeRoom = useRef('');
+  useLayoutEffect(() => {
+    const viewing = (event: Event) => { activeRoom.current = (event as CustomEvent<{ roomId?: string }>).detail?.roomId || ''; };
+    window.addEventListener('bugflow:active-group-chat', viewing);
+    return () => window.removeEventListener('bugflow:active-group-chat', viewing);
+  }, []);
   useLayoutEffect(() => { activeSession.current = activeSessionId; }, [activeSessionId]);
   const [notices, setNotices] = useState<CompletionNotice[]>([]);
   const snapshot = useQuery({ queryKey: snapshotKey, queryFn: ({ signal }) => apiRequest<TaskCenterData>('/api/task-center', { signal }), staleTime: Infinity });
@@ -24,6 +30,8 @@ export function CompletionNotifications({ activeSessionId, onOpen }: { activeSes
       const data = query.data;
       // Always consume completions so ones already seen in the session do not replay after navigation.
       const additions = observe(data).filter(notice => {
+        const room = data.groupChatRooms?.find(item => item.id === activeRoom.current);
+        if (notice.taskId && room?.messages.some(message => message.taskId === notice.taskId)) return false;
         const id = activeSession.current;
         if (!id) return true;
         if (notice.sessionId) return notice.sessionId !== id;

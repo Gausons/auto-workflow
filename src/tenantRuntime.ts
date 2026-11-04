@@ -16,6 +16,7 @@ import { createTaskCenter } from './taskCenter.js';
 import { createCodexExecution } from './codexExecution.js';
 import { createRemoteGit } from './remoteGit.js';
 import { createHistoryImages } from './historyImages.js';
+import { createGroupChats } from './groupChats.js';
 import { createConversations } from './conversations.js';
 import { createContextModelSummarizer } from './contextModelSummary.js';
 import { applyAssignmentBusinessRules, buildAssignmentJsonSchema, buildAssignmentSystemPrompt, buildAssignmentUserPayload, isAssignmentCandidate, normalizeAssignmentPeople, normalizeAssignmentRecommendation } from './assignmentEngine.js';
@@ -139,6 +140,14 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
       const current = new Map(documents().map(doc => [doc.id, doc.text]));
       const unchanged = new Set(before.filter(doc => current.get(doc.id) === doc.text).map(doc => doc.id));
       sendJson(res, 200, { ...result, ids: scope === 'bugs' && context !== state.storageUserKey ? [] : result.ids.filter(id => unchanged.has(id)) }); return;
+    }
+    if (url.pathname === '/api/workspaces/chats' && req.method === 'GET') { sendJson(res, 200, groupChats.list()); return; }
+    if (url.pathname === '/api/workspaces/chats' && req.method === 'POST') { sendJson(res, 201, await groupChats.create(await readJson(req), requestIdentity.getStore()!.user)); return; }
+    const chat = /^\/api\/workspaces\/chats\/([a-f0-9-]{36})(?:\/(messages|stop))?$/.exec(url.pathname);
+    if (chat && !chat[2] && req.method === 'GET') { sendJson(res, 200, groupChats.detail(chat[1])); return; }
+    if (chat && chat[2] && req.method === 'POST') {
+      const input = await readJson(req), actor = requestIdentity.getStore()!.user;
+      sendJson(res, 200, chat[2] === 'messages' ? groupChats.send(chat[1], input, actor) : await groupChats.stop(chat[1], input, actor)); return;
     }
     if (url.pathname === '/api/task-center/device-state' && req.method === 'GET') {
       sendJson(res, 200, deviceControl.snapshot(url.searchParams, requestIdentity.getStore()!.user.id)); return;
@@ -691,6 +700,14 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
   const conversations = createConversations({ database, tenantId: tenant.id, history: agentHistory, delivery: sessionDelivery, execution: codexExecution, environment,
     summarize, vectorSearch,
     contextRoot: path.join(rootDir, '.workflow-data', 'context', createHash('sha256').update(tenant.id).digest('hex')) });
+  const groupChats = createGroupChats({ database, tenantId: tenant.id, execution: codexExecution });
+  let groupChatPending: Promise<void> | undefined;
+  const groupChatTimer = setInterval(() => {
+    if (mutationPending) return;
+    mutationPending = true;
+    groupChatPending = groupChats.progress().catch(error => console.error('群聊推进失败', sanitizeError(error))).finally(() => { mutationPending = false; });
+  }, 1500);
+  groupChatTimer.unref();
   const conversationTimer = setInterval(() => { void conversations.preparePending().catch(() => {}); }, 1500);
   conversationTimer.unref();
   return {
@@ -725,6 +742,8 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
       finally { if (mutation) mutationPending = false; }
     },
     async close() {
+      clearInterval(groupChatTimer); groupChats.close();
+      await groupChatPending;
       taskCenterStream.close();
       deviceControl.close();
       await vectorSearch.close();

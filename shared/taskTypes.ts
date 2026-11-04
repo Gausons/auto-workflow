@@ -1,3 +1,4 @@
+import type { GroupChatRoom } from './groupChatTypes.js';
 import type { PreparedContextBrief } from './contextBriefTypes.js';
 
 export type TaskStatus = 'waiting' | 'error' | 'running' | 'ready' | 'review' | 'completed';
@@ -280,6 +281,7 @@ export interface DirectoryRequest {
 }
 
 export interface TaskCenterData {
+  groupChatRooms?: GroupChatRoom[];
   hiddenDeviceIds?: string[];
   /** Monotonic tenant-local version used to reconcile realtime invalidations. */
   syncVersion?: number;
