@@ -1,3 +1,6 @@
+import addStyles from './ComposerAddMenu.module.css';
+import { ComposerAddMenu } from './ComposerAddMenu.js';
+import { taskDraftContent } from './taskDraft.js';
 import speechStyles from '../components/SpeechInput.module.css';
 import { SpeechInput } from '../components/SpeechInput.js';
 import { PageHeading } from '../components/PageHeading.js';
@@ -47,6 +50,10 @@ export function NewTaskPage() {
   const [sourceSessionId, setSourceSessionId] = useState<string | null>(() => requestedSourceId);
   const [content, setContent] = useState('');
   const [files, setFiles] = useState<File[]>([]);
+  const [goalEnabled, setGoalEnabled] = useState(false);
+  const [goal, setGoal] = useState('');
+  const [planMode, setPlanMode] = useState(false);
+  const goalInput = useRef<HTMLTextAreaElement>(null);
   const [config, setConfig] = useBrowserPreference('new-task', defaultNewTaskPreference, parseNewTaskPreference);
   const { cwd, model, effort } = config;
   const setCwd = (value: string) => setConfig(previous => ({ ...previous, cwd: value }));
@@ -124,9 +131,12 @@ export function NewTaskPage() {
     mutationFn: async () => {
       const description = content.trim();
       if (!description) throw new Error('请输入任务描述');
-      if (files.length && project?.deviceId !== 'local') throw new Error('附件暂仅支持工作台所在设备，请移除附件或切回本地');
+      if (goalEnabled && !goal.trim()) throw new Error('请输入目标，或关闭目标模式');
+      const taskContent = taskDraftContent(description, goalEnabled ? goal : '', planMode);
+      if (taskContent.length > 64000) throw new Error('任务描述与模式内容合计不能超过 64000 字符，请缩短后重试');
+      if (files.length && (!project || (project.deviceId !== 'local' && !project.taskAttachments))) throw new Error('当前执行位置不支持附件，请移除附件或选择支持附件的设备');
       const attachments = await Promise.all(files.map(encodeFile));
-      const task = await apiRequest<Created>('/api/task-center', { method: 'POST', body: JSON.stringify({ action: 'create', content: description, sessionId: sourceSessionId }) });
+      const task = await apiRequest<Created>('/api/task-center', { method: 'POST', body: JSON.stringify({ action: 'create', content: taskContent, sessionId: sourceSessionId }) });
       let executed = false;
       let executionError = '';
       if (project) {
@@ -140,7 +150,7 @@ export function NewTaskPage() {
     onSuccess: result => {
       setCreated(previous => [...previous, result]);
       setError(result.executionError);
-      setContent(''); setFiles([]); setSourceSessionId(null); requestedSourceId = null;
+      setContent(''); setFiles([]); setGoal(''); setGoalEnabled(false); setPlanMode(false); setSourceSessionId(null); requestedSourceId = null;
       void queryClient.invalidateQueries({ queryKey: ['task-center', 'snapshot'] });
       window.dispatchEvent(new CustomEvent('bugflow:open-task', { detail: { taskId: result.taskId, source: 'create', warning: result.executionError } }));
     },
@@ -179,6 +189,7 @@ export function NewTaskPage() {
   }
   if (!active) return null;
   const blocked = create.isPending || busy;
+  const attachmentHint = !project ? '请先选择执行位置' : project.deviceId !== 'local' && !project.taskAttachments ? '请升级并重启该设备连接器以支持附件' : '';
   return <>
     <PageHeading title="新建任务"><a className="button secondary" href="#tasks">返回任务中心</a></PageHeading>
     {!canEdit && !identity.isPending ? <p role="alert">当前账号没有创建任务权限。</p> : null}
@@ -202,9 +213,14 @@ export function NewTaskPage() {
       <div className="tc-composer conversation-composer">
         {sourceSessionId && <p className="tc-meta">将关联会话：{snapshot.data?.sessions.find(item => item.id === sourceSessionId)?.title || sourceSessionId}</p>}
         <textarea ref={messageInput} aria-label="任务描述" value={content} onChange={event => setContent(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) { event.preventDefault(); event.currentTarget.form?.requestSubmit(); } }} placeholder="描述任务、期望结果，或需要解决的问题…" rows={4} maxLength={64000} required disabled={blocked || !canEdit} />
-        <div className="tc-attachment-list">{files.map((file, index) => <span className="tc-attachment" key={`${file.name}:${index}`} title={file.name}><span>{file.name}</span><small>{Math.max(1, Math.round(file.size / 1024))} KB</small><button type="button" aria-label={`移除 ${file.name}`} disabled={blocked} onClick={() => setFiles(current => current.filter((_, at) => at !== index))}>×</button></span>)}</div>
-        <input ref={fileInput} type="file" multiple hidden onChange={event => { const next = [...files, ...Array.from(event.target.files || [])]; if (next.length > 10 || next.some(file => file.size > 5 * 1024 * 1024) || next.reduce((total, file) => total + file.size, 0) > 10 * 1024 * 1024) setError('最多 10 个附件，单个不超过 5 MB，总计不超过 10 MB'); else { setFiles(next); setError(''); } event.target.value = ''; }} />
-        <footer><div className="tc-create-tools"><button className="tc-attach-button" type="button" aria-label="附加文件" disabled={blocked || project?.deviceId !== 'local'} onClick={() => fileInput.current?.click()}>＋</button><span className="tc-create-shortcut">⌘ / Ctrl + Enter 发送</span></div><div className={`tc-create-send ${speechStyles.toolbar}`}>
+        <div className={addStyles.modes}>
+          {goalEnabled && <span className={addStyles.chip}>◎ 目标<button type="button" aria-label="关闭目标" disabled={blocked || !canEdit} onClick={() => setGoalEnabled(false)}>×</button></span>}
+          {planMode && <span className={addStyles.chip}>☷ 计划模式<button type="button" aria-label="关闭计划模式" disabled={blocked || !canEdit} onClick={() => setPlanMode(false)}>×</button></span>}
+        </div>
+        {goalEnabled && <label className={addStyles.goal}>目标<textarea ref={goalInput} aria-label="任务目标" placeholder="希望达成什么结果？可填写完成条件…" value={goal} onChange={event => setGoal(event.target.value)} maxLength={8000} rows={2} required disabled={blocked || !canEdit} /></label>}
+        <div className="tc-attachment-list">{files.map((file, index) => <span className="tc-attachment" key={`${file.name}:${index}`} title={file.name}><span>{file.name}</span><small>{Math.max(1, Math.round(file.size / 1024))} KB</small><button type="button" aria-label={`移除 ${file.name}`} disabled={blocked || !canEdit} onClick={() => setFiles(current => current.filter((_, at) => at !== index))}>×</button></span>)}</div>
+        <input ref={fileInput} type="file" aria-label="任务附件" multiple hidden disabled={blocked || !canEdit || Boolean(attachmentHint)} onChange={event => { const next = [...files, ...Array.from(event.target.files || [])]; if (next.length > 10 || next.some(file => file.size > 5 * 1024 * 1024) || next.reduce((total, file) => total + file.size, 0) > 10 * 1024 * 1024) setError('最多 10 个附件，单个不超过 5 MB，总计不超过 10 MB'); else { setFiles(next); setError(''); } event.target.value = ''; }} />
+        <footer><div className="tc-create-tools"><ComposerAddMenu disabled={blocked || !canEdit} attachmentHint={attachmentHint} goalEnabled={goalEnabled} planMode={planMode} onAttach={() => fileInput.current?.click()} onGoal={() => { setGoalEnabled(value => !value); if (!goalEnabled) setTimeout(() => goalInput.current?.focus(), 0); }} onPlan={() => setPlanMode(value => !value)} /><span className="tc-create-shortcut">⌘ / Ctrl + Enter 发送</span></div><div className={`tc-create-send ${speechStyles.toolbar}`}>
           {project && <ModelEffortMenu project={project} model={model} effort={effort} disabled={blocked} onModelChange={setModel} onEffortChange={setEffort} />}
           <SpeechInput value={content} onChange={setContent} maxLength={64000} disabled={blocked || !canEdit} />
           <button className={`button primary ${speechStyles.composerSend}`} type="submit" aria-label="创建并发送任务" disabled={blocked || !canEdit || !content.trim() || Boolean(projects.length && !project)}>{create.isPending ? '…' : <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 20V4m-8 8 8-8 8 8" /></svg>}</button>

@@ -121,7 +121,7 @@ export async function syncDeviceOnce({ request, history, deviceId, name, outputD
   let firstHeartbeat = true;
   for (let i = 0; i < sessions.length || firstHeartbeat;) {
     const batch: typeof sessions = [];
-    const body = { action: 'heartbeat', deviceId, name, agents, capabilities: { resumeCodex, gitBranches: resumeCodex }, sessions: [] as DeviceSession[], ...(firstHeartbeat && codexProjects !== undefined ? { codexProjects } : {}) };
+    const body = { action: 'heartbeat', deviceId, name, agents, capabilities: { resumeCodex, gitBranches: resumeCodex, taskAttachments: resumeCodex }, sessions: [] as DeviceSession[], ...(firstHeartbeat && codexProjects !== undefined ? { codexProjects } : {}) };
     if (Buffer.byteLength(JSON.stringify(body)) > 900000) throw new Error('设备项目配置超过同步请求上限');
     do {
       const item = sessions[i + batch.length];
@@ -143,7 +143,7 @@ export async function syncDeviceOnce({ request, history, deviceId, name, outputD
         let offset = item.value.historyUpload!.chunk.length;
         while (offset < item.upload.length) {
           const historyUpload = historyChunk(item.upload, offset, item.value.historyUpload!.digest);
-          await request('POST', { action: 'heartbeat', deviceId, name, agents, capabilities: { resumeCodex, gitBranches: resumeCodex }, sessions: [{ ...item.value, historyUpload }] });
+          await request('POST', { action: 'heartbeat', deviceId, name, agents, capabilities: { resumeCodex, gitBranches: resumeCodex, taskAttachments: resumeCodex }, sessions: [{ ...item.value, historyUpload }] });
           offset += historyUpload.chunk.length;
         }
       }
@@ -295,7 +295,7 @@ async function runAuthenticatedConnector({ environment, once, signal, onReady, d
   };
   const heartbeat = async () => {
     await request('POST', { action: 'heartbeat', deviceId, name: environment.WORKBENCH_DEVICE_NAME || hostname(), agents: heartbeatAgents,
-      sessions: [], capabilities: { resumeCodex: Boolean(worker), gitBranches: Boolean(worker) } });
+      sessions: [], capabilities: { resumeCodex: Boolean(worker), gitBranches: Boolean(worker), taskAttachments: Boolean(worker) } });
   };
   const syncHistory = async () => {
     const result = await syncDeviceOnce({ request, history, deviceId, name: environment.WORKBENCH_DEVICE_NAME || hostname(), outputDir,

@@ -516,7 +516,7 @@ test('desktop submission timeout stays unknown and never falls back to a direct 
 });
 
 
-test('uploaded attachments reach the local runner as durable file references and reject remote execution', async t => {
+test('uploaded attachments reach the local runner as durable file references and reject unknown remote targets', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'execution-files-')); t.after(() => rm(root, { recursive: true, force: true }));
   const db = openDatabase(); t.after(() => db.close()); db.createTenant({ id: 'default', token: 'x'.repeat(32) });
   const center = createTaskCenter({ database: db, tenantId: 'default', history: { catalog: async () => ({ sessions: [], providers: [] }) } });
@@ -524,7 +524,7 @@ test('uploaded attachments reach the local runner as durable file references and
   const task = (await center.snapshot()).tasks[0]; let started: ExecutionJob | undefined;
   const service = createCodexExecution({ database: db, tenantId: 'default', workspace: () => root, attachmentRoot: path.join(root, 'uploads'), runnerFactory: () => ({ projects: async () => [{ id: 'p', cwd: root }], start: async job => { started = job; }, close() {} }) });
   const input = { taskId: task.id, revision: task.revision, projectId: 'p', attachments: [{ name: 'notes.txt', data: Buffer.from('attachment content').toString('base64') }] };
-  await assert.rejects(service.execute({ ...input, deviceId: 'remote' }), /附件暂仅/);
+  await assert.rejects(service.execute({ ...input, deviceId: 'remote' }), /请选择可用/);
   await service.execute(input);
   assert.ok(started);
   assert.ok(started.attachments?.[0]);

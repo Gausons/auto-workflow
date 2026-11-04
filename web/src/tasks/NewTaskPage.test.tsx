@@ -38,6 +38,95 @@ function setup(permissions = ['work.execute'], failExecute = false, remote = fal
 
 describe('NewTaskPage', () => {
 
+  it('opens the add menu and uploads removable files with the task', async () => {
+    const fetchMock = setup();
+    await screen.findByText('main');
+    const user = userEvent.setup();
+    const trigger = screen.getByRole('button', { name: '添加文件或模式' });
+    await user.click(trigger);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    const picker = vi.spyOn(screen.getByLabelText('任务附件'), 'click');
+    await user.click(screen.getByRole('button', { name: '添加文件' }));
+    expect(picker).toHaveBeenCalledOnce();
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    await user.upload(screen.getByLabelText('任务附件'), [new File(['notes'], 'notes.txt'), new File(['remove'], 'remove.txt')]);
+    await user.click(screen.getByRole('button', { name: '移除 remove.txt' }));
+    await user.type(screen.getByLabelText('任务描述'), '读取参考文件');
+    await user.click(screen.getByRole('button', { name: '创建并发送任务' }));
+    await screen.findByText('任务已创建并提交 Agent。');
+    const execution = fetchMock.mock.calls.find(([path]) => path === '/api/task-center/execute');
+    expect(JSON.parse(String(execution?.[1]?.body)).attachments).toEqual([{ name: 'notes.txt', data: btoa('notes') }]);
+    expect(screen.queryByText('notes.txt')).toBeNull();
+  });
+
+  it('submits goal and planning instructions together and clears modes after creation', async () => {
+    const fetchMock = setup();
+    await screen.findByText('main');
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText('任务描述'), '修复登录');
+    await user.click(screen.getByRole('button', { name: '添加文件或模式' }));
+    await user.click(screen.getByRole('button', { name: /目标/ }));
+    await user.type(screen.getByLabelText('任务目标'), '登录成功，回归测试通过');
+    await user.click(screen.getByRole('button', { name: '添加文件或模式' }));
+    await user.click(screen.getByRole('button', { name: /计划模式/ }));
+    expect(fetchMock.mock.calls.some(([path, init]) => path === '/api/task-center' && init?.method === 'POST')).toBe(false);
+    await user.click(screen.getByRole('button', { name: '创建并发送任务' }));
+    await screen.findByText('任务已创建并提交 Agent。');
+    const create = fetchMock.mock.calls.find(([path, init]) => path === '/api/task-center' && init?.method === 'POST');
+    expect(JSON.parse(String(create?.[1]?.body)).content).toContain('## 目标\n\n登录成功，回归测试通过');
+    expect(JSON.parse(String(create?.[1]?.body)).content).toContain('等待用户确认计划后再执行');
+    expect(screen.queryByLabelText('任务目标')).toBeNull();
+    expect(screen.queryByRole('button', { name: '关闭计划模式' })).toBeNull();
+  });
+
+  it('closes the menu with Escape and outside clicks and removes disabled modes from submission', async () => {
+    const fetchMock = setup();
+    await screen.findByText('main');
+    const user = userEvent.setup();
+    const trigger = screen.getByRole('button', { name: '添加文件或模式' });
+    await user.click(trigger);
+    await user.tab();
+    await user.keyboard('{Escape}');
+    expect(document.activeElement).toBe(trigger);
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    await user.click(trigger);
+    await user.click(screen.getByLabelText('任务描述'));
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    await user.click(trigger);
+    await user.click(screen.getByRole('button', { name: /目标/ }));
+    await user.type(screen.getByLabelText('任务目标'), '已取消的目标');
+    await user.click(screen.getByRole('button', { name: '关闭目标' }));
+    await user.click(trigger);
+    await user.click(screen.getByRole('button', { name: /计划模式/ }));
+    await user.click(screen.getByRole('button', { name: '关闭计划模式' }));
+    await user.type(screen.getByLabelText('任务描述'), '普通任务');
+    await user.click(screen.getByRole('button', { name: '创建并发送任务' }));
+    await screen.findByText('任务已创建并提交 Agent。');
+    const create = fetchMock.mock.calls.find(([path, init]) => path === '/api/task-center' && init?.method === 'POST');
+    expect(JSON.parse(String(create?.[1]?.body)).content).toBe('普通任务');
+  });
+
+  it('keeps modes available on old remote connectors and explains why attachments need an upgrade', async () => {
+    setup(['work.execute'], false, true);
+    await screen.findByLabelText('执行位置');
+    await userEvent.setup().click(screen.getByRole('button', { name: '添加文件或模式' }));
+    expect(screen.getByRole('button', { name: '添加文件' })).toHaveProperty('disabled', true);
+    expect(screen.getByText('请升级并重启该设备连接器以支持附件')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /计划模式/ })).toHaveProperty('disabled', false);
+  });
+
+  it('uploads files to a remote target advertising attachment support', async () => {
+    const fetchMock = setup(['work.execute'], false, false, null, true, true, false, [{ ...targets.projects[0], deviceId: 'remote', taskAttachments: true, gitBranches: true }]);
+    await screen.findByText('main');
+    const user = userEvent.setup();
+    await user.upload(screen.getByLabelText('任务附件'), new File(['remote'], 'remote.txt'));
+    await user.type(screen.getByLabelText('任务描述'), '远端附件');
+    await user.click(screen.getByRole('button', { name: '创建并发送任务' }));
+    await screen.findByText('任务已创建并提交 Agent。');
+    const execute = fetchMock.mock.calls.find(([path]) => path === '/api/task-center/execute');
+    expect(JSON.parse(String(execute?.[1]?.body))).toMatchObject({ deviceId: 'remote', attachments: [{ name: 'remote.txt', data: btoa('remote') }] });
+  });
+
   it('inserts recognized speech into the draft without creating or executing a task', async () => {
     mockSpeechRecognition();
     const fetchMock = setup();
@@ -125,6 +214,7 @@ describe('NewTaskPage', () => {
     const fetchMock = setup(['read']);
     expect(await screen.findByText('当前账号没有创建任务权限。')).toBeTruthy();
     expect(screen.getByRole('button', { name: '创建并发送任务' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: '添加文件或模式' })).toHaveProperty('disabled', true);
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
   });
 

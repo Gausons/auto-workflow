@@ -65,6 +65,7 @@ export interface AgentProject {
   online?: boolean;
   commonDirectories?: string[];
   gitBranches?: boolean;
+  taskAttachments?: boolean;
 }
 
 export interface DeviceHistorySource {
@@ -87,7 +88,7 @@ export interface Device {
   historySources?: DeviceHistorySource[];
   localExecutionEnabled?: boolean;
   codexProjects?: AgentProject[];
-  capabilities?: { resumeCodex?: boolean; gitBranches?: boolean };
+  capabilities?: { resumeCodex?: boolean; gitBranches?: boolean; taskAttachments?: boolean };
 }
 
 export interface Session {
@@ -228,7 +229,7 @@ export interface Execution {
   controlError?: string | null;
   contextEvents?: unknown[];
   contextEvidenceError?: string;
-  attachments?: Array<{ path: string; name?: string }>;
+  attachments?: Array<{ path: string; name?: string; sha256?: string; size?: number }>;
   desktopMessage?: string;
   desktopOpened?: boolean;
   executionTransport?: string;

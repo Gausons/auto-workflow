@@ -410,6 +410,54 @@ test('remote branch selector creates through the connector queue while its cache
   await expect(page.getByLabel('Git 分支')).toContainText('feature/remote');
 });
 
+test('new task add menu supports files, goals and planning at desktop and mobile widths', async ({ page }, testInfo) => {
+  await page.route('**/api/task-center/codex', route => route.fulfill({ json: { projects: [{ id: 'p', deviceId: 'remote', name: 'Codex', deviceName: '开发机', cwd: '/repo', online: true, taskAttachments: true }] } }));
+  const executions: Array<Record<string, unknown>> = [];
+  await page.route('**/api/task-center/execute', route => {
+    executions.push(route.request().postDataJSON() as Record<string, unknown>);
+    return route.fulfill({ json: { executionId: 'controlled-test' } });
+  });
+  await login(page);
+  await page.goto('/tasks/new');
+  const trigger = page.getByRole('button', { name: '添加文件或模式', exact: true });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await trigger.click();
+    const menu = page.getByRole('group', { name: '添加文件或模式', exact: true });
+    await expect(menu).toBeVisible();
+    await expect(menu.getByRole('button', { name: '添加文件', exact: true })).toBeEnabled();
+    await expect(menu.getByRole('button', { name: /目标/ })).toBeVisible();
+    await expect(menu.getByRole('button', { name: /计划模式/ })).toBeVisible();
+    const bounds = await menu.boundingBox();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.y).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+    await page.screenshot({ path: testInfo.outputPath(`composer-add-${width}.png`), fullPage: true });
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+    await expect(trigger).toBeFocused();
+  }
+  await trigger.click();
+  const chooserPromise = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: '添加文件', exact: true }).click();
+  await (await chooserPromise).setFiles({ name: '参考.txt', mimeType: 'text/plain', buffer: Buffer.from('参考资料') });
+  await expect(page.getByText('参考.txt', { exact: true })).toBeVisible();
+  await trigger.click();
+  await page.getByRole('button', { name: /目标 设置/ }).click();
+  await page.getByRole('textbox', { name: '任务目标', exact: true }).fill('登录流程验证通过');
+  await trigger.click();
+  await page.getByRole('button', { name: /计划模式 先/ }).click();
+  await page.getByRole('textbox', { name: '任务描述', exact: true }).fill('添加菜单浏览器回归');
+  await page.screenshot({ path: testInfo.outputPath('composer-modes-390.png'), fullPage: true });
+  await page.getByRole('button', { name: '创建并发送任务' }).click();
+  await expect(page).toHaveURL(/\/tasks$/);
+  await expect(page.getByRole('heading', { name: '添加菜单浏览器回归', exact: true })).toBeVisible();
+  await expect(page.getByText('登录流程验证通过', { exact: true })).toBeVisible();
+  await expect(page.getByText(/等待用户确认计划后再执行/)).toBeVisible();
+  expect(executions).toHaveLength(1);
+  expect(executions[0]).toMatchObject({ deviceId: 'remote', attachments: [{ name: '参考.txt', data: Buffer.from('参考资料').toString('base64') }] });
+});
+
 test('creates one task without silently starting an unavailable Agent', async ({ page }) => {
   await login(page);
   await page.getByRole('link', { name: '新建任务', exact: true }).click();

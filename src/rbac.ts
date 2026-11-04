@@ -78,7 +78,7 @@ export function connectorRouteAllowed(method: string | undefined, pathname: stri
 export function connectorActionAllowed(pathname: string, action: unknown) {
   const actions: Record<string, string[]> = {
     '/api/task-center': ['heartbeat', 'ack'],
-    '/api/task-center/execution-action': ['claim', 'report'],
+    '/api/task-center/execution-action': ['claim', 'report', 'attachments'],
     '/api/task-center/git-action': ['claim', 'verify', 'report'],
     '/api/task-center/directory-action': ['claim', 'report']
   };

@@ -1,0 +1,13 @@
+.root { position: relative; flex-shrink: 0; }
+.panel { position: absolute; bottom: calc(100% + 10px); left: 0; z-index: 30; width: min(330px, calc(100vw - 64px)); padding: 8px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel, #fff); box-shadow: 0 8px 30px #0002; }
+.heading { display: block; padding: 5px 10px; color: var(--muted); font-size: 12px; }
+.panel button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; border: 0; border-radius: 8px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.panel button:hover, .panel button:focus-visible { background: var(--surface-hover, #f3f3f3); }
+.panel button:disabled { opacity: .5; cursor: default; }
+.panel button > span:nth-child(2) { flex: 1; }
+.panel small { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+.modes { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.chip { display: inline-flex; gap: 8px; align-items: center; border: 1px solid var(--line); border-radius: 16px; padding: 4px 10px; font-size: 12px; }
+.chip button { border: 0; background: transparent; color: inherit; cursor: pointer; }
+.goal { display: grid; gap: 6px; margin: 10px 0; color: var(--muted); font-size: 13px; }
+.goal textarea { min-height: 70px; font-size: 14px; }

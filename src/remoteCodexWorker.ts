@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { attachmentPrompt, decodeAttachments, saveAttachments } from './taskWorkspace.js';
 import type { PreparedContextBrief } from '../shared/contextBriefTypes.js';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile, rename, realpath, stat } from 'node:fs/promises';
@@ -25,6 +26,7 @@ interface RemoteJob {
   prompt?: string; contextMarkdownPath?: string; promptImages?: PromptImageReference[]; contextSourcePartial?: boolean;
   contextCoverage?: ContextCoverage;
   contextBrief?: PreparedContextBrief;
+  attachments?: Array<{ path: string; name?: string; size?: number; sha256?: string }>;
   contextEvents?: unknown[];
   contextEvidenceError?: string;
 }
@@ -241,6 +243,19 @@ export class RemoteCodexWorker {
     if (!this.controlSync) this.controlSync = this.controlsOnce().finally(() => { this.controlSync = null; });
     return this.controlSync;
   }
+  private async prepareAttachments(job: RemoteJob): Promise<RemoteJob> {
+    if (!job.attachments?.length) return job;
+    const response = await this.request('POST', { action: 'attachments', executionId: job.id }, '/api/task-center/execution-action') as { files?: unknown };
+    if (!Array.isArray(response?.files)) throw new Error('附件下载响应无效');
+    const files = decodeAttachments(response.files);
+    if (files.length !== job.attachments.length) throw new Error('附件数量不匹配');
+    for (const [index, file] of files.entries()) {
+      const expected = job.attachments[index]!;
+      if (file.name !== expected.name || file.bytes.length !== expected.size || createHash('sha256').update(file.bytes).digest('hex') !== expected.sha256) throw new Error('附件完整性校验失败');
+    }
+    const saved = await saveAttachments(path.join(this.directory, 'attachments'), files);
+    return { ...job, attachments: saved.files, prompt: [job.prompt, attachmentPrompt(saved.files)].filter(Boolean).join('\n\n') };
+  }
   private async controlsOnce() {
     await this.load();
     const snapshot = await this.request('GET') as TaskCenterData;
@@ -340,7 +355,7 @@ export class RemoteCodexWorker {
         }
         let prepared: RemoteJob;
         try {
-          await this.validateTarget(claimed, snapshot); prepared = await this.prepareContext(claimed);
+          await this.validateTarget(claimed, snapshot); prepared = await this.prepareAttachments(await this.prepareContext(claimed));
           if (this.saved.get(job.id)?.status === 'interrupted' || this.signal?.aborted) continue;
           this.update(prepared); await this.queue; if (this.storageError) throw this.storageError;
         }
