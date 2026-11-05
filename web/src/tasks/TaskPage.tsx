@@ -6,6 +6,8 @@ import { apiRequest, hasSessionToken } from '../api/client.js';
 import { renderMarkdown } from '../components/historyView.js';
 import { taskActivity, taskTimeline } from './taskTimeline.js';
 import { useTaskCenterUpdates } from './taskCenterUpdates.js';
+import { agentDisplayName } from '../../../shared/agentLabels.js';
+import { agentAuthenticationMessage } from '../../../shared/agentAuthentication.js';
 import { taskContent } from '../../../shared/taskContent.js';
 import type { AgentProject, Execution, Handoff, Session, Task, TaskCenterData } from '../../../shared/taskTypes.js';
 import { SessionRecords } from './TaskAuxPage.js';
@@ -58,10 +60,10 @@ function ExecutionCard({ job, canEdit, open, act, busy }: { job: Execution; canE
   const codexThreadId = job.threadId || (job.agent === 'codex' ? job.sessionId : null);
   const releaseLabels: Record<string, string> = { releasing: '正在释放网页连接…', released: '网页连接已释放', failed: '会话释放失败，请检查服务进程' };
   return <article className="tc-execution" data-status={job.status}><div className="tc-actions"><strong>{executionLabels[job.status] || job.status}</strong><span className="tc-meta">{time(job.createdAt)}</span></div>
-    {['failed', 'blocked', 'unknown', 'waiting', 'interrupted'].includes(job.status) && job.message && <p>{job.message}</p>}
+    {['failed', 'blocked', 'unknown', 'waiting', 'interrupted'].includes(job.status) && job.message && <p>{agentAuthenticationMessage(job.message, job.agent)}</p>}
     <details className="tc-execution-details"><summary>执行详情</summary>{job.desktopMessage && <p className="tc-meta">{job.desktopMessage}</p>}{job.controlError && <p role="alert">{job.controlError}</p>}{job.releaseStatus && <p className="tc-meta">{releaseLabels[job.releaseStatus]}</p>}
       {job.deviceId !== 'local' && (job.sessionId || job.threadId) && <p className="tc-meta">目标设备的 Agent 会话：{job.sessionId || job.threadId}</p>}
-      <p className="tc-meta">{job.agentLabel || job.agent || 'Agent'} · {String(job.protocol || 'legacy').toUpperCase()} · {job.model || '默认模型'} · {job.reasoningEffort || '默认思考强度'} · {job.cwd} · 上下文 v{job.contextVersion}</p>
+      <p className="tc-meta">{agentDisplayName(job.agent, job.agentLabel)} · {String(job.protocol || 'legacy').toUpperCase()} · {job.model || '默认模型'} · {job.reasoningEffort || '默认思考强度'} · {job.cwd} · 上下文 v{job.contextVersion}</p>
     </details><div className="tc-actions">{codexThreadId && job.deviceId === 'local' && <a className="button secondary" href={`codex://threads/${encodeURIComponent(codexThreadId)}`}>在 Codex 中打开 ↗</a>}
       {canEdit && job.status === 'waiting' && job.request && <button className="button primary" type="button" onClick={() => open({ kind: 'respond', id: job.id })}>处理 Agent 请求</button>}
       {canEdit && ['queued', 'running', 'waiting'].includes(job.status) && <button className="button secondary" type="button" disabled={busy} onClick={() => act('stop', job.id)}>{job.status === 'queued' ? '取消等待' : '停止执行'}</button>}
@@ -72,7 +74,7 @@ function ExecutionCard({ job, canEdit, open, act, busy }: { job: Execution; canE
 function SessionItem({ session, data, canEdit, open }: { session: Session; data: TaskCenterData; canEdit: boolean; open(dialog: Dialog): void }) {
   const [expanded, setExpanded] = useState(false);
   const device = data.devices.find(item => item.id === session.deviceId);
-  return <details className="tc-session-thread" open={expanded} onToggle={event => setExpanded(event.currentTarget.open)}><summary><strong>{session.title || '会话来源暂不可用'}</strong><span className="tc-meta">{device?.name || '未知设备'} / {session.agentLabel || session.agent || '未知 Agent'} · {executionLabels[session.status || ''] || '历史会话'}{device?.online === false ? ' · 设备离线' : ''}{session.partial ? ' · 部分记录' : ''}</span></summary>
+  return <details className="tc-session-thread" open={expanded} onToggle={event => setExpanded(event.currentTarget.open)}><summary><strong>{session.title || '会话来源暂不可用'}</strong><span className="tc-meta">{device?.name || '未知设备'} / {agentDisplayName(session.agent, session.agentLabel)} · {executionLabels[session.status || ''] || '历史会话'}{device?.online === false ? ' · 设备离线' : ''}{session.partial ? ' · 部分记录' : ''}</span></summary>
     <div className="tc-thread-content"><p className="tc-meta">{session.cwd || '未记录工作目录'}{session.sourceSessionId ? ` · 接续自 ${data.sessions.find(value => value.id === session.sourceSessionId)?.title || session.sourceSessionId}` : ''}</p>
       {session.executionError && <p role="alert">本轮执行失败：{session.executionError}</p>}
       {expanded ? <SessionRecords session={session} /> : session.excerpt ? <pre>{session.excerpt}</pre> : <p className="tc-meta">展开后读取原始会话</p>}

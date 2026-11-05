@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import * as acp from '@agentclientprotocol/sdk';
 import { httpError } from './rbac.js';
 import { resolveCodexExecutable } from './codexExecutable.js';
+import { agentAuthenticationMessage } from '../shared/agentAuthentication.js';
 import { codexProviderError } from './agentExecutionError.js';
 import type { AgentProject, Execution, ExecutionStatus, PromptImageReference } from '../shared/taskTypes.js';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
@@ -52,6 +53,7 @@ interface ConnectionLike extends EventEmitter {
 }
 
 const asError = (error: unknown): ErrorLike => error instanceof Error ? error as ErrorLike : new Error(String(error));
+const authenticationRequired = (error: unknown) => error instanceof acp.RequestError && error.code === -32000 || error instanceof Error && /^Authentication required(?:\s*[:：].*)?$/is.test(error.message.trim());
 
 const executableNames: Record<string, string> = {
   codex: 'codex-acp',
@@ -332,7 +334,10 @@ export class AcpTaskRunner {
           this.configuration = await connection.catalog(session);
           try { await connection.closeSession(); } catch { /* Empty discovery sessions may not have a persisted transcript. */ }
           this.available = true;
-        } catch { this.available = false; }
+        } catch (error) {
+          if (authenticationRequired(error)) throw Object.assign(new Error(agentAuthenticationMessage('Authentication required', this.agent)), { code: 'AGENT_AUTH_REQUIRED' });
+          this.available = false;
+        }
         finally { connection.close(); }
       }
     }
@@ -352,16 +357,25 @@ export class AcpTaskRunner {
       : new AcpAgentConnection({ agent: job.agent!, launch, environment: this.environment })) as ConnectionLike;
     this.connections.set(job.id, connection);
     connection.removeAllListeners("update"); connection.removeAllListeners("permission"); connection.removeAllListeners("disconnected");
-    let acceptingUpdates = false, creatingSession = false, promptDispatched = false;
+    let acceptingUpdates = false, creatingSession = false, promptDispatched = false, observedActivity = false;
+    const authenticationFailure = (error: unknown) => {
+      const cause = asError(error);
+      if (!authenticationRequired(cause)) return false;
+      const rejected = cause instanceof acp.RequestError && cause.code === -32000 && !observedActivity && !job.output && !job.contextEvents?.length;
+      this.publish(job, { status: rejected ? 'failed' : 'unknown', request: null, message: `${agentAuthenticationMessage('Authentication required', agent)}${rejected ? 'Agent 已明确拒绝请求。' : '执行结果仍需在原 Agent 会话中核对。'}` });
+      return true;
+    };
     connection.on('update', ({ update }: acp.SessionNotification) => {
       if (!acceptingUpdates) return;
+      observedActivity = true;
       const value = textFromUpdate(update);
       if (value) this.publish(job, { output: job.conversationId ? `${job.output || ''}${value}` : `${job.output || ''}${value}`.slice(-24000) });
       if (job.conversationId && ['tool_call', 'tool_call_update'].includes(update?.sessionUpdate)) this.publish(job, { contextEvents: [...(job.contextEvents || []), update] });
     });
-    connection.on('permission', (params: acp.RequestPermissionRequest) => this.publish(job, {
-      status: 'waiting', request: { method: 'session/request_permission', params }, message: `${job.agentLabel || job.agent} 等待操作确认`
-    }));
+    connection.on('permission', (params: acp.RequestPermissionRequest) => {
+      observedActivity = true;
+      this.publish(job, { status: 'waiting', request: { method: 'session/request_permission', params }, message: `${job.agentLabel || job.agent} 等待操作确认` });
+    });
     connection.on('disconnected', () => {
       if (activeStatuses.has(job.status || '')) this.publish(job, { status: 'unknown', request: null, message: 'ACP 连接中断；不会自动重复执行。' });
     });
@@ -389,11 +403,16 @@ export class AcpTaskRunner {
         this.connections.delete(job.id);
         if (job.conversationId && status === 'completed') this.retained.set(session.sessionId, connection); else { this.retained.delete(session.sessionId); connection.close(); }
       }).catch((error: unknown) => {
-        this.publish(job, { status: 'unknown', request: null, message: asError(error).message });
+        if (!authenticationFailure(error)) this.publish(job, { status: 'unknown', request: null, message: asError(error).message });
         this.retained.delete(session.sessionId); this.connections.delete(job.id); connection.close();
       });
     } catch (caught: unknown) {
       const error = asError(caught);
+      if (authenticationFailure(error)) {
+        if (job.resumeSessionId) this.retained.delete(job.resumeSessionId);
+        this.connections.delete(job.id); connection.close();
+        return job;
+      }
       this.connections.delete(job.id); connection.close();
       if (job.conversationId && (creatingSession || promptDispatched)) {
         this.publish(job, { status: 'unknown', request: null, message: error.message });

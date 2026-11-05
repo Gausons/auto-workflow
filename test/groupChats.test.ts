@@ -1,3 +1,6 @@
+import * as acp from '@agentclientprotocol/sdk';
+import { EventEmitter } from 'node:events';
+import { AcpTaskRunner } from '../src/acpAgent.js';
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import { mkdtemp, mkdir, rm, realpath } from 'node:fs/promises';
@@ -215,4 +218,34 @@ test('remote selected directories bind grants to the tenant, creator, device, pr
   f.database.mutateTaskCenter(f.tenantId, data => { data.directoryRequests = []; });
   await f.service.progress(); assert.equal(f.launched.length, 2); assert.equal(f.service.detail(id).room.round?.status, 'blocked');
   assert.match(f.service.detail(id).room.messages.at(-2)?.detail || '', /确认此工作目录/);
+});
+
+
+test('an Agent authentication rejection halts the group round, persists a failure and permits only a manually started new round', async t => {
+  const f = await fixture(t);
+  let authenticated = false, prompts = 0;
+  class GroupAuthenticationConnection extends EventEmitter {
+    closed = false; promptStarted = false;
+    async initialize() {}
+    async newSession() { return { sessionId: 'auth-group-session' }; }
+    async configure() { return []; }
+    async prompt() { prompts++; this.promptStarted = true; if (!authenticated) throw acp.RequestError.authRequired(); return { stopReason: 'end_turn' }; }
+    close() { this.closed = true; }
+  }
+  const runner = new AcpTaskRunner({ agent: 'codex', environment: {}, connectionFactory: () => new GroupAuthenticationConnection(), onUpdate: job => f.database.mutateTaskCenter(f.tenantId, data => recordExecution(data, job)) });
+  t.after(() => runner.close());
+  f.execution.launch = job => { void runner.start({ ...job }); };
+  f.send(); await f.service.progress();
+  await new Promise(resolve => setImmediate(resolve));
+  await f.service.progress();
+  const room = f.service.detail(f.id).room;
+  assert.equal(room.round?.status, 'blocked'); assert.equal(room.messages[1].status, 'failed'); assert.equal(room.messages[2].status, 'stopped');
+  assert.match(room.messages[1].detail || '', /需要认证/);
+  const saved = openDatabase(f.key);
+  try { assert.equal(saved.readTaskCenter(f.tenantId).executions.at(-1)?.status, 'failed'); } finally { saved.close(); }
+  await f.service.progress(); assert.equal(prompts, 1);
+  authenticated = true;
+  await f.service.progress(); assert.equal(prompts, 1, 'login must not automatically replay the rejected prompt');
+  f.send('认证完成，重新讨论'); await f.service.progress(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(prompts, 2);
 });

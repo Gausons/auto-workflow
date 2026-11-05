@@ -1,3 +1,4 @@
+import * as acp from '@agentclientprotocol/sdk';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -266,4 +267,106 @@ test('uncertain managed ACP session creation never falls back to creating anothe
   const runner = new AcpPreferredRunner({ primary, fallback: { start() { fallbackStarts++; }, close() {} } });
   await runner.start({ id: 'uncertain', agent: 'codex', protocol: 'acp', conversationId: 'managed', cwd: '/repo', prompt: 'continue' });
   assert.equal(updates.at(-1)?.status, 'unknown'); assert.equal(fallbackStarts, 0); runner.close();
+});
+
+
+for (const agent of ['codex', 'claude']) for (const phase of ['initialize', 'new', 'load', 'configure', 'prompt']) {
+  test(`${agent} ACP authentication rejection during ${phase} fails once without fallback or replay`, async () => {
+    class AuthenticationConnection extends EventEmitter {
+      closed = false; promptStarted = false; sessionId: string | null = null; prompts = 0;
+      async initialize() { if (phase === 'initialize') throw acp.RequestError.authRequired(); }
+      async newSession() { if (phase === 'new') throw acp.RequestError.authRequired(); this.sessionId = 'native-auth'; return { sessionId: this.sessionId }; }
+      async loadSession() { if (phase === 'load') throw acp.RequestError.authRequired(); return this.newSession(); }
+      async configure() { if (phase === 'configure') throw acp.RequestError.authRequired(); return []; }
+      async prompt() { this.prompts++; this.promptStarted = true; throw acp.RequestError.authRequired(); }
+      close() { this.closed = true; }
+    }
+    for (const managed of [false, true]) {
+      const connection = new AuthenticationConnection(), updates: Execution[] = [];
+      let fallbackStarts = 0;
+      const primary = new AcpTaskRunner({ agent, connectionFactory: () => connection, environment: {}, onUpdate: job => updates.push(job) });
+      const runner = new AcpPreferredRunner({ primary, fallback: { start() { fallbackStarts++; }, close() {} } });
+      const job = { id: 'auth-job', agent, protocol: 'acp', cwd: '/repo', prompt: '讨论方案', ...(managed ? { conversationId: 'managed' } : {}), ...(phase === 'load' ? { resumeSessionId: 'native-auth' } : {}) };
+      await runner.start(job); await new Promise(resolve => setImmediate(resolve));
+      await runner.start(job);
+      assert.equal(updates.at(-1)?.status, 'failed');
+      assert.match(updates.at(-1)?.message || '', /目标设备.*需要认证/);
+      assert.match(updates.at(-1)?.message || '', /同一系统用户/);
+      assert.equal(connection.prompts, phase === 'prompt' ? 1 : 0);
+      assert.equal(fallbackStarts, 0); assert.equal(connection.closed, true);
+      assert.equal(primary.connections.size, 0); assert.equal(primary.retained.size, 0);
+      runner.close();
+    }
+  });
+}
+
+for (const evidence of ['text', 'tool', 'permission', 'previous-output', 'plain-error', 'disconnect']) test(`ACP authentication after ${evidence} preserves uncertain outcomes without resubmission`, async () => {
+  class UncertainAuthentication extends EventEmitter {
+    closed = false; promptStarted = false; prompts = 0;
+    async initialize() {}
+    async newSession() { return { sessionId: 'uncertain-auth' }; }
+    async configure() { return []; }
+    async prompt() {
+      this.prompts++; this.promptStarted = true;
+      if (evidence === 'text') this.emit('update', { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '已经开始处理' } } });
+      if (evidence === 'tool') this.emit('update', { update: { sessionUpdate: 'tool_call', toolCallId: 'tool', status: 'in_progress' } });
+      if (evidence === 'permission') this.emit('permission', { sessionId: 'uncertain-auth', toolCall: { toolCallId: 'tool' }, options: [] });
+      if (evidence === 'disconnect') throw new Error('connection lost');
+      if (evidence === 'plain-error') throw new Error('Authentication required');
+      throw acp.RequestError.authRequired();
+    }
+    close() { this.closed = true; }
+  }
+  const connection = new UncertainAuthentication(), updates: Execution[] = [];
+  const runner = new AcpTaskRunner({ agent: 'codex', connectionFactory: () => connection, environment: {}, onUpdate: job => updates.push(job) });
+  const job = { id: 'unknown-auth', protocol: 'acp', cwd: '/repo', prompt: '讨论', ...(evidence === 'previous-output' ? { output: '旧输出' } : {}) };
+  await runner.start(job); await new Promise(resolve => setImmediate(resolve)); await runner.start(job);
+  assert.equal(updates.at(-1)?.status, 'unknown'); assert.equal(connection.prompts, 1);
+  if (evidence !== 'disconnect') assert.match(updates.at(-1)?.message || '', /原 Agent 会话中核对/);
+  assert.equal(connection.closed, true); runner.close();
+});
+
+test('ACP discovery reports missing authentication and can recover after login without cached unavailability or fallback', async () => {
+  let authenticated = false, fallbackProjects = 0, closed = 0;
+  class DiscoveryConnection extends EventEmitter {
+    async initialize() {}
+    async newSession() { if (!authenticated) throw acp.RequestError.authRequired(); return { sessionId: 'discovery' }; }
+    async catalog() { return { models: [], defaultModel: '', reasoningEfforts: [], defaultReasoningEffort: '' }; }
+    async closeSession() {}
+    close() { closed++; }
+  }
+  const primary = new AcpTaskRunner({ agent: 'codex', connectionFactory: () => new DiscoveryConnection(), environment: {} });
+  const runner = new AcpPreferredRunner({ primary, fallback: { projects: async () => { fallbackProjects++; return []; }, close() {} } });
+  await assert.rejects(runner.projects(process.cwd()), /目标设备上的 Codex 需要认证/);
+  assert.equal(fallbackProjects, 0); assert.equal(primary.available, undefined);
+  authenticated = true;
+  assert.equal((await runner.projects(process.cwd()))[0].protocol, 'acp');
+  assert.equal(closed, 2); runner.close();
+});
+
+test('real ACP authentication rejection is preserved across the wire without sending a second prompt', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'acp-authentication-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const sdk = pathToFileURL(path.resolve('node_modules/@agentclientprotocol/sdk/dist/acp.js')).href;
+  const agentFile = path.join(root, 'auth-agent.mjs');
+  await writeFile(agentFile, `
+    import { Readable, Writable } from 'node:stream';
+    import * as acp from ${JSON.stringify(sdk)};
+    acp.agent({ name: 'authentication-fixture' })
+      .onRequest(acp.methods.agent.initialize, () => ({ protocolVersion: acp.PROTOCOL_VERSION, agentCapabilities: {}, authMethods: [] }))
+      .onRequest(acp.methods.agent.session.new, () => ({ sessionId: 'auth-session' }))
+      .onRequest(acp.methods.agent.session.prompt, () => { throw acp.RequestError.authRequired(); })
+      .connect(acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin)));
+  `);
+  const updates: Execution[] = [];
+  const runner = new AcpTaskRunner({ agent: 'claude', environment: { ...process.env, ACP_CLAUDE_EXECUTABLE: process.execPath, ACP_CLAUDE_ARGS: JSON.stringify([agentFile]) }, onUpdate: job => updates.push(job) });
+  t.after(() => runner.close());
+  const job = { id: 'wire-auth', agent: 'claude', protocol: 'acp', cwd: root, prompt: '讨论' };
+  await runner.start(job);
+  for (let attempt = 0; attempt < 100 && updates.at(-1)?.status !== 'failed'; attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(updates.at(-1)?.status, 'failed');
+  assert.match(updates.at(-1)?.message || '', /目标设备上的 Claude Code 需要认证/);
+  const count = updates.length;
+  await runner.start(job);
+  assert.equal(updates.length, count);
 });

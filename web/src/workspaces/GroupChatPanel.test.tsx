@@ -7,10 +7,12 @@ import { GroupChatPanel } from './GroupChatPanel.js';
 
 const clients: QueryClient[] = [];
 afterEach(() => { cleanup(); clients.forEach(client => client.clear()); clients.length = 0; vi.unstubAllGlobals(); });
-function setup(options: { viewer?: boolean; empty?: boolean; failure?: boolean; running?: boolean; local?: boolean; directoryStatus?: string; pendingDirectory?: boolean } = {}) {
+function setup(options: { viewer?: boolean; empty?: boolean; failure?: boolean; running?: boolean; local?: boolean; directoryStatus?: string; pendingDirectory?: boolean; authentication?: boolean; claudeFirst?: boolean } = {}) {
   const requests: { path: string; body: Record<string, unknown> }[] = [];
   let exists = !options.empty;
   const room: GroupChatRoom = { id: 'room-1', name: '方案讨论', revision: 1, createdBy: 'owner', createRequestId: 'create-id', createFingerprint: '', createdAt: '', updatedAt: '', participants: ['codex', 'claude'].map(agent => ({ id: agent, name: agent, responsibility: '', agent, deviceId: 'remote', projectId: agent, cwd: '/repo' })), messages: [{ id: 'message-1', roundId: 'round-1', role: 'user', authorId: 'me', authorName: '小王', text: '如何改进架构？', status: 'completed', createdAt: '' }, { id: 'message-2', roundId: 'round-1', role: 'agent', authorId: 'codex', authorName: 'codex', text: '<script>不可信输出</script>', status: options.running ? 'running' : 'completed', executionId: 'execution-1', taskId: 'task-1', createdAt: '' }], round: { id: 'round-1', actorId: 'me', status: options.running ? 'running' : 'completed' } };
+  if (options.claudeFirst) { room.participants[0].name = 'Agent 1'; room.participants[0].agent = 'claude'; room.messages[1].authorName = 'Agent 1'; }
+  if (options.authentication) { room.messages[1].status = 'unknown'; room.messages[1].detail = 'Authentication required'; room.round!.status = 'blocked'; }
   const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
     let data: unknown;
     if (init?.method === 'POST') {
@@ -135,4 +137,19 @@ it('cancels a pending directory selection without applying a late result to the 
   await user.click(screen.getByRole('button', { name: '＋ 新建聊天室' }));
   expect(within(screen.getAllByRole('group')[0]).getByLabelText('工作目录')).toHaveProperty('value', '/repo');
   expect(requests).toHaveLength(1);
+});
+
+it('explains authentication in an old group execution and keeps new rounds blocked until verified', async () => {
+  const { requests } = setup({ authentication: true });
+  expect(await screen.findByText(/目标设备上的 Codex 需要认证/)).toBeTruthy();
+  expect(screen.getByLabelText('讨论消息')).toHaveProperty('disabled', true);
+  expect(screen.getByRole('button', { name: '查看执行' })).toBeTruthy();
+  expect(requests).toHaveLength(0);
+});
+
+it('identifies the engine behind a custom group participant name when authentication fails', async () => {
+  setup({ authentication: true, claudeFirst: true });
+  expect(await screen.findByText(/目标设备上的 Claude Code 需要认证/)).toBeTruthy();
+  expect(screen.getByText('Agent 1（Claude Code）', { exact: true })).toBeTruthy();
+  expect(screen.getByLabelText('讨论消息')).toHaveProperty('disabled', true);
 });

@@ -66,6 +66,22 @@ describe('TaskPage', () => {
     expect(JSON.parse(String(fetchMock.mock.calls.find(([, init]) => init?.method === 'POST')?.[1]?.body))).toEqual({ executionId: 'job-1', action: 'reconcile' });
   });
 
+  it('explains a legacy Agent authentication error while preserving its unknown status and avoiding resubmission', async () => {
+    const data = { ...snapshot, tasks: [{ ...task, status: 'error' }], executions: [{ id: 'auth-job', taskId: 'task-1', agent: 'codex', status: 'unknown', message: 'Authentication required', contextVersion: 3, deviceId: 'remote', cwd: '/repo', title: '群聊 Agent', prompt: '讨论', createdAt: task.createdAt, updatedAt: task.updatedAt }] };
+    const fetchMock = setup(['work.execute'], data);
+    expect(await screen.findByText(/目标设备上的 Codex 需要认证/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: '核对执行结果' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '继续任务' })).toBeNull();
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0);
+  });
+
+  it('shows the actual Claude engine for a group participant called Agent 1 in execution and session details', async () => {
+    setup(['work.execute'], { ...snapshot, tasks: [{ ...task, status: 'error', sessionIds: ['claude-session'] }], sessions: [{ id: 'claude-session', source: 'agentExecution', agent: 'claude', agentLabel: 'Agent 1', title: '群聊', deviceId: 'remote', cwd: '/repo', status: 'unknown', updatedAt: task.updatedAt }], executions: [{ id: 'claude-job', taskId: task.id, agent: 'claude', agentLabel: 'Agent 1', protocol: 'acp', status: 'unknown', message: 'Authentication required', contextVersion: 3, deviceId: 'remote', cwd: '/repo', title: '群聊', prompt: '讨论', createdAt: task.createdAt, updatedAt: task.updatedAt }] });
+    expect(await screen.findByText(/目标设备上的 Claude Code 需要认证/)).toBeTruthy();
+    expect(screen.getAllByText(/Agent 1（Claude Code）/)).toHaveLength(2);
+    expect(screen.getByRole('button', { name: '核对执行结果' })).toBeTruthy();
+  });
+
   it('submits one explicit response to a waiting Agent request', async () => {
     const data = { ...snapshot, executions: [{ id: 'job-2', taskId: 'task-1', status: 'waiting', contextVersion: 3, deviceId: 'local', cwd: '/repo', title: '任务', prompt: '修复', createdAt: '2026-09-27T00:00:00.000Z', updatedAt: '2026-09-27T00:00:00.000Z', request: { method: 'item/tool/requestUserInput', params: { questions: [{ id: 'q1', question: '是否继续？' }] } } }] };
     const fetchMock = setup(['work.execute'], data);

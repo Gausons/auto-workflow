@@ -56,6 +56,13 @@ function switchableCreation(respond: () => Promise<Response>) {
 }
 
 describe('HistoryComposer', () => {
+  it('shows target-device authentication guidance without retrying an unknown continuation', async () => {
+    const writes = setup({ execution: { id: 'auth-job', agent: 'codex', status: 'unknown', message: 'Authentication required' }, executions: [] });
+    expect(await screen.findByText(/目标设备上的 Codex 需要认证/)).toBeTruthy();
+    expect(screen.getByText(/结果待核对/)).toBeTruthy();
+    expect(writes).toHaveLength(0);
+  });
+
 
   it('inserts recognized speech without sending and submits it only on explicit send', async () => {
     mockSpeechRecognition();
