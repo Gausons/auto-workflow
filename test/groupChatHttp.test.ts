@@ -35,6 +35,8 @@ test('group chat HTTP enforces team membership, roles, tenant boundaries and ide
     const input = { name: '研发讨论', requestId: randomUUID(), participants: ['codex', 'claude'].map(agent => ({ name: agent, deviceId: 'chat-device', projectId: agent })) };
     assert.equal((await request(viewerToken, base, 'POST', input)).status, 403);
     for (const participants of [[], [input.participants[0]], [null, {}]]) assert.equal((await request(token, base, 'POST', { ...input, participants })).status, 400);
+    for (const cwd of ['', false, 'x'.repeat(2001)]) assert.equal((await request(token, base, 'POST', { ...input, participants: input.participants.map(item => ({ ...item, cwd })) })).status, 400);
+    assert.equal((await request(token, base, 'POST', { ...input, participants: input.participants.map(item => ({ ...item, cwd: '/outside/project' })) })).status, 403);
     const created = await request(token, base, 'POST', input); assert.equal(created.status, 201, created.data.message);
     const id = created.data.id;
     assert.equal((await request(token, base, 'POST', input)).data.id, id);

@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
+import { mkdtemp, mkdir, rm, realpath } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createGroupChats } from '../src/groupChats.js';
 import { createCodexExecution, recordExecution } from '../src/codexExecution.js';
@@ -163,4 +166,53 @@ test('stop follows a stable round identity despite output updates and cannot sto
   f.send('另一轮');
   await assert.rejects(f.service.stop(f.id, { revision: room.revision, roundId: room.round!.id }, f.actor), /轮次已变化/);
   assert.equal(f.service.detail(f.id).room.round?.status, 'running');
+});
+
+
+test('each local participant executes in its selected canonical directory and rejects unavailable paths', async t => {
+  const f = await fixture(t), root = await mkdtemp(path.join(tmpdir(), 'chat-cwd-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const first = path.join(root, 'first'), second = path.join(root, 'second');
+  await mkdir(first); await mkdir(second);
+  const input = { ...f.input, requestId: randomUUID(), participants: f.input.participants.map((participant, index) => ({ ...participant, cwd: index ? second : first })) };
+  const { id } = await f.service.create(input, f.actor);
+  assert.deepEqual(f.service.detail(id).room.participants.map(item => item.cwd), [await realpath(first), await realpath(second)]);
+  assert.equal((await f.service.create(input, f.actor)).id, id);
+  await assert.rejects(f.service.create({ ...input, participants: input.participants.map(item => ({ ...item, cwd: second })) }, f.actor), /请求标识/);
+  for (const cwd of ['', false, {}, 'x'.repeat(2001), '/missing-group-chat-directory', first + '\0']) await assert.rejects(f.service.create({ ...input, requestId: randomUUID(), participants: input.participants.map(item => ({ ...item, cwd })) }, f.actor), /工作目录/);
+  f.service.send(id, { message: '讨论目录中的项目', requestId: randomUUID(), revision: 1 }, f.actor);
+  await Promise.all([f.service.progress(), f.service.progress()]);
+  assert.equal(f.launched.at(-1)?.cwd, await realpath(first));
+  f.finish(); await f.service.progress(); assert.equal(f.launched.at(-1)?.cwd, await realpath(second));
+  f.finish(); await f.service.progress();
+  f.service.send(id, { message: '继续', requestId: randomUUID(), revision: f.service.detail(id).room.revision }, f.actor);
+  await rm(first, { recursive: true }); await f.service.progress();
+  assert.equal(f.service.detail(id).room.round?.status, 'blocked'); assert.equal(f.launched.length, 2);
+});
+
+test('remote selected directories bind grants to the tenant, creator, device, project and completed result', async t => {
+  const f = await fixture(t);
+  f.setProjects(['codex', 'claude'].map(agent => ({ id: agent, agent, deviceId: 'remote', cwd: '/repo', online: true })));
+  const grantId = randomUUID();
+  const grant = { id: grantId, deviceId: 'remote', projectId: 'codex', requestedBy: f.actor.id, status: 'completed' as const, cwd: '/selected/project', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  const input = { ...f.input, requestId: randomUUID(), participants: f.input.participants.map((participant, index) => ({ ...participant, deviceId: 'remote', cwd: index ? '/repo/subdir' : '/selected/project', ...(index ? {} : { directoryRequestId: grantId }) })) };
+  await assert.rejects(f.service.create(input, f.actor), /确认此工作目录/);
+  f.database.mutateTaskCenter(f.principal.tenant.id, data => { data.directoryRequests = [grant]; });
+  await assert.rejects(f.service.create(input, f.actor), /确认此工作目录/);
+  for (const invalid of [{ ...grant, requestedBy: 'another-member' }, { ...grant, deviceId: 'other-device' }, { ...grant, projectId: 'claude' }, { ...grant, status: 'pending' as const }, { ...grant, cwd: '/different' }]) {
+    f.database.mutateTaskCenter(f.tenantId, data => { data.directoryRequests = [invalid]; });
+    await assert.rejects(f.service.create(input, f.actor), /确认此工作目录/);
+  }
+  f.database.mutateTaskCenter(f.tenantId, data => { data.directoryRequests = [grant]; });
+  const { id } = await f.service.create(input, f.actor);
+  assert.equal((await f.service.create(input, f.actor)).id, id);
+  for (const cwd of ['/repo/../secret', '/repo-other', 'relative/path', '/selected/project/other']) await assert.rejects(f.service.create({ ...input, requestId: randomUUID(), participants: input.participants.map((participant, index) => index ? participant : { ...participant, cwd }) }, f.actor), /确认此工作目录/);
+  f.service.send(id, { message: '远端项目讨论', requestId: randomUUID(), revision: 1 }, f.actor);
+  await f.service.progress(); assert.equal(f.launched.at(-1)?.cwd, grant.cwd); assert.equal(f.launched.at(-1)?.directoryRequestId, grantId);
+  f.finish(); await f.service.progress(); assert.equal(f.launched.at(-1)?.cwd, '/repo/subdir');
+  f.finish(); await f.service.progress();
+  f.service.send(id, { message: '再讨论', requestId: randomUUID(), revision: f.service.detail(id).room.revision }, f.actor);
+  f.database.mutateTaskCenter(f.tenantId, data => { data.directoryRequests = []; });
+  await f.service.progress(); assert.equal(f.launched.length, 2); assert.equal(f.service.detail(id).room.round?.status, 'blocked');
+  assert.match(f.service.detail(id).room.messages.at(-2)?.detail || '', /确认此工作目录/);
 });

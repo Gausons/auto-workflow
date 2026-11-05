@@ -6,6 +6,7 @@ export interface GroupChatParticipant {
   deviceId: string;
   projectId: string;
   cwd: string;
+  directoryRequestId?: string;
 }
 export interface GroupChatMessage {
   id: string;

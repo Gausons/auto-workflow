@@ -21,8 +21,21 @@ test('team members create a multi-agent discussion, see ordered replies, and sto
   const participants = page.getByRole('group', { name: /^Agent [12]$/ });
   await participants.nth(0).getByLabel('显示名称').fill('方案设计师');
   await participants.nth(0).getByLabel('执行目标').selectOption(JSON.stringify(['chat-fixture', 'codex']));
+  await expect(participants.nth(0).getByLabel('工作目录')).toHaveValue('/fixture/repo');
+  const directoryResponse = page.waitForResponse(response => response.url().endsWith('/api/task-center/directory-picker') && response.request().method() === 'POST');
+  await participants.nth(0).getByRole('button', { name: '选择目录', exact: true }).click();
+  const { requestId: directoryRequestId } = await (await directoryResponse).json() as { requestId: string };
+  expect((await request.post('/api/task-center/directory-action', { headers, data: { action: 'claim', requestId: directoryRequestId } })).ok()).toBeTruthy();
+  expect((await request.post('/api/task-center/directory-action', { headers, data: { action: 'report', requestId: directoryRequestId, cwd: '/fixture/selected-project' } })).ok()).toBeTruthy();
+  await expect(participants.nth(0).getByLabel('工作目录')).toHaveValue('/fixture/selected-project');
   await participants.nth(1).getByLabel('显示名称').fill('安全评审员');
   await participants.nth(1).getByLabel('执行目标').selectOption(JSON.stringify(['chat-fixture', 'claude']));
+  await participants.nth(1).getByLabel('工作目录').fill('/fixture/repo/review');
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 1100 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+    await page.screenshot({ path: testInfo.outputPath(`group-chat-create-${width}.png`), fullPage: true });
+  }
   await participants.nth(1).getByLabel('讨论职责（可选）').fill('检查权限与隔离');
   await page.getByRole('button', { name: '创建聊天室', exact: true }).click();
   await expect(page.getByRole('heading', { name: '发布方案评审' })).toBeVisible();
@@ -39,6 +52,8 @@ test('team members create a multi-agent discussion, see ordered replies, and sto
     expect(claimed.ok()).toBeTruthy();
     const job = (await claimed.json() as { job: Execution }).job;
     expect(job.agent).toBe(index ? 'claude' : 'codex');
+    expect(job.cwd).toBe(index ? '/fixture/repo/review' : '/fixture/selected-project');
+    if (!index) expect(job.directoryRequestId).toBe(directoryRequestId);
     if (index) expect(job.prompt).toContain('建议先灰度发布并准备回滚方案。');
     const reported = await request.post('/api/task-center/execution-action', { headers, data: { action: 'report', executionId, report: { status: 'completed', output, message: '测试 Agent 回复完成', sessionId: `group-chat-fixture-${index}` } } });
     expect(reported.ok()).toBeTruthy();
@@ -52,6 +67,7 @@ test('team members create a multi-agent discussion, see ordered replies, and sto
     await page.screenshot({ path: testInfo.outputPath(`group-chat-${width}.png`), fullPage: true });
   }
   await page.reload(); await page.getByRole('button', { name: '群组聊天室', exact: true }).click();
+  await expect(page.getByText('方案设计师：/fixture/selected-project', { exact: true })).toBeVisible();
   await expect(page.getByText('同意灰度，发布前补充权限隔离检查。', { exact: true })).toBeVisible();
   await page.getByLabel('讨论消息').fill('继续讨论回滚'); await page.getByRole('button', { name: '发送并开始讨论' }).click();
   await expect.poll(() => page.getByRole('log', { name: '讨论记录' }).evaluate(element => element.scrollTop)).toBeGreaterThan(0);

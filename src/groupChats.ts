@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import type { GroupChatMessage, GroupChatParticipant, GroupChatRoom } from '../shared/groupChatTypes.js';
 import type { AgentProject, Execution, TaskCenterData } from '../shared/taskTypes.js';
+import { insideRemoteDirectory } from './remoteDirectory.js';
 import { recordExecution } from './codexExecution.js';
 import { httpError, permissionsFor } from './rbac.js';
 
@@ -69,10 +70,15 @@ export function createGroupChats({ database, tenantId, execution }: { database: 
     if (!user?.enabled || !permissionsFor(user.role).includes('work.execute')) throw httpError(403, '当前成员没有发起 Agent 讨论的权限');
     return user;
   }
-  async function projectFor(participant: Pick<GroupChatParticipant, 'deviceId' | 'projectId'>, projects: AgentProject[]) {
+  async function projectFor(participant: Pick<GroupChatParticipant, 'deviceId' | 'projectId'> & { cwd?: string; directoryRequestId?: string }, projects: AgentProject[], actorId: string) {
     const project = projects.find(item => item.id === participant.projectId && (item.deviceId || 'local') === participant.deviceId);
     if (!project || project.online === false) throw httpError(409, '所选 Agent 或设备不可用，请检查设备连接');
-    let cwd = project.cwd;
+    let cwd = participant.cwd || project.cwd;
+    if (cwd.includes('\0')) throw httpError(400, '工作目录格式无效');
+    if (participant.deviceId !== 'local' && !insideRemoteDirectory(project.cwd, cwd)) {
+      const selection = read().directoryRequests?.find(item => item.id === participant.directoryRequestId);
+      if (!selection || selection.status !== 'completed' || selection.requestedBy !== actorId || selection.deviceId !== participant.deviceId || selection.projectId !== participant.projectId || selection.cwd !== cwd) throw httpError(403, '请在目标设备使用“选择目录”确认此工作目录');
+    }
     if (participant.deviceId === 'local') {
       try { cwd = await realpath(cwd); if (!(await stat(cwd)).isDirectory()) throw new Error(); }
       catch { throw httpError(409, 'Agent 工作目录不可用'); }
@@ -96,7 +102,9 @@ export function createGroupChats({ database, tenantId, execution }: { database: 
       if (!Array.isArray(input.participants) || input.participants.length < 2 || input.participants.length > 6) throw httpError(400, '请选择 2–6 位 Agent');
       const selections = input.participants.map(value => {
         const item = object(value);
-        return { name: text(item.name, 40), responsibility: item.responsibility === undefined || item.responsibility === '' ? '' : text(item.responsibility, 1000), deviceId: text(item.deviceId, 80), projectId: text(item.projectId, 500) };
+        if (item.cwd !== undefined && (typeof item.cwd !== 'string' || !item.cwd.trim() || item.cwd.length > 2000)) throw httpError(400, '工作目录格式无效');
+        if (item.directoryRequestId !== undefined) requestId(item.directoryRequestId);
+        return { ...(item.cwd !== undefined ? { cwd: String(item.cwd).trim() } : {}), ...(item.directoryRequestId !== undefined ? { directoryRequestId: String(item.directoryRequestId) } : {}), name: text(item.name, 40), responsibility: item.responsibility === undefined || item.responsibility === '' ? '' : text(item.responsibility, 1000), deviceId: text(item.deviceId, 80), projectId: text(item.projectId, 500) };
       });
       if (new Set(selections.map(item => item.name)).size !== selections.length) throw httpError(400, 'Agent 名称不能重复');
       const fingerprint = createHash('sha256').update(JSON.stringify([name, selections])).digest('hex');
@@ -108,7 +116,7 @@ export function createGroupChats({ database, tenantId, execution }: { database: 
       const { projects } = await execution.targets();
       const participants: GroupChatParticipant[] = [];
       for (const selection of selections) {
-        const project = await projectFor(selection, projects);
+        const project = await projectFor(selection, projects, actor.id);
         participants.push({ ...selection, id: randomUUID(), cwd: project.cwd, agent: project.agent || 'codex' });
       }
       return database.mutateTaskCenter(tenantId, data => {
@@ -176,7 +184,7 @@ export function createGroupChats({ database, tenantId, execution }: { database: 
             const next = refreshed.messages.find(message => message.roundId === refreshed.round?.id && message.role === 'agent' && message.status !== 'completed');
             if (next && !next.executionId) {
               const participant = saved.participants.find(item => item.id === next.authorId)!;
-              project = await projectFor(participant, (await execution.targets()).projects);
+              project = await projectFor(participant, (await execution.targets()).projects, saved.createdBy);
               if (project.cwd !== participant.cwd || (project.agent || 'codex') !== participant.agent) throw httpError(409, 'Agent 配置已变化，请新建聊天室');
             }
           } catch (error) { failure = error instanceof Error ? error.message : 'Agent 准备失败'; }
@@ -198,7 +206,7 @@ export function createGroupChats({ database, tenantId, execution }: { database: 
               const participant = room.participants.find(item => item.id === next.authorId)!;
               const taskId = randomUUID(), at = now();
               const executionJob: Execution = { id: randomUUID(), requestId: next.id, taskId, contextVersion: 1,
-                deviceId: participant.deviceId, projectId: participant.projectId, cwd: participant.cwd, agent: participant.agent, agentLabel: participant.name,
+                deviceId: participant.deviceId, projectId: participant.projectId, directoryRequestId: participant.directoryRequestId, cwd: participant.cwd, agent: participant.agent, agentLabel: participant.name,
                 protocol: project.protocol || 'legacy', appServerProjectId: project.appServerProjectId, model: project.defaultModel || null, reasoningEffort: project.defaultReasoningEffort || null,
                 title: `${room.name} · ${participant.name}`.slice(0, 120), prompt: prompt(room, participant), status: 'queued', createdAt: at, updatedAt: at, output: '', message: '群聊回复已排队' };
               data.tasks.push({ id: taskId, title: executionJob.title, content: executionJob.prompt, status: 'running', revision: 1, contextVersion: 1, sessionIds: [], events: [{ id: randomUUID(), at, message: '发起群聊 Agent 回复' }], createdAt: at, updatedAt: at });

@@ -1,16 +1,18 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiRequest } from '../api/client.js';
 import type { AgentProject } from '../../../shared/taskTypes.js';
 import type { GroupChatMessage, GroupChatRoom } from '../../../shared/groupChatTypes.js';
+import { waitForRemoteRequest } from '../tasks/remoteRequest.js';
 import styles from './GroupChatPanel.module.css';
 
 interface RoomSummary { id: string; name: string; status: string; participants: GroupChatRoom['participants'] }
-interface Selection { name: string; target: string; responsibility: string }
+interface Selection { name: string; target: string; responsibility: string; cwd: string; directoryRequestId: string }
+interface DirectoryResult { status: string; requestId?: string; cwd?: string; message?: string }
 const messageLabels: Record<GroupChatMessage['status'], string> = { pending: '等待发言', running: '正在回复', completed: '已回复', failed: '回复失败', unknown: '结果待核对', stopped: '已停止' };
 const roundLabels: Record<string, string> = { running: '讨论进行中', completed: '等待新话题', blocked: '本轮已中断，请查看执行状态', stopped: '已停止后续发言' };
 const targetKey = (project: AgentProject) => JSON.stringify([project.deviceId || 'local', project.id]);
-const newSelection = (index: number): Selection => ({ name: `Agent ${index + 1}`, target: '', responsibility: '' });
+const newSelection = (index: number): Selection => ({ name: `Agent ${index + 1}`, target: '', responsibility: '', cwd: '', directoryRequestId: '' });
 
 export function GroupChatPanel({ workspaceId, canExecute }: { workspaceId: string; canExecute: boolean }) {
   const client = useQueryClient();
@@ -19,6 +21,10 @@ export function GroupChatPanel({ workspaceId, canExecute }: { workspaceId: strin
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   const [selections, setSelections] = useState<Selection[]>([newSelection(0), newSelection(1)]);
+  const [picking, setPicking] = useState<number | null>(null);
+  const [directoryStatus, setDirectoryStatus] = useState('');
+  const picker = useRef<AbortController | null>(null);
+  useEffect(() => () => { picker.current?.abort(); }, []);
   const [draft, setDraft] = useState('');
   const createKey = useRef(''), sendKey = useRef('');
   const messagesRef = useRef<HTMLDivElement>(null), followMessages = useRef(true);
@@ -40,19 +46,45 @@ export function GroupChatPanel({ workspaceId, canExecute }: { workspaceId: strin
   useLayoutEffect(() => {
     if (messagesRef.current && followMessages.current) messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
   }, [room]);
-  const busy = action.isPending;
+  const busy = action.isPending || picking !== null;
   const running = room?.round?.status === 'running';
   const unresolved = room?.messages.some(message => message.status === 'unknown' || message.status === 'running');
   function editSelection(index: number, patch: Partial<Selection>) {
     createKey.current = ''; action.reset();
     setSelections(items => items.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item));
   }
+  async function chooseDirectory(index: number) {
+    if (picker.current || action.isPending) return;
+    const selection = selections[index];
+    const project = targets.data?.projects.find(item => targetKey(item) === selection.target);
+    if (!project) return;
+    const controller = new AbortController(); picker.current = controller;
+    setPicking(index); setDirectoryStatus('请在目标设备选择并确认工作目录。');
+    try {
+      const { signal } = controller;
+      const response = await apiRequest<DirectoryResult>('/api/task-center/directory-picker', { method: 'POST', body: JSON.stringify({ deviceId: project.deviceId || 'local', projectId: project.id }), signal });
+      if (['pending', 'selecting'].includes(response.status) && !response.requestId) throw new Error('目录选择结果不完整，请重新选择');
+      const result = await waitForRemoteRequest(client, 'directoryRequests', response.requestId || '', response,
+        () => apiRequest<DirectoryResult>(`/api/task-center/directory-picker?requestId=${encodeURIComponent(response.requestId || '')}`, { signal }), 300_000, signal);
+      if (signal.aborted) return;
+      if (result.status === 'cancelled') throw new Error('已取消选择目录');
+      if (result.status !== 'completed') throw new Error(result.message || '无法选择目录');
+      if (!result.cwd || (project.deviceId !== 'local' && project.deviceId && !response.requestId)) throw new Error('目录选择结果不完整，请重新选择');
+      editSelection(index, { cwd: result.cwd, directoryRequestId: response.requestId || '' });
+      setDirectoryStatus('');
+    } catch (error) {
+      if (!controller.signal.aborted) setDirectoryStatus(error instanceof Error ? error.message : '无法选择目录');
+    } finally {
+      if (picker.current === controller) { picker.current = null; setPicking(null); }
+    }
+  }
   async function create(event: React.FormEvent) {
     event.preventDefault();
+    if (busy) return;
     createKey.current ||= crypto.randomUUID();
     const participants = selections.map(selection => {
       const target = targets.data?.projects.find(project => targetKey(project) === selection.target);
-      return { name: selection.name, responsibility: selection.responsibility, deviceId: target?.deviceId || 'local', projectId: target?.id || '' };
+      return { name: selection.name, responsibility: selection.responsibility, deviceId: target?.deviceId || 'local', projectId: target?.id || '', cwd: selection.cwd.trim(), ...(selection.directoryRequestId ? { directoryRequestId: selection.directoryRequestId } : {}) };
     });
     try {
       const result = await action.mutateAsync({ path: '/api/workspaces/chats', body: { name, participants, requestId: createKey.current } });
@@ -79,18 +111,20 @@ export function GroupChatPanel({ workspaceId, canExecute }: { workspaceId: strin
         {!targets.data?.projects.some(project => project.online !== false) && <p>还没有可用 Agent，请先在设备页面连接团队设备并配置 Agent。</p>}
         {selections.map((selection, index) => <fieldset key={index} disabled={busy} className={styles.participant}><legend>Agent {index + 1}</legend>
           <label>显示名称<input required maxLength={40} value={selection.name} onChange={event => editSelection(index, { name: event.target.value })} /></label>
-          <label>执行目标<select required value={selection.target} onChange={event => editSelection(index, { target: event.target.value })}><option value="">选择设备与 Agent</option>{targets.data?.projects.map(project => <option key={targetKey(project)} value={targetKey(project)} disabled={project.online === false}>{project.deviceName || '工作台所在设备'} · {project.agent || 'codex'} · {project.name || project.cwd}{project.online === false ? '（离线）' : ''}</option>)}</select></label>
+          <label>执行目标<select required value={selection.target} onChange={event => editSelection(index, { target: event.target.value, cwd: targets.data?.projects.find(item => targetKey(item) === event.target.value)?.cwd || '', directoryRequestId: '' })}><option value="">选择设备与 Agent</option>{targets.data?.projects.map(project => <option key={targetKey(project)} value={targetKey(project)} disabled={project.online === false}>{project.deviceName || '工作台所在设备'} · {project.agent || 'codex'} · {project.name || project.cwd}{project.online === false ? '（离线）' : ''}</option>)}</select></label>
+          <div className={styles.directory}><label>工作目录<input required maxLength={2000} value={selection.cwd} disabled={!selection.target} onChange={event => editSelection(index, { cwd: event.target.value, directoryRequestId: '' })} placeholder="选择此 Agent 的工作目录" /></label><div className={styles.actions}><button type="button" disabled={!selection.target} onClick={() => void chooseDirectory(index)}>选择目录</button><button type="button" disabled={!selection.target} onClick={() => editSelection(index, { cwd: targets.data?.projects.find(item => targetKey(item) === selection.target)?.cwd || '', directoryRequestId: '' })}>使用默认目录</button></div></div>
           <label>讨论职责（可选）<input maxLength={1000} value={selection.responsibility} onChange={event => editSelection(index, { responsibility: event.target.value })} placeholder="例如：评估安全风险" /></label>
           {selections.length > 2 && <button type="button" onClick={() => { setSelections(items => items.filter((_, itemIndex) => itemIndex !== index)); createKey.current = ''; }}>移除 Agent {index + 1}</button>}
         </fieldset>)}
       </>}
-      <div className={styles.actions}>{selections.length < 6 && <button type="button" disabled={busy} onClick={() => { setSelections(items => [...items, newSelection(items.length)]); createKey.current = ''; }}>＋ 添加 Agent</button>}<button disabled={busy || targets.isPending || targets.isError || selections.some(selection => !selection.target)}>创建聊天室</button><button type="button" disabled={busy} onClick={() => { setCreating(false); action.reset(); }}>取消</button></div>
+      {directoryStatus && <p role="status">{directoryStatus}</p>}
+      <div className={styles.actions}>{selections.length < 6 && <button type="button" disabled={busy} onClick={() => { setSelections(items => [...items, newSelection(items.length)]); createKey.current = ''; }}>＋ 添加 Agent</button>}<button disabled={busy || targets.isPending || targets.isError || selections.some(selection => !selection.target || !selection.cwd.trim())}>创建聊天室</button><button type="button" disabled={action.isPending} onClick={() => { picker.current?.abort(); picker.current = null; setPicking(null); setCreating(false); action.reset(); setDirectoryStatus(''); }}>取消</button></div>
     </form>}
     {rooms.isPending ? <p role="status">正在加载聊天室…</p> : rooms.isError ? <p role="alert">聊天室加载失败 <button type="button" onClick={() => void rooms.refetch()}>重试</button></p> : !rooms.data?.rooms.length ? <div className={styles.empty}><h3>开启团队的第一场 Agent 讨论</h3><p>{canExecute ? '新建聊天室，邀请不同职责的 Agent 一起分析问题。' : '团队成员创建聊天室后，你可以在这里查看讨论。'}</p></div> : <div className={styles.layout}>
       <nav className={styles.roomList} aria-label="聊天室列表">{rooms.data.rooms.map(item => <button type="button" key={item.id} aria-pressed={roomId === item.id} disabled={busy} onClick={() => { setSelectedId(item.id); setDraft(''); sendKey.current = ''; action.reset(); }}><strong>{item.name}</strong><small>{item.participants.length} 位 Agent · {roundLabels[item.status]}</small></button>)}</nav>
       <div className={styles.chat}>
         {detail.isPending ? <p role="status">正在加载讨论…</p> : detail.isError ? <p role="alert">讨论加载失败 <button type="button" onClick={() => void detail.refetch()}>重试</button></p> : room && <>
-          <header><h3>{room.name}</h3><p>{room.participants.map(participant => `${participant.name}（${participant.agent}）`).join(' → ')}</p><span role="status">{roundLabels[room.round?.status || 'completed']}</span></header>
+          <header><h3>{room.name}</h3><p>{room.participants.map(participant => `${participant.name}（${participant.agent}）`).join(' → ')}</p><ul className={styles.directories}>{room.participants.map(participant => <li key={participant.id}>{participant.name}：{participant.cwd}</li>)}</ul><span role="status">{roundLabels[room.round?.status || 'completed']}</span></header>
           <div ref={messagesRef} onScroll={event => { const element = event.currentTarget; followMessages.current = element.scrollHeight - element.clientHeight - element.scrollTop < 80; }} className={styles.messages} role="log" aria-label="讨论记录" aria-live="polite">{room.messages.length ? room.messages.map(message => <article key={message.id} className={message.role === 'user' ? styles.userMessage : styles.agentMessage}>
             <div className={styles.messageMeta}><strong>{message.authorName}</strong><span>{message.role === 'agent' ? messageLabels[message.status] : '团队成员'}</span></div>
             {message.text && <p>{message.text}</p>}{message.detail && message.status !== 'completed' && <small>{message.detail}</small>}

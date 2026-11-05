@@ -731,7 +731,7 @@ API（需浏览器登录）：`GET/POST /api/workspaces` 列出/创建空间（�
 
 ### 群组聊天室
 
-在团队空间的「群组聊天室」页签创建讨论室，选择 2–6 位 Agent，分别设置显示名称、执行目标和讨论职责。同一个设备上的同一 Agent 可以使用不同名称和职责参与。所有者、管理员和成员可创建、发言或停止讨论；只读成员可查看记录，个人空间和设备连接器不能调用聊天室接口。
+在团队空间的「群组聊天室」页签创建讨论室，选择 2–6 位 Agent，分别设置显示名称、执行目标、工作目录和讨论职责。同一个设备上的同一 Agent 可以使用不同名称和职责参与。所有者、管理员和成员可创建、发言或停止讨论；只读成员可查看记录，个人空间和设备连接器不能调用聊天室接口。
 
 每条成员消息发起一轮讨论，Agent 按配置顺序读取当前话题和前面 Agent 的回复，依次发言。下一轮由成员手动发送消息启动，不会无限自动对话。各次回复使用独立执行会话，并提供「查看执行」入口处理 Agent 提问、授权及状态核对。群聊提示要求只讨论、不修改文件或执行命令；这是提示约束，沿用现有执行通道的权限，并非独立沙箱。
 
@@ -741,7 +741,7 @@ API（需浏览器登录）：`GET/POST /api/workspaces` 列出/创建空间（�
 
 API（均需浏览器登录，按当前团队空间隔离）：
 
-- `GET /api/workspaces/chats`：列出聊天室；`POST /api/workspaces/chats`：使用 `name`、稳定的 UUID `requestId`、`participants` 创建。每个参与者包含 `name`、`deviceId`、`projectId` 和可选的 `responsibility`，工作目录与模型使用所选执行目标的配置。
+- `GET /api/workspaces/chats`：列出聊天室；`POST /api/workspaces/chats`：使用 `name`、稳定的 UUID `requestId`、`participants` 创建。每个参与者包含 `name`、`deviceId`、`projectId` 和可选的 `responsibility`，每位参与者可传 `cwd` 和可选的 `directoryRequestId`，不传 `cwd` 时兼容使用执行目标默认目录；模型沿用目标配置。创建界面可输入目录或使用“选择目录”，切换执行目标会重置目录。远端默认目录及其子目录可直接使用，范围外目录须在目标设备选择确认；授权绑定创建人、设备和项目，并在每次 Agent 发言前重新核对，授权失效会中断本轮，不切换到默认目录。
 - `GET /api/workspaces/chats/:id`：读取聊天室、消息与 `revision`。
 - `POST /api/workspaces/chats/:id/messages`：使用 `message`、稳定的 UUID `requestId` 和当前 `revision` 发送消息。相同请求重复提交返回原结果；改用相同标识发送不同内容返回 409。
 - `POST /api/workspaces/chats/:id/stop`：使用 `roundId` 停止指定轮次，Agent 状态更新不影响停止操作；旧轮次不能停止新轮次。也兼容仅传当前 `revision`。重复停止不会创建新执行。并发或版本冲突返回 409，未知接口默认拒绝。
