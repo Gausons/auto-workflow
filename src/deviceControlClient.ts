@@ -1,5 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { realtimeEvent, realtimeMaxPayload, realtimeProtocol, realtimeUrl, type SendExecutionFeedback } from '../shared/realtime.js';
+import { createDeviceReconnectBackoff } from './deviceReconnect.js';
 
 export async function connectDeviceUpdates(options: {
   url: URL; token: string; deviceId: string; signal: AbortSignal; wake: () => void;
@@ -26,7 +27,7 @@ export async function connectDeviceUpdates(options: {
       const id = String(++sequence);
       const message = JSON.stringify({ type: 'execution-report', id, input });
       if (new TextEncoder().encode(message).byteLength > realtimeMaxPayload) { fail(new Error('执行回报超过 8 MB，请核对原执行记录')); return; }
-      const timeout = setTimeout(() => { pending.delete(id); fail(new Error('执行回报确认超时，保留回执待重试')); }, 15_000);
+      const timeout = setTimeout(() => finish(new Error('执行回报确认超时，保留回执待重连重试')), 15_000);
       pending.set(id, { resolve: done, reject: fail, timer: timeout });
       try { socket.send(message); }
       catch (error) { clearTimeout(timeout); pending.delete(id); fail(error instanceof Error ? error : new Error('执行回报发送失败')); }
@@ -41,14 +42,23 @@ export async function connectDeviceUpdates(options: {
         if (!input || typeof input !== 'object' || !('type' in input)) throw new Error('设备实时消息无效');
         if (input.type === 'heartbeat') { socket.send(JSON.stringify({ type: 'pong' })); return; }
         if (input.type === 'ready' && 'channel' in input && input.channel === 'device-control') {
-          ready = true; options.onReady?.(); options.onFeedback?.(feedback); options.wake(); return;
+          if (ready) return;
+          ready = true; options.onReady?.();
+          if (ended) return;
+          options.onFeedback?.(feedback);
+          if (!ended) options.wake();
+          return;
         }
         if (input.type === 'error' && 'status' in input && typeof input.status === 'number') throw Object.assign(new Error('message' in input ? String(input.message) : '设备实时连接失败'), { status: input.status });
         if (input.type === 'report-ack' && 'id' in input && typeof input.id === 'string' && 'status' in input && typeof input.status === 'number') {
           const item = pending.get(input.id);
           if (item) { clearTimeout(item.timer); pending.delete(input.id);
             if (input.status === 200) item.resolve();
-            else item.reject(Object.assign(new Error('message' in input ? String(input.message) : '执行回报失败'), { status: input.status }));
+            else {
+              const error = Object.assign(new Error('message' in input ? String(input.message) : '执行回报失败'), { status: input.status });
+              item.reject(error);
+              if (input.status === 401 || input.status === 403) finish(error);
+            }
           }
           return;
         }
@@ -66,10 +76,12 @@ export async function connectDeviceUpdates(options: {
 }
 
 export async function watchDeviceUpdates(options: Parameters<typeof connectDeviceUpdates>[0] & { onError: (error: unknown) => void }) {
-  let backoff = 1000, disconnected = false;
+  const backoff = createDeviceReconnectBackoff();
+  let disconnected = false;
   while (!options.signal.aborted) {
+    let readyAt: number | undefined;
     try {
-      await connectDeviceUpdates({ ...options, onReady() { backoff = 1000; disconnected = false; options.onReady?.(); } });
+      await connectDeviceUpdates({ ...options, onReady() { readyAt = Date.now(); disconnected = false; options.onReady?.(); } });
       if (!options.signal.aborted) throw new Error('设备实时连接已关闭');
     } catch (error) {
       if (options.signal.aborted) return;
@@ -77,8 +89,9 @@ export async function watchDeviceUpdates(options: Parameters<typeof connectDevic
       if (status === 401 || status === 403) throw error;
       if (!disconnected) { options.onError(error); disconnected = true; }
     }
-    await delay(backoff, undefined, { signal: options.signal }).catch(error => { if (!options.signal.aborted) throw error; });
-    backoff = Math.min(backoff * 2, 30_000);
+    // A brief successful handshake must not turn a flapping link into a retry storm.
+    if (readyAt !== undefined && Date.now() - readyAt >= 30_000) backoff.reset();
+    await delay(backoff.next(), undefined, { signal: options.signal }).catch(error => { if (!options.signal.aborted) throw error; });
   }
 }
 

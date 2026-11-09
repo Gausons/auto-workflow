@@ -101,7 +101,7 @@ test('packed device agent installs and runs outside the repository without TypeS
       res.end(JSON.stringify({ tenant: { id: tenantId }, user: { id: 'user' }, permissions: allowExecution ? ['read', 'work.execute'] : ['read'] })); return;
     }
     if (req.url === '/api/task-center' && req.method === 'POST') {
-      if (failHeartbeat) { res.writeHead(503); res.end(JSON.stringify({ message: 'fixture-heartbeat-unavailable' })); return; }
+      if (failHeartbeat) { res.writeHead(400); res.end(JSON.stringify({ message: 'fixture-heartbeat-unavailable' })); return; }
       heartbeats.push(input);
     }
     res.end(JSON.stringify({ handoffs: [], sessions: [], devices: [], tasks: [], executions: [] }));
@@ -242,10 +242,19 @@ test('packed device agent installs and runs outside the repository without TypeS
     assert.equal(subscriptions, before + 1);
     const current = (await listConnectors(directory)).find(item => item.status === 'running')!;
     assert.ok(current);
+    const deviceId = heartbeats.at(-1)!.deviceId;
+    const heartbeatCount = heartbeats.length;
+    for (const socket of realtime.clients) socket.close(1012, 'fixture server restart');
+    for (let attempt = 0; subscriptions < before + 2 && attempt < 50; attempt++) await delay(100);
+    assert.equal(subscriptions, before + 2, 'a server restart reconnects the existing background worker');
+    assert.equal((await listConnectors(directory)).find(item => item.id === current.id)?.pid, current.pid);
+    for (let attempt = 0; heartbeats.length === heartbeatCount && attempt < 50; attempt++) await delay(100);
+    assert.ok(heartbeats.length > heartbeatCount, 'reconnect republishes presence');
+    assert.equal(heartbeats.at(-1)!.deviceId, deviceId);
     for (const socket of realtime.clients) socket.close(4403, 'fixture revoked');
     await untilStopped(current.id);
     await delay(100);
-    assert.equal(subscriptions, before + 1, 'revoked authorization must not reconnect or relaunch');
+    assert.equal(subscriptions, before + 2, 'revoked authorization must not reconnect or relaunch');
     assert.equal(realtime.clients.size, 0);
   });
 });

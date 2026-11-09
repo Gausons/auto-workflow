@@ -7,6 +7,7 @@ import { createAgentHistory } from './agentHistory/index.js';
 import { createSessionDelivery } from './sessionDelivery/index.js';
 import { RemoteCodexWorker } from './remoteCodexWorker.js';
 import { runDeviceControl, watchDeviceUpdates } from './deviceControlClient.js';
+import { retryDeviceConnection, withDeviceConnectionTimeout } from './deviceReconnect.js';
 import type { ExecutionFeedback, SendExecutionFeedback } from '../shared/realtime.js';
 import { bindDeviceConnection } from './deviceConnectionIdentity.js';
 import { normalizeRemoteHistory, FULL_HISTORY_BYTES } from './remoteHistory.js';
@@ -30,6 +31,17 @@ interface DeviceSession { nativeId: string; agent: string; agentLabel: string; t
 type ErrorLike = Error & { code?: string; status?: number };
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const asError = (value: unknown): ErrorLike => value instanceof Error ? value as ErrorLike : new Error(String(value));
+
+async function responseError(response: Response, fallback: string) {
+  const result = record(await response.json().catch(() => null));
+  return Object.assign(new Error(String(result.message || `${fallback}（HTTP ${response.status}）`)), { status: response.status });
+}
+
+function reportConnectionRetry(error: unknown, waitMs: number, secrets: Array<string | undefined>) {
+  let message = asError(error).message;
+  for (const secret of secrets) if (secret) message = message.replaceAll(secret, '[已隐藏]');
+  console.warn(`设备连接暂不可用：${message}；${(waitMs / 1000).toFixed(1)} 秒后自动重连`);
+}
 
 export function deviceStateDirectory(environment: Environment, identity: { origin: string; tenantId: string; userId: string }, root = process.cwd()) {
   if (environment.WORKBENCH_DEVICE_DIR) return path.resolve(root, environment.WORKBENCH_DEVICE_DIR);
@@ -200,7 +212,23 @@ interface ConnectorOptions {
   onReady?: () => void | Promise<void>;
 }
 
-export async function runDeviceConnector({ environment = { ...process.env }, once = false, stateRoot = process.cwd(), signal, onStateDirectory, onReady }: ConnectorOptions = {}) {
+export async function runDeviceConnector(options: ConnectorOptions = {}) {
+  const stopping = new AbortController();
+  const stop = () => stopping.abort();
+  options.signal?.addEventListener('abort', stop, { once: true });
+  if (options.signal?.aborted) stop();
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+  try { await connectDevice({ ...options, signal: stopping.signal }); }
+  finally {
+    stopping.abort();
+    process.removeListener('SIGINT', stop);
+    process.removeListener('SIGTERM', stop);
+    options.signal?.removeEventListener('abort', stop);
+  }
+}
+
+async function connectDevice({ environment = { ...process.env }, once = false, stateRoot = process.cwd(), signal, onStateDirectory, onReady }: ConnectorOptions & { signal: AbortSignal }) {
   signal?.throwIfAborted();
   const defaults = deviceConnectorDefaults(environment);
   if (defaults.execute && once) throw new Error('Agent 执行模式需要保持连接器运行；如需单次同步，请设置 WORKBENCH_EXECUTE_CODEX=false');
@@ -210,14 +238,22 @@ export async function runDeviceConnector({ environment = { ...process.env }, onc
   let token = environment.WORKBENCH_TOKEN;
   if (!token) {
     if (!environment.WORKBENCH_USERNAME || !environment.WORKBENCH_PASSWORD) throw new Error('请设置 WORKBENCH_USERNAME 和 WORKBENCH_PASSWORD，或 WORKBENCH_TOKEN');
-    const response = await fetch(new URL('/api/auth/login', base), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: environment.WORKBENCH_USERNAME, password: environment.WORKBENCH_PASSWORD }), signal: AbortSignal.timeout(30000) });
-    const result = record(await response.json()); if (!response.ok) throw new Error(String(result.message || '登录失败'));
+    const result = await withDeviceConnectionTimeout(signal, async attemptSignal => {
+      const response = await fetch(new URL('/api/auth/login', base), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: environment.WORKBENCH_USERNAME, password: environment.WORKBENCH_PASSWORD }), signal: attemptSignal });
+      if (!response.ok) throw await responseError(response, '登录失败');
+      return record(await response.json());
+    });
     if (typeof result.token !== 'string') throw new Error('登录响应缺少令牌');
     token = result.token;
   }
-  const identityResponse = await fetch(new URL('/api/auth/session', base), { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30000) });
-  const identity = record(await identityResponse.json());
-  if (!identityResponse.ok) throw new Error(String(identity.message || '连接器登录已失效'));
+  const readIdentity = () => withDeviceConnectionTimeout(signal, async attemptSignal => {
+    const response = await fetch(new URL('/api/auth/session', base), { headers: { Authorization: `Bearer ${token}` }, signal: attemptSignal });
+    if (!response.ok) throw await responseError(response, '连接器身份检查失败');
+    return record(await response.json());
+  });
+  const identity = once ? await readIdentity() : await retryDeviceConnection(readIdentity, {
+    signal, onRetry: (error, wait) => reportConnectionRetry(error, wait, [token, environment.WORKBENCH_PASSWORD])
+  });
   const tenantId = record(identity.tenant).id, userId = record(identity.user).id;
   if (typeof tenantId !== 'string' || typeof userId !== 'string' || !Array.isArray(identity.permissions) || !identity.permissions.includes('work.execute')) throw new Error('接入设备需要操作员或管理员权限');
   const connectionIdentity = { origin: base.origin, tenantId, userId };
@@ -256,7 +292,7 @@ async function runAuthenticatedConnector({ environment, once, signal, onReady, d
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': binary ? 'application/octet-stream' : 'application/json' },
         ...(body !== undefined ? { body: binary ? Buffer.from(body) : JSON.stringify(body) } : {}),
         signal: controller.signal });
-      if (!response.ok) { const result = record(await response.json()); throw Object.assign(new Error(String(result.message || '请求失败')), { status: response.status }); }
+      if (!response.ok) throw await responseError(response, '请求失败');
       if (method === 'GET' && endpoint.includes('/transfer/objects/')) return new Uint8Array(await response.arrayBuffer());
       const result = record(await response.json());
       if (method === 'POST' && record(body).action === 'heartbeat') heartbeatAgents = record(body).agents as string[];
@@ -280,11 +316,8 @@ async function runAuthenticatedConnector({ environment, once, signal, onReady, d
     return request(method, body, method === 'GET' && !endpoint ? `/api/task-center/device-state?${deviceParams}` : endpoint);
   };
   const worker = defaults.execute ? new RemoteCodexWorker({ environment, request: workerRequest, signal: stopping.signal, onPending: () => wakeControls(), deviceId, directory: path.join(stateDir, 'executions'), workspace: defaults.workspace, contextSource: { catalog: () => history.catalog(), delivery } }) : null;
-  const stop = () => stopping.abort();
   signal?.addEventListener('abort', abort, { once: true });
   if (signal?.aborted) abort();
-  process.once('SIGINT', stop);
-  process.once('SIGTERM', stop);
   console.log(`设备：${environment.WORKBENCH_DEVICE_NAME || hostname()}；模式：${worker ? '远程执行' : '仅同步'}；交接包目录：${outputDir}`);
   const reportError = (caught: unknown) => {
     const error = asError(caught);
@@ -317,7 +350,8 @@ async function runAuthenticatedConnector({ environment, once, signal, onReady, d
   try {
     if (!once) {
       stopping.signal.throwIfAborted();
-      await heartbeat();
+      await retryDeviceConnection(heartbeat, { signal: stopping.signal,
+        onRetry: (error, wait) => reportConnectionRetry(error, wait, [token, environment.WORKBENCH_PASSWORD]) });
       stopping.signal.throwIfAborted();
       await onReady?.();
     }
@@ -327,6 +361,7 @@ async function runAuthenticatedConnector({ environment, once, signal, onReady, d
         onError: reportError,
         subscribe: (wake, signal) => watchDeviceUpdates({ url: new URL('/api/realtime', base), token, deviceId, signal, wake,
           onFeedback: send => { feedback = send; },
+          onReady: () => console.log('设备 WebSocket 已连接，正在核对控制状态并补报心跳'),
           onError: () => console.warn('设备 WebSocket 暂不可用，继续每 3 秒补查控制请求，执行回报保留待重连') }) }));
     }
     loops.push(historyLoop());
@@ -334,8 +369,6 @@ async function runAuthenticatedConnector({ environment, once, signal, onReady, d
   } finally {
     stopping.abort();
     await Promise.allSettled(loops);
-    process.removeListener('SIGINT', stop);
-    process.removeListener('SIGTERM', stop);
     signal?.removeEventListener('abort', abort);
     shuttingDown = true;
     await worker?.shutdown();

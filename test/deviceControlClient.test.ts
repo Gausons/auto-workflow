@@ -142,6 +142,79 @@ test('aborting the connector closes its live WebSocket', { timeout: 5000 }, asyn
   await ready.promise; stop.abort(); await running; await closed.promise;
 });
 
+test('a missing report acknowledgment closes the stale connection and rejects all pending reports', { timeout: 5000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const stop = new AbortController(), ready = deferred(), closed = deferred();
+  let feedback: SendExecutionFeedback | undefined;
+  const url = await socketServer(t, socket => {
+    socket.once('close', closed.resolve);
+    socket.once('message', () => socket.send(JSON.stringify({ type: 'ready', channel: 'device-control' })));
+  });
+  const running = connectDeviceUpdates({ url, token: 'test', deviceId: 'remote', signal: stop.signal, wake() {},
+    onFeedback(send) { feedback = send; if (send) ready.resolve(); } });
+  const disconnected = assert.rejects(running, /确认超时/);
+  try {
+    await ready.promise; assert.ok(feedback);
+    const reports = [1, 2].map(id => assert.rejects(feedback!({ executionId: String(id), report: { status: 'running' } }), /确认超时/));
+    t.mock.timers.tick(15000);
+    await Promise.all([...reports, disconnected]);
+    assert.equal(feedback, undefined);
+    await closed.promise;
+  } finally { stop.abort(); await disconnected; }
+});
+
+test('flapping WebSockets retain backoff until a connection has stayed stable', { timeout: 10000 }, async t => {
+  const stop = new AbortController(), sockets: ServerSocket[] = [], attempts: number[] = [];
+  const clock = Date.now;
+  let offset = 0;
+  t.mock.method(Math, 'random', () => 0.5);
+  t.mock.method(Date, 'now', () => clock() + offset);
+  const url = await socketServer(t, socket => {
+    sockets.push(socket); attempts.push(clock());
+    socket.once('message', () => socket.send(JSON.stringify({ type: 'ready', channel: 'device-control' })));
+  });
+  const running = watchDeviceUpdates({ url, token: 'test', deviceId: 'remote', signal: stop.signal, wake() {}, onError() {},
+    onReady() {
+      if (sockets.length === 4) { stop.abort(); return; }
+      if (sockets.length === 3) offset += 30_000;
+      sockets.at(-1)!.close(1012, 'fixture restart');
+    }
+  });
+  try {
+    await running;
+    assert.equal(attempts.length, 4);
+    assert.ok(attempts[1] - attempts[0] >= 900);
+    assert.ok(attempts[2] - attempts[1] >= 1900, 'a brief ready frame must not reset backoff');
+    assert.ok(attempts[3] - attempts[2] < 1900, 'stable connections reset backoff');
+  } finally { stop.abort(); await running; }
+});
+
+test('report acknowledgments with revoked permissions stop reconnection', { timeout: 5000 }, async t => {
+  let connections = 0, report: Promise<void> | undefined;
+  const url = await socketServer(t, socket => {
+    connections++;
+    socket.on('message', raw => {
+      const message = JSON.parse(raw.toString()) as { type: string; id?: string };
+      if (message.type === 'subscribe') socket.send(JSON.stringify({ type: 'ready', channel: 'device-control' }));
+      else if (message.type === 'execution-report') socket.send(JSON.stringify({ type: 'report-ack', id: message.id, status: 403, message: 'revoked' }));
+    });
+  });
+  await assert.rejects(watchDeviceUpdates({ url, token: 'test', deviceId: 'remote', signal: new AbortController().signal, wake() {},
+    onFeedback(send) { if (send) report = assert.rejects(send({ executionId: 'one', report: { status: 'running' } }), { status: 403 }); },
+    onError() { assert.fail('must not retry revoked credentials'); }
+  }), { status: 403 });
+  await report;
+  assert.equal(connections, 1);
+});
+
+test('aborting reconnect backoff prevents another WebSocket attempt', { timeout: 5000 }, async t => {
+  const stop = new AbortController();
+  let connections = 0;
+  const url = await socketServer(t, socket => { connections++; socket.terminate(); });
+  await watchDeviceUpdates({ url, token: 'test', deviceId: 'remote', signal: stop.signal, wake() {}, onError() { stop.abort(); } });
+  assert.equal(connections, 1);
+});
+
 test('Git notifications bypass blocked execution and controls and serialize repeated wakes', { timeout: 5000 }, async () => {
   const stop = new AbortController(), releaseWork = deferred(), releaseGit = deferred(), entered = deferred(), repeated = deferred();
   let wake = () => {}, calls = 0;
