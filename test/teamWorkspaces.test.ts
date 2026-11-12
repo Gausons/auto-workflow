@@ -114,7 +114,7 @@ test('version 9 upgrades existing personal identities without moving data and su
   db.close();
   const old = rawDatabase(key);
   old.prepare('DROP TABLE workspace_invitations, workspace_memberships, team_workspaces').run();
-  old.prepare('DELETE FROM schema_migrations WHERE version = 9').run(); old.close();
+  old.prepare('DELETE FROM schema_migrations WHERE version >= 9').run(); old.close();
   const upgraded = openDatabase(key);
   try {
     const principal = upgraded.authenticateSession(session.token)!;

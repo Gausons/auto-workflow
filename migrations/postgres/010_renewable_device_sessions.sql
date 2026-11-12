@@ -1,0 +1,2 @@
+ALTER TABLE device_connector_sessions
+  ADD COLUMN IF NOT EXISTS renewable BOOLEAN NOT NULL DEFAULT FALSE;

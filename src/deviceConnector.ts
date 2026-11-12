@@ -207,7 +207,7 @@ export async function syncDeviceOnce({ request, history, deviceId, name, outputD
 }
 
 interface ConnectorOptions {
-  environment?: Environment; once?: boolean; stateRoot?: string; signal?: AbortSignal;
+  environment?: Environment; once?: boolean; renewable?: boolean; stateRoot?: string; signal?: AbortSignal;
   onStateDirectory?: (directory: string, identity: { origin: string; tenantId: string; userId: string }) => Promise<() => Promise<void>>;
   onReady?: () => void | Promise<void>;
 }
@@ -228,7 +228,7 @@ export async function runDeviceConnector(options: ConnectorOptions = {}) {
   }
 }
 
-async function connectDevice({ environment = { ...process.env }, once = false, stateRoot = process.cwd(), signal, onStateDirectory, onReady }: ConnectorOptions & { signal: AbortSignal }) {
+async function connectDevice({ environment = { ...process.env }, once = false, renewable = false, stateRoot = process.cwd(), signal, onStateDirectory, onReady }: ConnectorOptions & { signal: AbortSignal }) {
   signal?.throwIfAborted();
   const defaults = deviceConnectorDefaults(environment);
   if (defaults.execute && once) throw new Error('Agent 执行模式需要保持连接器运行；如需单次同步，请设置 WORKBENCH_EXECUTE_CODEX=false');
@@ -247,7 +247,7 @@ async function connectDevice({ environment = { ...process.env }, once = false, s
     token = result.token;
   }
   const readIdentity = () => withDeviceConnectionTimeout(signal, async attemptSignal => {
-    const response = await fetch(new URL('/api/auth/session', base), { headers: { Authorization: `Bearer ${token}` }, signal: attemptSignal });
+    const response = await fetch(new URL('/api/auth/session', base), { headers: { Authorization: `Bearer ${token}` }, signal: attemptSignal, ...(renewable ? { redirect: 'error' } : {}) });
     if (!response.ok) throw await responseError(response, '连接器身份检查失败');
     return record(await response.json());
   });
@@ -263,12 +263,12 @@ async function connectDevice({ environment = { ...process.env }, once = false, s
   const stateDir = await realpath(directory);
   await bindDeviceConnection(stateDir, connectionIdentity);
   const release = await onStateDirectory?.(stateDir, connectionIdentity);
-  try { await runAuthenticatedConnector({ environment, once, signal, onReady, defaults, base, token, stateDir }); }
+  try { await runAuthenticatedConnector({ environment, once, renewable, signal, onReady, defaults, base, token, stateDir }); }
   finally { await release?.(); }
 }
 
-async function runAuthenticatedConnector({ environment, once, signal, onReady, defaults, base, token, stateDir }: {
-  environment: Environment; once: boolean; signal?: AbortSignal; onReady?: ConnectorOptions['onReady'];
+async function runAuthenticatedConnector({ environment, once, renewable, signal, onReady, defaults, base, token, stateDir }: {
+  environment: Environment; once: boolean; renewable: boolean; signal?: AbortSignal; onReady?: ConnectorOptions['onReady'];
   defaults: ReturnType<typeof deviceConnectorDefaults>; base: URL; token: string; stateDir: string;
 }) {
   let deviceId;
@@ -288,7 +288,7 @@ async function runAuthenticatedConnector({ environment, once, signal, onReady, d
       if (stopping.signal.aborted) abort();
     }
     try {
-      const response = await fetch(new URL(endpoint, base), { method,
+      const response = await fetch(new URL(endpoint, base), { method, ...(renewable ? { redirect: 'error' } : {}),
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': binary ? 'application/octet-stream' : 'application/json' },
         ...(body !== undefined ? { body: binary ? Buffer.from(body) : JSON.stringify(body) } : {}),
         signal: controller.signal });
@@ -315,7 +315,11 @@ async function runAuthenticatedConnector({ environment, once, signal, onReady, d
     }
     return request(method, body, method === 'GET' && !endpoint ? `/api/task-center/device-state?${deviceParams}` : endpoint);
   };
-  const worker = defaults.execute ? new RemoteCodexWorker({ environment, request: workerRequest, signal: stopping.signal, onPending: () => wakeControls(), deviceId, directory: path.join(stateDir, 'executions'), workspace: defaults.workspace, contextSource: { catalog: () => history.catalog(), delivery } }) : null;
+  const agentEnvironment = { ...environment };
+  delete agentEnvironment.WORKBENCH_TOKEN;
+  delete agentEnvironment.WORKBENCH_USERNAME;
+  delete agentEnvironment.WORKBENCH_PASSWORD;
+  const worker = defaults.execute ? new RemoteCodexWorker({ environment: agentEnvironment, request: workerRequest, signal: stopping.signal, onPending: () => wakeControls(), deviceId, directory: path.join(stateDir, 'executions'), workspace: defaults.workspace, contextSource: { catalog: () => history.catalog(), delivery } }) : null;
   signal?.addEventListener('abort', abort, { once: true });
   if (signal?.aborted) abort();
   console.log(`设备：${environment.WORKBENCH_DEVICE_NAME || hostname()}；模式：${worker ? '远程执行' : '仅同步'}；交接包目录：${outputDir}`);
@@ -347,14 +351,30 @@ async function runAuthenticatedConnector({ environment, once, signal, onReady, d
     } while (!stopping.signal.aborted);
   };
   const loops: Promise<void>[] = [];
+  const retryOptions = {
+    signal: stopping.signal,
+    onRetry: (error: unknown, wait: number) => reportConnectionRetry(error, wait, [token, environment.WORKBENCH_PASSWORD])
+  };
+  const renewSession = () => retryDeviceConnection(async () => {
+    await request('POST', {}, '/api/auth/device-session/renew');
+  }, retryOptions);
+  const renewLoop = async () => {
+    while (!stopping.signal.aborted) {
+      try { await delay(12 * 60 * 60 * 1000, undefined, { signal: stopping.signal }); }
+      catch (error) { if (stopping.signal.aborted) return; throw error; }
+      try { await renewSession(); }
+      catch (error) { if (!stopping.signal.aborted) throw error; }
+    }
+  };
   try {
     if (!once) {
       stopping.signal.throwIfAborted();
-      await retryDeviceConnection(heartbeat, { signal: stopping.signal,
-        onRetry: (error, wait) => reportConnectionRetry(error, wait, [token, environment.WORKBENCH_PASSWORD]) });
+      if (renewable) await renewSession();
+      await retryDeviceConnection(heartbeat, retryOptions);
       stopping.signal.throwIfAborted();
       await onReady?.();
     }
+    if (renewable) loops.push(renewLoop());
     if (worker) {
       loops.push(runDeviceControl({ signal: stopping.signal, work: () => worker.sync(false), git: () => worker.syncGit(), controls: () => worker.syncControls(), heartbeat,
         onControlsWake: wake => { wakeControls = wake; },

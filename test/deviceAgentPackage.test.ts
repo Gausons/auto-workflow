@@ -4,14 +4,16 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { copyFile, mkdtemp, mkdir, readdir, readFile, rm, writeFile, stat } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, readdir, readFile, realpath, rm, writeFile, stat } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { connectorDirectory, listConnectors, stopConnector } from '../packages/device-agent/src/control.js';
+import { connectorDirectory, connectorId, listConnectors, serviceProfilePath, stopConnector } from '../packages/device-agent/src/control.js';
+import { renewableDeployment } from '../packages/device-agent/src/connect.js';
+import { installDeviceService, stopDeviceService } from '../packages/device-agent/src/service.js';
 
 const exec = promisify(execFile);
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -82,7 +84,8 @@ test('packed device agent installs and runs outside the repository without TypeS
   const historyDir = path.join(directory, 'empty-history'); await mkdir(historyDir);
   const heartbeats: Array<Record<string, unknown>> = [];
   let allowExecution = true, tenantId = 'tenant-one', exchanges = 0, failHeartbeat = false;
-  const deployments = new Set<string>(), sessionToken = 's'.repeat(43);
+  let renewalAttempts = 0, revocations = 0, rejectRenewal = false;
+  const deployments = new Set<string>(), sessionToken = 's'.repeat(43), serviceToken = 'r'.repeat(43);
   const server = createServer(async (req, res) => {
     const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk));
     const input = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown> : {};
@@ -90,13 +93,31 @@ test('packed device agent installs and runs outside the repository without TypeS
     if (req.url === '/api/auth/device-deployment/exchange') {
       exchanges++;
       if (typeof input.deploymentToken !== 'string' || !deployments.delete(input.deploymentToken)) { res.writeHead(401); res.end('{}'); return; }
-      res.end(JSON.stringify({ token: sessionToken })); return;
+      res.end(JSON.stringify(input.renewable === true
+        ? { token: serviceToken, renewable: true, tenant: { id: tenantId }, user: { id: 'user' } }
+        : { token: sessionToken }));
+      return;
     }
     if (req.url === '/api/auth/login') {
       assert.equal(input.username, 'fixture-user'); assert.equal(input.password, 'fixture-password');
       res.end(JSON.stringify({ token: 'fixture-token' })); return;
     }
-    assert.ok(['Bearer fixture-token', `Bearer ${sessionToken}`].includes(req.headers.authorization || ''));
+    assert.ok(['Bearer fixture-token', `Bearer ${sessionToken}`, `Bearer ${serviceToken}`].includes(req.headers.authorization || ''));
+    if (req.url === '/api/auth/device-session/renew') {
+      assert.equal(req.headers.authorization, `Bearer ${serviceToken}`);
+      assert.equal(req.method, 'POST');
+      renewalAttempts++;
+      if (rejectRenewal) { res.writeHead(401); res.end('{}'); return; }
+      if (renewalAttempts === 1) { res.writeHead(503); res.end('{}'); return; }
+      res.end(JSON.stringify({ expiresAt: Date.now() + 86_400_000 }));
+      return;
+    }
+    if (req.url === '/api/auth/logout') {
+      assert.equal(req.headers.authorization, `Bearer ${serviceToken}`);
+      revocations++;
+      res.end('{}');
+      return;
+    }
     if (req.url === '/api/auth/session') {
       res.end(JSON.stringify({ tenant: { id: tenantId }, user: { id: 'user' }, permissions: allowExecution ? ['read', 'work.execute'] : ['read'] })); return;
     }
@@ -256,5 +277,76 @@ test('packed device agent installs and runs outside the repository without TypeS
     await delay(100);
     assert.equal(subscriptions, before + 2, 'revoked authorization must not reconnect or relaunch');
     assert.equal(realtime.clients.size, 0);
+  });
+  await t.test('macOS service uses a saved credential to renew and reconnect the same device in a fresh process', async () => {
+    const before = exchanges;
+    const previousDeviceId = (await readFile(path.join(stateDir, 'id'), 'utf8')).trim();
+    const entry = path.join(install, 'node_modules/agent-workbench-connector/dist/agent.mjs');
+    const id = connectorId(await realpath(stateDir));
+    const calls: string[][] = [];
+    const control = async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'bootstrap') {
+        await assert.rejects(stopDeviceService(directory, id, control), /常驻配置正在修改/);
+      }
+    };
+    const authorization = await renewableDeployment(deployment());
+    const service = await installDeviceService({
+      root: directory, entry, authorization, control,
+      environment: { ...backgroundEnv, WORKBENCH_PASSWORD: 'fixture-service-password', WORKBENCH_TOKEN: 'ignored-token' }
+    });
+    const profile = serviceProfilePath(directory, service.id);
+    const plistFile = calls[0]![2]!;
+    assert.equal(calls[0]![0], 'bootstrap');
+    const plist = await readFile(plistFile, 'utf8');
+    assert.match(plist, /--service-worker/);
+    assert.doesNotMatch(plist, new RegExp(serviceToken));
+    assert.doesNotMatch(await readFile(profile, 'utf8'), /fixture-service-password|ignored-token/);
+    if (process.platform !== 'win32') assert.equal((await stat(profile)).mode & 0o777, 0o600);
+    if (process.platform === 'darwin') await exec('/usr/bin/plutil', ['-lint', plistFile]);
+    await assert.rejects(launch(), /已配置常驻连接/);
+    for (let restart = 0; restart < 2; restart++) {
+      const expectedRenewals = renewalAttempts + (restart === 0 ? 2 : 1);
+      const child = spawn(command, ['--service-worker', service.id], { cwd, env: baseEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+      const exited = once(child, 'exit');
+      let output = '';
+      child.stdout.on('data', chunk => { output += String(chunk); });
+      child.stderr.on('data', chunk => { output += String(chunk); });
+      try {
+        let current;
+        for (let attempt = 0; attempt < 80; attempt++) {
+          current = (await listConnectors(directory)).find(item => item.id === service.id && item.status === 'running');
+          if (current) break;
+          assert.equal(child.exitCode, null, output);
+          await delay(100);
+        }
+        assert.ok(current, output);
+        assert.equal(heartbeats.at(-1)?.deviceId, previousDeviceId);
+        assert.equal(renewalAttempts, expectedRenewals);
+        await stopConnector(directory, service.id);
+        assert.deepEqual(await exited, [0, null]);
+        assert.doesNotMatch(output, new RegExp(serviceToken));
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) { child.kill('SIGTERM'); await exited; }
+      }
+    }
+    rejectRenewal = true;
+    const revoked = await exec(command, ['--service-worker', service.id], { cwd, env: baseEnv, timeout: 10_000 });
+    assert.match(revoked.stderr, /授权已失效/);
+    assert.equal(exchanges, before + 2, 'restarting the service does not exchange a new deployment token');
+    const stopped = await stopDeviceService(directory, service.id, control);
+    assert.deepEqual(stopped, { revoked: true });
+    assert.deepEqual(calls.map(args => args[0]), ['bootstrap', 'print', 'bootout']);
+    await assert.rejects(stat(profile), { code: 'ENOENT' });
+    await assert.rejects(stat(plistFile), { code: 'ENOENT' });
+    assert.equal(revocations, 1);
+    const failedAuthorization = await renewableDeployment(deployment());
+    await assert.rejects(installDeviceService({
+      root: directory, entry, authorization: failedAuthorization, environment: backgroundEnv,
+      async control() { throw new Error('fixture launchd load failure'); }
+    }), /macOS 无法加载/);
+    await assert.rejects(stat(profile), { code: 'ENOENT' });
+    await assert.rejects(stat(plistFile), { code: 'ENOENT' });
+    assert.equal(revocations, 2, 'an unsuccessful service registration revokes its credential');
   });
 });

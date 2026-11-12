@@ -3,28 +3,32 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs, parseEnv } from 'node:util';
-import { deploymentEnvironment, parseDeployment } from './connect.js';
+import { deploymentEnvironment, parseDeployment, renewableDeployment } from './connect.js';
 import { runBackgroundWorker, runManagedConnector, startBackgroundConnector } from './background.js';
 import { listConnectors, stopConnector } from './control.js';
+import { checkServiceInstall, installDeviceService, listDeviceServices, runServiceConnector, stopDeviceService } from './service.js';
 
 async function main() {
   const { values } = parseArgs({ options: {
     help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' },
     'env-file': { type: 'string' }, once: { type: 'boolean' }, connect: { type: 'string' },
-    foreground: { type: 'boolean' }, status: { type: 'boolean' }, stop: { type: 'string' }, 'background-worker': { type: 'boolean' }
+    foreground: { type: 'boolean' }, service: { type: 'boolean' }, status: { type: 'boolean' }, stop: { type: 'string' },
+    'background-worker': { type: 'boolean' }, 'service-worker': { type: 'string' }
   } });
   if (values['background-worker']) { await runBackgroundWorker(); return; }
+  if (values['service-worker'] !== undefined) { await runServiceConnector(values['service-worker']); return; }
   if (values.help) {
     console.log(`Agent Workbench 开发机连接器
 
 用法：agent-workbench-connector [--env-file <配置文件>] [--once]
-      agent-workbench-connector --connect <页面生成的部署参数>
+      agent-workbench-connector --connect <页面生成的部署参数> [--service]
       agent-workbench-connector --status
       agent-workbench-connector --stop <连接标识>
 
   --connect <参数>    一键连接：兑换临时令牌，无需输入账号密码
                     默认后台运行，上线后释放终端；不保存设备会话令牌
   --foreground      一键连接时保持前台运行，Ctrl+C 退出
+  --service         macOS 常驻连接，登录系统后自动启动并续期设备授权
   --status          查看本机连接器状态、连接标识及日志路径
   --stop <连接标识>  正常停止指定连接器，不终止其他连接
   --env-file <文件>  加载连接配置，已有环境变量优先
@@ -45,24 +49,50 @@ async function main() {
     console.log(manifest.version); return;
   }
   if (values.status || values.stop !== undefined) {
-    if ((values.status && values.stop !== undefined) || values.connect !== undefined || values['env-file'] || values.once || values.foreground) throw new Error('--status / --stop 不能与其他运行选项同时使用');
+    if ((values.status && values.stop !== undefined) || values.connect !== undefined || values['env-file'] || values.once || values.foreground || values.service) throw new Error('--status / --stop 不能与其他运行选项同时使用');
     if (values.stop !== undefined) {
+      if (process.platform === 'darwin') {
+        const service = await stopDeviceService(homedir(), values.stop);
+        if (service) {
+          console.log('常驻连接器已停止，登录启动项和本机凭据已移除。');
+          if (!service.revoked) throw new Error('服务端未确认撤销设备授权，请检查网络及账号状态');
+          return;
+        }
+      }
       console.log(await stopConnector(homedir(), values.stop) ? '连接器已正常停止。' : '连接器已停止，无需重复停止。');
     } else {
-      const connectors = await listConnectors(homedir());
-      if (!connectors.length) console.log('本机暂无连接器记录。');
+      const [connectors, services] = await Promise.all([listConnectors(homedir()), listDeviceServices(homedir())]);
+      const servicesById = new Map(services.map(service => [service.id, service]));
+      if (!connectors.length && !services.length) console.log('本机暂无连接器记录。');
       for (const connector of connectors) {
+        const service = servicesById.get(connector.id);
         const label = { starting: '启动中', running: '运行中', stopping: '停止中', stopped: '已停止' }[connector.status];
-        console.log(`${connector.id}  ${label}  PID ${connector.pid}  ${connector.origin}`);
-        if (connector.logFile) console.log(`日志：${connector.logFile}`);
+        const status = service && connector.status === 'stopped' ? '未连接' : label;
+        console.log(`${connector.id}  ${status}${service ? '（常驻）' : ''}  PID ${connector.pid}  ${connector.origin}`);
+        const logFile = service?.logFile ?? connector.logFile;
+        if (logFile) console.log(`日志：${logFile}`);
+      }
+      for (const service of services) {
+        if (connectors.some(connector => connector.id === service.id)) continue;
+        console.log(`${service.id}  已配置常驻连接\n日志：${service.logFile}`);
       }
     }
     return;
   }
   if (values.foreground && values.connect === undefined) throw new Error('--foreground 需与 --connect 同时使用');
+  if (values.service && (values.connect === undefined || values.foreground)) throw new Error('--service 需与 --connect 同时使用，不能与 --foreground 混用');
   if (values.connect !== undefined) {
     if (values['env-file'] || values.once) throw new Error('--connect 不能与 --env-file 或 --once 同时使用');
     const deployment = parseDeployment(values.connect);
+    if (values.service) {
+      const entry = fileURLToPath(import.meta.url);
+      await checkServiceInstall(entry);
+      const authorization = await renewableDeployment(values.connect);
+      const service = await installDeviceService({ root: homedir(), entry, authorization, environment: process.env });
+      console.log(`已启用 macOS 常驻连接，正在接入 ${deployment.url}。\n连接标识：${service.id}\n日志：${service.logFile}`);
+      console.log(`查看状态：agent-workbench-connector --status\n停止并移除：agent-workbench-connector --stop ${service.id}`);
+      return;
+    }
     console.log(`正在连接 ${deployment.url}，验证临时部署令牌…`);
     console.log('默认允许远程执行并同步历史摘要。');
     const environment = await deploymentEnvironment(values.connect, process.env);

@@ -34,6 +34,7 @@ const scryptOptions = { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 const PUBLIC_COLUMNS = "id, tenant_id AS tenantId, username, display_name AS displayName, role, enabled, created_at AS createdAt, updated_at AS updatedAt, CASE WHEN password_hash LIKE 'external$%' THEN 0 ELSE 1 END AS hasPassword, EXISTS(SELECT 1 FROM auth_identities ai WHERE ai.tenant_id = organization_users.tenant_id AND ai.user_id = organization_users.id AND ai.provider = 'google') AS hasGoogle";
 export const SESSION_DURATION_MS = 24 * 60 * 60 * 1000;
 export const DEVICE_DEPLOYMENT_DURATION_MS = 10 * 60 * 1000;
+export const RENEWABLE_DEVICE_SESSION_DURATION_MS = 30 * SESSION_DURATION_MS;
 
 export async function hashPassword(password: unknown) {
   if (typeof password !== 'string' || password.length < 12 || password.length > 128) throw httpError(400, '密码长度必须为 12–128 个字符');
@@ -139,6 +140,9 @@ export function createIdentityStore(db: Connection, transaction: Transaction) {
       db.prepare('UPDATE organization_users SET role = ?, enabled = ?, display_name = ?, updated_at = ? WHERE tenant_id = ? AND id = ?')
         .run(role, enabled, name, new Date(Math.max(Date.now(), Date.parse(target.updatedAt) + 1)).toISOString(), tenantId, id);
       if (!enabled) revokeUserSessions(tenantId, id);
+      else if (!permissionsFor(role).includes('work.execute')) {
+        db.prepare('DELETE FROM user_sessions WHERE tenant_id = ? AND user_id = ? AND token_hash IN (SELECT token_hash FROM device_connector_sessions WHERE renewable)').run(tenantId, id);
+      }
       audit(tenantId, current, 'member.updated', id, { previousRole: target.role, role, enabled: Boolean(enabled) });
       const updated = getUser(tenantId, id);
       if (!updated) throw new Error('成员更新后无法读取');
@@ -162,8 +166,8 @@ export function createIdentityStore(db: Connection, transaction: Transaction) {
       audit(tenantId, currentActor, 'member.password_reset', id);
     });
   }
-  function issueSession(tenantId: string, userId: string) {
-    const token = randomBytes(32).toString('base64url'), expiresAt = Date.now() + SESSION_DURATION_MS;
+  function issueSession(tenantId: string, userId: string, duration = SESSION_DURATION_MS) {
+    const token = randomBytes(32).toString('base64url'), expiresAt = Date.now() + duration;
     db.prepare('DELETE FROM user_sessions WHERE expires_at <= ?').run(Date.now());
     db.prepare('INSERT INTO user_sessions VALUES (?, ?, ?, ?, ?)').run(digest(token), tenantId, userId, expiresAt, new Date().toISOString());
     return { token, expiresAt };
@@ -257,7 +261,7 @@ export function createIdentityStore(db: Connection, transaction: Transaction) {
       return { deploymentToken, expiresAt };
     });
   }
-  function exchangeDeviceDeployment(token: unknown) {
+  function exchangeDeviceDeployment(token: unknown, renewable = false) {
     if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(token)) throw httpError(401, '临时令牌无效或已失效，请在网页重新生成部署命令');
     return transaction(() => {
       const row = db.prepare('SELECT s.tenant_id, s.user_id FROM device_deployment_tokens d JOIN user_sessions s ON s.token_hash = d.parent_session_hash WHERE d.token_hash = ? AND d.expires_at > ? AND s.expires_at > ?').get(digest(token), Date.now(), Date.now()) as { tenant_id: string; user_id: string } | undefined;
@@ -265,10 +269,27 @@ export function createIdentityStore(db: Connection, transaction: Transaction) {
       const user = getUser(row.tenant_id, row.user_id);
       if (!user?.enabled || !permissionsFor(user.role).includes('work.execute')) throw httpError(403, '账号已停用或没有设备接入权限');
       db.prepare('DELETE FROM device_deployment_tokens WHERE token_hash = ?').run(digest(token));
-      const session = issueSession(row.tenant_id, row.user_id);
-      db.prepare('INSERT INTO device_connector_sessions VALUES (?)').run(digest(session.token));
-      audit(row.tenant_id, user, 'device.deployment_exchanged');
+      const session = issueSession(row.tenant_id, row.user_id, renewable ? RENEWABLE_DEVICE_SESSION_DURATION_MS : SESSION_DURATION_MS);
+      db.prepare('INSERT INTO device_connector_sessions (token_hash, renewable) VALUES (?, ?::boolean)').run(digest(session.token), String(renewable));
+      audit(row.tenant_id, user, 'device.deployment_exchanged', '', { renewable });
       return session;
+    });
+  }
+  function renewDeviceSession(token: unknown) {
+    return transaction(() => {
+      const principal = authenticateSession(token);
+      if (!principal || typeof token !== 'string') throw httpError(401, '设备授权已失效，请重新接入');
+      const hash = digest(token);
+      if (!db.prepare('SELECT 1 FROM device_connector_sessions WHERE token_hash = ? AND renewable').get(hash)) {
+        throw httpError(403, '当前会话不支持设备续期');
+      }
+      const now = Date.now();
+      if (principal.expiresAt <= now) throw httpError(401, '设备授权已失效，请重新接入');
+      const expiresAt = now + RENEWABLE_DEVICE_SESSION_DURATION_MS;
+      if (expiresAt - principal.expiresAt < SESSION_DURATION_MS) return { expiresAt: principal.expiresAt };
+      db.prepare('UPDATE user_sessions SET expires_at = ? WHERE token_hash = ?').run(expiresAt, hash);
+      audit(principal.tenant.id, principal.user, 'device.session_renewed', '', { expiresAt });
+      return { expiresAt };
     });
   }
   async function changePassword(principal: Principal, input: PasswordChange) {
@@ -288,7 +309,7 @@ export function createIdentityStore(db: Connection, transaction: Transaction) {
   }
   return {
     ...createWorkspaceStore(db, { transaction, getUser, issueSession, audit, authenticateSession }),
-    hasUsers, createUser, getUser, listUsers, updateUser, resetPassword, registerPersonal, login, loginPersonal, loginWithGoogle, authenticateSession, changePassword, audit, issueDeviceDeployment, exchangeDeviceDeployment,
+    hasUsers, createUser, getUser, listUsers, updateUser, resetPassword, registerPersonal, login, loginPersonal, loginWithGoogle, authenticateSession, changePassword, audit, issueDeviceDeployment, exchangeDeviceDeployment, renewDeviceSession,
     logout: (token: string) => db.prepare('DELETE FROM user_sessions WHERE token_hash = ?').run(digest(token)),
     listAudit: (tenantId: string) => (db.prepare('SELECT id, actor_name AS actorName, action, target, detail, created_at AS createdAt FROM audit_events WHERE tenant_id = ? ORDER BY id DESC LIMIT 200').all(tenantId) as unknown as Array<{ id: number; actorName: string; action: string; target: string; detail: string; createdAt: string }>).map(row => ({ ...row, detail: JSON.parse(row.detail) as unknown }))
   };

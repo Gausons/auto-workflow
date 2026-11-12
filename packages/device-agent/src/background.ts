@@ -1,13 +1,13 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, open } from 'node:fs/promises';
+import { lstat, mkdir, open } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { runDeviceConnector } from '../../../src/deviceConnector.js';
-import { connectorDirectory, openConnectorControl, type ConnectorStatus } from './control.js';
+import { connectorDirectory, connectorId, openConnectorControl, serviceProfilePath, type ConnectorStatus } from './control.js';
 
 export async function runManagedConnector(environment: NodeJS.ProcessEnv, options: {
-  logFile?: string; signal?: AbortSignal; once?: boolean; ready?: (info: ConnectorStatus) => void;
+  logFile?: string; signal?: AbortSignal; once?: boolean; serviceId?: string; ready?: (info: ConnectorStatus) => void;
 } = {}) {
   const stopping = new AbortController();
   const cancel = () => stopping.abort();
@@ -15,8 +15,16 @@ export async function runManagedConnector(environment: NodeJS.ProcessEnv, option
   if (options.signal?.aborted) cancel();
   let control: Awaited<ReturnType<typeof openConnectorControl>> | undefined;
   try {
-    await runDeviceConnector({ environment, stateRoot: homedir(), once: options.once, signal: stopping.signal,
+    await runDeviceConnector({ environment, stateRoot: homedir(), once: options.once, renewable: Boolean(options.serviceId), signal: stopping.signal,
       async onStateDirectory(stateDir, identity) {
+        const id = connectorId(stateDir);
+        if (options.serviceId !== undefined && id !== options.serviceId) throw new Error('常驻连接器的设备目录已变化，请重新接入');
+        if (!options.serviceId) {
+          const enrolled = await lstat(serviceProfilePath(homedir(), id)).catch((error: NodeJS.ErrnoException) => {
+            if (error.code !== 'ENOENT') throw error;
+          });
+          if (enrolled) throw new Error(`该设备已配置常驻连接，请先使用 --stop ${id}`);
+        }
         control = await openConnectorControl({ root: homedir(), stateDir, identity, logFile: options.logFile, stop: cancel });
         return () => control!.close();
       },

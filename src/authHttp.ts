@@ -68,12 +68,21 @@ export function createAuthHandler(database: Database, { environment = {}, fetchI
 
   return async function handleAuth(req: IncomingMessage, res: ServerResponse, url: URL, token: unknown, principal: Principal | null, sendJson: SendJson) {
     const endpoint = url.pathname;
-    if (principal?.scope === 'connector' && endpoint.startsWith('/api/auth/') && !['/api/auth/session', '/api/auth/logout'].includes(endpoint)) throw httpError(403, '设备会话不能执行账号操作');
+    if (principal?.scope === 'connector' && endpoint.startsWith('/api/auth/') && !['/api/auth/session', '/api/auth/logout', '/api/auth/device-session/renew'].includes(endpoint)) throw httpError(403, '设备会话不能执行账号操作');
     if (endpoint === '/api/auth/device-deployment/exchange' && req.method === 'POST') {
       rateLimit(`device-exchange:${req.socket.remoteAddress}`, 100);
       const body = await readAuthJson(req);
-      if (Object.keys(body).some(key => key !== 'deploymentToken')) throw httpError(400, '兑换请求只能包含 deploymentToken');
-      sendJson(res, 200, sessionResponse(database.exchangeDeviceDeployment(body.deploymentToken)));
+      if (Object.keys(body).some(key => !['deploymentToken', 'renewable'].includes(key)) || (body.renewable !== undefined && typeof body.renewable !== 'boolean')) throw httpError(400, '设备兑换参数无效');
+      const renewable = body.renewable === true;
+      const session = sessionResponse(database.exchangeDeviceDeployment(body.deploymentToken, renewable));
+      sendJson(res, 200, renewable ? { ...session, renewable: true } : session);
+      return true;
+    }
+    if (endpoint === '/api/auth/device-session/renew' && req.method === 'POST') {
+      if (!principal) throw httpError(401, '设备授权已失效，请重新接入');
+      if (principal.scope !== 'connector' || !permissionsFor(principal.user.role).includes('work.execute')) throw httpError(403, '当前会话不支持设备续期');
+      if (Object.keys(await readAuthJson(req)).length) throw httpError(400, '续期仅适用于当前设备会话');
+      sendJson(res, 200, database.renewDeviceSession(token));
       return true;
     }
     if (endpoint === '/api/auth/device-deployment' && req.method === 'POST') {

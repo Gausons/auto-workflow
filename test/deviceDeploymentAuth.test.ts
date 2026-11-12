@@ -8,11 +8,11 @@ import path from 'node:path';
 import { WebSocket } from 'ws';
 import { createApp, openDatabase, rawDatabase, hashToken } from '../scripts/testing/database.js';
 import { realtimeProtocol } from '../shared/realtime.js';
-import { DEVICE_DEPLOYMENT_DURATION_MS } from '../src/identity.js';
+import { DEVICE_DEPLOYMENT_DURATION_MS, RENEWABLE_DEVICE_SESSION_DURATION_MS } from '../src/identity.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { runDeviceControl, watchDeviceUpdates } from '../src/deviceControlClient.js';
 
-interface Result { token?: string; deploymentToken?: string; expiresAt?: number; permissions?: string[]; tenant?: { id: string }; user?: { id: string }; error?: string }
+interface Result { token?: string; deploymentToken?: string; renewable?: boolean; expiresAt?: number; permissions?: string[]; tenant?: { id: string }; user?: { id: string }; error?: string }
 
 test('a deployed server can restart while its connector retains authorization and restores presence', { timeout: 30_000 }, async t => {
   const rootDir = await mkdtemp(path.join(tmpdir(), 'workflow-device-restart-'));
@@ -127,6 +127,45 @@ test('temporary device authorization binds the signed-in user and rejects unauth
   for (const secret of [browser.token, fresh.data.deploymentToken, connector.token]) assert.ok(!serialized.includes(secret));
   await request('/api/auth/logout', connector.token);
   assert.equal((await request('/api/auth/session', connector.token, undefined, 'GET')).status, 401);
+
+  const renew = '/api/auth/device-session/renew';
+  assert.equal((await request(renew)).status, 401);
+  assert.equal((await request(renew, browser.token)).status, 403);
+  const enrollment = (await request(issue, browser.token)).data.deploymentToken;
+  assert.equal((await request(exchange, undefined, { deploymentToken: enrollment, renewable: 'yes' })).status, 400);
+  const permanent = await request(exchange, undefined, { deploymentToken: enrollment, renewable: true });
+  const serviceToken = permanent.data.token;
+  assert.equal(permanent.status, 200);
+  assert.equal(permanent.data.renewable, true);
+  assert.ok(serviceToken);
+  assert.ok(permanent.data.expiresAt! > Date.now() + 29 * 86_400_000);
+  assert.equal((await request(exchange, undefined, { deploymentToken: enrollment, renewable: true })).status, 401);
+  assert.equal((await request(renew, serviceToken, { token: other.token })).status, 400);
+  assert.equal((await request(renew, serviceToken, {}, 'POST', db.authenticateSession(other.token)!.tenant.id)).status, 403);
+  assert.equal((await request(issue, serviceToken)).status, 403);
+  assert.equal((await request('/api/bootstrap', serviceToken, undefined, 'GET')).status, 403);
+  const raw = rawDatabase(app.databaseKey); t.after(() => raw.close());
+  const nearingExpiry = Date.now() + 60_000;
+  raw.prepare('UPDATE user_sessions SET expires_at = ? WHERE token_hash = ?').run(nearingExpiry, hashToken(serviceToken));
+  const renewed = await Promise.all([request(renew, serviceToken), request(renew, serviceToken)]);
+  assert.deepEqual(renewed.map(result => result.status), [200, 200]);
+  assert.equal(renewed[0].data.expiresAt, renewed[1].data.expiresAt);
+  assert.ok(renewed[0].data.expiresAt! > nearingExpiry);
+  assert.ok(renewed[0].data.expiresAt! <= Date.now() + RENEWABLE_DEVICE_SESSION_DURATION_MS);
+  assert.equal(renewed[0].data.token, undefined);
+  assert.equal((await request('/api/auth/session', serviceToken, undefined, 'GET')).data.expiresAt, renewed[0].data.expiresAt);
+  assert.doesNotMatch(JSON.stringify(db.listAudit(owner.tenant.id)), new RegExp(serviceToken));
+  await request('/api/auth/logout', serviceToken);
+  assert.equal((await request(renew, serviceToken)).status, 401);
+
+  const memberId = db.authenticateSession(viewer.token)!.user.id;
+  db.updateUser(owner.tenant.id, memberId, { role: 'operator' }, owner.user);
+  const memberEnrollment = (await request(issue, viewer.token)).data.deploymentToken;
+  const memberService = (await request(exchange, undefined, { deploymentToken: memberEnrollment, renewable: true })).data.token;
+  assert.ok(memberService);
+  db.updateUser(owner.tenant.id, memberId, { role: 'viewer' }, owner.user);
+  db.updateUser(owner.tenant.id, memberId, { role: 'operator' }, owner.user);
+  assert.equal((await request(renew, memberService)).status, 401, 'restoring permissions must not restore the revoked credential');
 });
 
 test('deployment state survives reopening, expires, follows revocation and rolls back an unsuccessful exchange', async t => {
@@ -142,7 +181,9 @@ test('deployment state survives reopening, expires, follows revocation and rolls
   assert.ok(!JSON.stringify(row).includes(issued.deploymentToken));
   db.close(); db = openDatabase(key);
   const exchanged = db.exchangeDeviceDeployment(issued.deploymentToken);
+  const renewable = db.exchangeDeviceDeployment(db.issueDeviceDeployment(browser.token).deploymentToken, true);
   assert.equal(db.authenticateSession(exchanged.token)?.scope, 'connector');
+  assert.throws(() => db.renewDeviceSession(exchanged.token), { statusCode: 403 });
   assert.throws(() => db.exchangeDeviceDeployment(issued.deploymentToken), /已使用|失效/);
   const expiring = db.issueDeviceDeployment(browser.token);
   raw.prepare('UPDATE device_deployment_tokens SET expires_at = 0 WHERE token_hash = ?').run(hashToken(expiring.deploymentToken));
@@ -161,6 +202,9 @@ test('deployment state survives reopening, expires, follows revocation and rolls
   db.logout(browser.token);
   assert.throws(() => db.exchangeDeviceDeployment(pending.deploymentToken), /无效/);
   assert.ok(db.authenticateSession(exchanged.token), 'device session remains independent after browser logout');
+  db.close(); db = openDatabase(key);
+  assert.equal(db.authenticateSession(renewable.token)?.scope, 'connector');
+  assert.equal(db.renewDeviceSession(renewable.token).expiresAt, renewable.expiresAt);
   const replacementBrowser = db.loginWithGoogle({ subject: 'state-google', email: 'state@example.com', displayName: 'State' });
   const revoked = db.issueDeviceDeployment(replacementBrowser.token);
   raw.prepare("UPDATE organization_users SET role = 'viewer' WHERE tenant_id = ? AND id = ?").run(owner.tenant.id, owner.user.id);
@@ -173,7 +217,28 @@ test('deployment state survives reopening, expires, follows revocation and rolls
   await db.changePassword(owner, { password: 'replacement-test-password' });
   assert.equal(db.authenticateSession(exchanged.token), null);
   assert.equal(db.authenticateSession(replacementBrowser.token), null);
+  assert.throws(() => db.renewDeviceSession(renewable.token), { statusCode: 401 });
   assert.throws(() => db.exchangeDeviceDeployment(revoked.deploymentToken), /无效/);
+});
+
+test('migration 10 leaves existing device sessions on their original expiry', async () => {
+  const key = randomUUID();
+  const db = openDatabase(key);
+  db.createTenant({ id: 'default', token: 'c'.repeat(43) });
+  const browser = db.loginWithGoogle({ subject: 'renewal-migration', email: 'renewal@example.com', displayName: 'Renewal' });
+  const oldSession = db.exchangeDeviceDeployment(db.issueDeviceDeployment(browser.token).deploymentToken);
+  db.close();
+  const raw = rawDatabase(key);
+  raw.prepare('ALTER TABLE device_connector_sessions DROP COLUMN renewable').run();
+  raw.prepare('DELETE FROM schema_migrations WHERE version = 10').run();
+  raw.close();
+  const upgraded = openDatabase(key);
+  try {
+    assert.equal(upgraded.authenticateSession(oldSession.token)?.expiresAt, oldSession.expiresAt);
+    assert.throws(() => upgraded.renewDeviceSession(oldSession.token), { statusCode: 403 });
+    const enrolled = upgraded.exchangeDeviceDeployment(upgraded.issueDeviceDeployment(browser.token).deploymentToken, true);
+    assert.equal(upgraded.renewDeviceSession(enrolled.token).expiresAt, enrolled.expiresAt);
+  } finally { upgraded.close(); }
 });
 
 test('version 8 upgrades existing sessions without exposing old logins as connector sessions', async t => {

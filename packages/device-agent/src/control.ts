@@ -11,6 +11,11 @@ export interface ConnectorStatus {
 interface ControlRecord extends ConnectorStatus { secret: string }
 const protocol = 'agent-workbench-connector';
 export const connectorDirectory = (root: string) => path.join(root, '.workflow-data', 'connectors');
+export const connectorId = (stateDir: string) => createHash('sha256').update(stateDir).digest('hex').slice(0, 24);
+export function serviceProfilePath(root: string, id: string) {
+  if (!/^[a-f0-9]{24}$/.test(id)) throw new Error('连接标识无效，请先运行 --status');
+  return path.join(connectorDirectory(root), `${id}.service.json`);
+}
 
 function validRecord(value: unknown): value is ControlRecord {
   if (!value || typeof value !== 'object') return false;
@@ -81,7 +86,7 @@ export async function stopConnector(root: string, id: string) {
 export async function openConnectorControl(options: {
   root: string; stateDir: string; identity: { origin: string; tenantId: string; userId: string }; logFile?: string; stop(): void;
 }) {
-  const id = createHash('sha256').update(options.stateDir).digest('hex').slice(0, 24);
+  const id = connectorId(options.stateDir);
   // The OS owns the lease: it is released even after a crash, and no stored PID is ever killed.
   const port = 20000 + Number.parseInt(id.slice(0, 8), 16) % 40000;
   const record: ControlRecord = { id, pid: process.pid, port, ...options.identity, stateDir: options.stateDir,
