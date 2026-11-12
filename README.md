@@ -172,6 +172,7 @@ CODEX_WORKSPACE_DIR=/absolute/path/to/your/repository
 | `DATABASE_DRIVER` | `postgres` | 唯一支持的数据库驱动，配置错误直接报错 |
 | `PGHOST` / `PGPORT` | 无 / `5432` | 本机开发 `127.0.0.1:15432`，生产 Docker 内 `auto-workflow-postgres:5432` |
 | `PGDATABASE` / `PGUSER` / `PGPASSWORD` | 无 | PostgreSQL 数据库和应用账号；密码只保存于环境文件 |
+| `IMPORT_LEGACY_DATA` | `true` | 启动时导入本机旧配置和数据。连接已有数据的数据库时可设为 `false` 跳过导入 |
 | `CODEX_WORKSPACE_DIR` | 项目根目录 | 默认 Agent 工作目录 |
 
 如需通过局域网或反向代理访问，可设置 `HOST=0.0.0.0`。请在可信网络中部署，并在对外开放时配置 HTTPS、访问控制和备份策略。

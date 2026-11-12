@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { openDatabase } from '../scripts/testing/database.js';
+import { createApp, openDatabase } from '../scripts/testing/database.js';
 import { freezeSnapshot } from '@auto-workflow/context-engine';
 import { detachSnapshot } from '@auto-workflow/context-engine/detached-bundle';
 
@@ -61,6 +61,27 @@ test('legacy import supports the old doubled users directory, is atomic and does
     await writeFile(path.join(dir, 'state.json'), JSON.stringify(snapshot('fixed')));
     assert.equal(db.importLegacy(root, 'other').users, 1);
   } finally { db.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('application can start against a populated database with local legacy import disabled', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'bugflow-skip-legacy-'));
+  const db = openDatabase(root);
+  let app: ReturnType<typeof createApp> | undefined;
+  try {
+    db.createTenant({ id: 'default', token: tokenA });
+    const store = db.createStore('default');
+    await store.writeUserState('person', snapshot('existing'));
+    await writeFile(path.join(root, '.workflow-config.json'), JSON.stringify({ assignee: 'local' }));
+
+    assert.throws(() => createApp({ rootDir: root }), /目标租户已有数据，拒绝覆盖/);
+    app = createApp({ rootDir: root, environment: { IMPORT_LEGACY_DATA: 'false' } });
+    assert.equal(store.readUserState('person').bugs[0].title, 'existing');
+    assert.deepEqual(db.readSettings('default').config, {});
+  } finally {
+    await app?.close();
+    db.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('transfer receipt survives reopen, stays tenant-scoped and cannot change a sealed digest', async () => {

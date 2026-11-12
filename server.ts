@@ -19,6 +19,10 @@ type ErrorLike = Error & { statusCode?: number };
 const asError = (value: unknown): ErrorLike => value instanceof Error ? value as ErrorLike : new Error(String(value));
 
 export function createApp({ rootDir = projectDir, environment = loadEnvironment(rootDir), fetchImpl }: AppOptions = {}) {
+  const importLegacyData = environment.IMPORT_LEGACY_DATA ?? 'true';
+  if (importLegacyData !== 'true' && importLegacyData !== 'false') {
+    throw new Error('IMPORT_LEGACY_DATA 必须为 true 或 false');
+  }
   const database = openDatabase(environment);
   const handleAuth = createAuthHandler(database, { environment, fetchImpl });
   const serveWeb = createStaticHandler(projectDir);
@@ -56,7 +60,7 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
 
   try {
     provisionDefaultTenant(database, rootDir, environment);
-    database.importLegacy(rootDir, 'default');
+    if (importLegacyData === 'true') database.importLegacy(rootDir, 'default');
     assertSeparateWorkspaces(database.listTenants().map((tenant) => ({ id: tenant.id, workspace: workspaceFor(tenant) })));
   } catch (error: unknown) { database.close(); throw error; }
 
