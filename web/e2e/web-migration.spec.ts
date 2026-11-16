@@ -67,6 +67,26 @@ test('integration settings group fields and save the assignee select at desktop 
   await page.getByRole('button', { name: '保存配置', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('配置已保存');
   expect(configPayload.assignee).toBe('');
+
+  let connectionPayload: Record<string, unknown> = {};
+  await page.route('**/api/config/model-connection', route => {
+    connectionPayload = route.request().postDataJSON() as Record<string, unknown>;
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.getByRole('button', { name: '手动添加模型' }).click();
+  await page.getByLabel('自定义模型 ID').fill('vendor/e2e-model');
+  await page.getByLabel('OpenAI Base URL').fill('https://models.example.com/v1');
+  await page.getByLabel('OpenAI API Key', { exact: true }).fill('synthetic-e2e-key');
+  await page.getByRole('button', { name: '测试连接', exact: true }).click();
+  await expect(page.getByText('连接成功，所选模型可用。')).toBeVisible();
+  expect(connectionPayload).toMatchObject({ aiAssignmentModel: 'vendor/e2e-model', openaiBaseUrl: 'https://models.example.com/v1', openaiApiKey: 'synthetic-e2e-key' });
+  expect(configPayload).not.toHaveProperty('openaiApiKey');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+  await page.getByRole('button', { name: '保存配置', exact: true }).click();
+  await expect(page.getByLabel('AI 分配模型')).toHaveValue('vendor/e2e-model');
+  await expect(page.getByLabel('OpenAI API Key', { exact: true })).toHaveValue('');
+  await page.reload();
+  await expect(page.getByLabel('AI 分配模型')).toHaveValue('vendor/e2e-model');
 });
 
 test('page configuration survives navigation and reload without changing Git branches', async ({ page }) => {

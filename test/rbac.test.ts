@@ -58,7 +58,7 @@ test('organization members, role enforcement, cross-organization access and imme
     assert.equal((await request(viewer.token, '/api/task-center/updates?since=-1')).status, 400);
     for (const [method, endpoint] of [
       ['PUT', '/api/config'], ['PUT', '/api/assignment/people'], ['POST', '/api/sync'], ['GET', '/api/issues/diagnostics'],
-      ['POST', '/api/scheduler'], ['POST', '/api/bugs/x/task'],
+      ['POST', '/api/scheduler'], ['POST', '/api/config/model-connection'], ['POST', '/api/bugs/x/task'],
       ['POST', '/api/bugs/x/assignment/apply'], ['POST', '/api/bugs/x/assignment/recommend'],
       ['POST', '/api/assignments/apply-all'],
       ['POST', '/api/task-center/git'], ['GET', '/api/task-center/git?requestId=missing'], ['POST', '/api/task-center/git-action'],

@@ -6,7 +6,8 @@ import { createTaskCenterStream, taskCenterSince } from './taskCenterStream.js';
 import { createDeviceControl } from './deviceControl.js';
 import path from 'node:path';
 import { taskContent } from '../shared/taskContent.js';
-import { DEFAULT_AI_ASSIGNMENT_MODEL } from '../shared/assignmentModels.js';
+import { AI_ASSIGNMENT_MODELS, DEFAULT_AI_ASSIGNMENT_MODEL } from '../shared/assignmentModels.js';
+import { assignmentModelError, assignmentModelId, assignmentResponseText, DEFAULT_OPENAI_BASE_URL, modelApiKey, modelBaseUrl, requestAssignmentModel } from './assignmentModelConnection.js';
 import { createHash } from 'node:crypto';
 import { connectorActionAllowed, httpError, publicIdentity } from './rbac.js';
 import type { ExecutionFeedback, RealtimeEvent, RealtimeSubscription } from '../shared/realtime.js';
@@ -41,7 +42,7 @@ interface RuntimeIssue extends WorkIssue {
 interface RuntimeConfig extends JsonObject {
   mode: string; assignee: string; operatorId: string; selfOnly: boolean; intervalMinutes: number;
   codexWorkspaceDir: string; enableAIAssignment: boolean; enableAutoAssignment: boolean;
-  aiAssignmentModel: string; openaiBaseUrl: string; openaiTimeoutMs: number; requestDelayMs: number;
+  aiAssignmentModel: string; aiAssignmentCustomModels: string[]; openaiBaseUrl: string; openaiTimeoutMs: number; requestDelayMs: number;
 }
 interface SchedulerState {
   enabled: boolean; lastSyncTime: string | null; nextRunAt: string | null;
@@ -54,9 +55,8 @@ interface RuntimeState {
 interface Metrics { total: number; pending: number; processing: number; resolved: number; other: number; byStatus: Record<string, number> }
 interface BatchResultItem { bugId: string; bugCode: string; ok: boolean; assigneeId?: string; assigneeName?: string; error?: string }
 interface BatchSummary { ok: boolean; source: string; total: number; success: number; failed: number; results: BatchResultItem[] }
-interface ModelPayload { output_text?: string; output?: Array<{ content?: Array<{ text?: string }> }>; error?: { message?: string } }
-
 const asError = (error: unknown) => error instanceof Error ? error : new Error(String(error));
+const modelConnectionPath = '/api/config/model-connection';
 
 export function createTenantRuntime({ database, tenant, environment, rootDir, validateWorkspace = () => {} }: {
   database: Database; tenant: Tenant; environment: Environment; rootDir: string; validateWorkspace?: (workspace: unknown) => void;
@@ -64,7 +64,11 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
   const requestIdentity = new AsyncLocalStorage<Principal>();
   const mode = issueSourceId(environment);
   const storedSettings = database.readSettings(tenant.id);
-  const persistedConfig = storedSettings.config;
+  const { openaiApiKey: persistedModelKey, ...persistedConfig } = storedSettings.config;
+  const deployedModelUrl = normalizeModelUrl(environment.OPENAI_BASE_URL || DEFAULT_OPENAI_BASE_URL, '');
+  const deployedModelKey = deployedModelUrl ? environment.OPENAI_API_KEY?.trim() : undefined;
+  let savedModelKey = typeof persistedModelKey === 'string' ? persistedModelKey : '';
+  let modelConnectionProbe: AbortController | undefined;
   const state: RuntimeState = {
     config: {
       mode,
@@ -77,8 +81,9 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
       enableAIAssignment: parseBooleanConfig(persistedConfig.enableAIAssignment, environment.ENABLE_AI_ASSIGNMENT, true),
       enableAutoAssignment: parseBooleanConfig(persistedConfig.enableAutoAssignment, environment.ENABLE_AUTO_ASSIGNMENT, false),
       aiAssignmentModel: String(persistedConfig.aiAssignmentModel ?? environment.AI_ASSIGNMENT_MODEL ?? DEFAULT_AI_ASSIGNMENT_MODEL),
-      openaiBaseUrl: normalizeUrl(persistedConfig.openaiBaseUrl ?? persistedConfig.aiRoutingBaseUrl ?? environment.OPENAI_BASE_URL ?? 'https://api.openai.com/v1', 'https://api.openai.com/v1'),
-      openaiTimeoutMs: clampNumber(persistedConfig.openaiTimeoutMs ?? persistedConfig.aiRoutingTimeoutMs ?? environment.OPENAI_TIMEOUT_MS ?? environment.AI_ROUTING_TIMEOUT_MS, 5000, 120000, 30000),
+      aiAssignmentCustomModels: Array.isArray(persistedConfig.aiAssignmentCustomModels) ? persistedConfig.aiAssignmentCustomModels.filter((model): model is string => typeof model === 'string') : [],
+      openaiBaseUrl: normalizeModelUrl(persistedConfig.openaiBaseUrl ?? persistedConfig.aiRoutingBaseUrl, deployedModelUrl || DEFAULT_OPENAI_BASE_URL),
+      openaiTimeoutMs: Math.trunc(clampNumber(persistedConfig.openaiTimeoutMs ?? persistedConfig.aiRoutingTimeoutMs ?? environment.OPENAI_TIMEOUT_MS ?? environment.AI_ROUTING_TIMEOUT_MS, 5000, 120000, 30000)),
       requestDelayMs: clampNumber(persistedConfig.requestDelayMs, 0, 60000, 0)
     },
     assignmentPeople: normalizeAssignmentPeople(storedSettings.assignmentPeople, { fallback: [] }) as AssignmentPerson[],
@@ -101,23 +106,30 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     if (closing) return;
     await issueStore.writeUserState(state.storageUserKey, { bugs: state.bugs, updatedAt: new Date().toISOString() });
   }
-  async function switchIssueUserContext(nextConfig: RuntimeConfig) {
-    const nextKey = sourceStorageKey(issueSource(), resolveUserStorageKey(nextConfig));
-    if (nextKey === state.storageUserKey) return;
-    await persistIssueState();
-    loadIssueState(nextKey);
+  async function saveConfig(config: RuntimeConfig, apiKey: string) {
+    const nextKey = sourceStorageKey(issueSource(config), resolveUserStorageKey(config));
+    const switching = nextKey !== state.storageUserKey;
+    if (switching) await persistIssueState();
+    const stored = switching ? issueStore.readUserState(nextKey) : undefined;
+    persistConfig(config, apiKey);
+    state.config = config;
+    savedModelKey = apiKey;
+    if (!stored) return;
+    state.storageUserKey = stored.userKey;
+    state.bugs = stored.bugs as RuntimeIssue[];
     state.scheduler.lastSyncTime = null;
     state.scheduler.lastRunStatus = 'idle';
     state.scheduler.lastRunMessage = '已切换经办人，等待同步';
   }
-  async function persistConfig() {
+  function persistConfig(config: RuntimeConfig, apiKey: string) {
     database.writeSettings(tenant.id, { config: {
-      ...issueSourceConfig({ environment, config: state.config }),
-      assignee: state.config.assignee, operatorId: state.config.operatorId, selfOnly: Boolean(state.config.selfOnly),
-      intervalMinutes: state.config.intervalMinutes, codexWorkspaceDir: state.config.codexWorkspaceDir,
-      enableAIAssignment: Boolean(state.config.enableAIAssignment), enableAutoAssignment: Boolean(state.config.enableAutoAssignment),
-      aiAssignmentModel: state.config.aiAssignmentModel, openaiBaseUrl: state.config.openaiBaseUrl,
-      openaiTimeoutMs: state.config.openaiTimeoutMs
+      ...issueSourceConfig({ environment, config }),
+      assignee: config.assignee, operatorId: config.operatorId, selfOnly: config.selfOnly,
+      intervalMinutes: config.intervalMinutes, codexWorkspaceDir: config.codexWorkspaceDir,
+      enableAIAssignment: config.enableAIAssignment, enableAutoAssignment: config.enableAutoAssignment,
+      aiAssignmentModel: config.aiAssignmentModel, aiAssignmentCustomModels: config.aiAssignmentCustomModels,
+      openaiBaseUrl: config.openaiBaseUrl, openaiTimeoutMs: config.openaiTimeoutMs,
+      ...(apiKey ? { openaiApiKey: apiKey } : {})
     }});
   }
   async function persistAssignmentPeople() {
@@ -234,8 +246,45 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
       if (hasBackgroundWork()) { sendJson(res, 409, { error: 'tenant_busy', message: '当前账号有后台任务执行中，请稍后修改配置' }); return; }
       const body = await readJson(req);
       validateWorkspace(body.codexWorkspaceDir ?? state.config.codexWorkspaceDir);
-      updateConfig(body); await switchIssueUserContext(state.config); await persistConfig(); configureScheduler(state.scheduler.enabled);
+      const modelConfig = readModelConfig(body);
+      const { openaiApiKey: _key, ...settings } = body;
+      const config = nextConfig(settings, modelConfig);
+      await saveConfig(config, modelConfig.savedKey);
+      configureScheduler(state.scheduler.enabled);
       sendJson(res, 200, getBootstrap()); return;
+    }
+    if (req.method === 'POST' && url.pathname === modelConnectionPath) {
+      const connection = readModelConfig(await readJson(req, 16_384));
+      if (res.destroyed) return;
+      if (modelConnectionProbe) throw httpError(409, '正在测试模型连接，请稍后再试');
+      const apiKey = effectiveModelKey(connection.openaiBaseUrl, connection.savedKey);
+      if (!apiKey) throw httpError(400, '请填写当前 Base URL 对应的 OpenAI API Key');
+      const controller = new AbortController();
+      const cancel = () => controller.abort();
+      const { signal } = controller;
+      const timeout = setTimeout(() => controller.abort(new DOMException('模型服务连接超时', 'TimeoutError')), connection.openaiTimeoutMs).unref();
+      modelConnectionProbe = controller;
+      res.once('close', cancel);
+      try {
+        const payload = await requestAssignmentModel(connection.openaiBaseUrl, apiKey, {
+          model: connection.aiAssignmentModel, store: false, input: 'Return a JSON object with ok set to true.',
+          text: { format: { type: 'json_schema', name: 'connection_test', strict: true,
+            schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false } } }
+        }, signal, deployedModelUrl);
+        const text = assignmentResponseText(payload);
+        let output: unknown;
+        try { output = JSON.parse(text); }
+        catch { throw httpError(502, '模型服务未返回有效的测试结果'); }
+        if (!output || typeof output !== 'object' || !('ok' in output) || output.ok !== true) throw httpError(502, '模型服务未返回有效的测试结果');
+        sendJson(res, 200, { ok: true });
+      } catch (error: unknown) {
+        throw assignmentModelError(error, signal);
+      } finally {
+        clearTimeout(timeout);
+        res.off('close', cancel);
+        modelConnectionProbe = undefined;
+      }
+      return;
     }
     if (req.method === 'POST' && url.pathname === '/api/sync') {
       if (assignmentJobsPending || assignmentBatchPromise) { sendJson(res, 409, { error: 'tenant_busy', message: 'AI 分配任务执行中，请稍后同步' }); return; }
@@ -281,11 +330,18 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
   function findBug(id: string) { return state.bugs.find((item) => item.id === id || item.aid === id); }
   function getBootstrap() {
     const principal = requestIdentity.getStore();
+    const source = issueSource();
     return {
       ...(principal ? publicIdentity(principal) : {}),
       tenant: { id: tenant.id, name: tenant.name }, storage: { driver: 'postgres', schemaVersion: 3 },
       search: { vectorEnabled: vectorSearchEnabled(environment) },
-      config: { ...state.config, workspaceManaged: Boolean(environment.CODEX_WORKSPACE_DIR) || database.listTenants().length > 1, issueSourceLabel: issueSource().label, issueSourceConfigured: issueSource().configured },
+      config: {
+        ...state.config,
+        openaiApiKeyConfigured: Boolean(effectiveModelKey(state.config.openaiBaseUrl, savedModelKey)),
+        openaiApiKeySaved: Boolean(savedModelKey),
+        workspaceManaged: Boolean(environment.CODEX_WORKSPACE_DIR) || database.listTenants().length > 1,
+        issueSourceLabel: source.label, issueSourceConfigured: source.configured
+      },
       scheduler: state.scheduler, assignmentPeople: state.assignmentPeople, storageUserKey: state.storageUserKey,
       bugs: state.bugs, metrics: buildMetrics()
     };
@@ -307,11 +363,6 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     const steps = Array.isArray(bug.reproduceSteps) ? bug.reproduceSteps : [];
     const facts = [`缺陷编码：${bug.code || bug.id}`, `标题：${bug.title || '未填写'}`, `状态：${bug.status || '未知'}`, `优先级：${bug.priority || bug.severity || '未填写'}`, bug.description ? `描述：${bug.description}` : '', steps.length ? `复现步骤：\n${steps.map((step, index) => `${index + 1}. ${typeof step === 'string' ? step : JSON.stringify(step)}`).join('\n')}` : '', bug.expected ? `预期结果：${bug.expected}` : '', bug.actual ? `实际结果：${bug.actual}` : ''].filter(Boolean);
     return { goal: `修复缺陷 ${bug.code || bug.id}：${bug.title || ''}`, constraints: facts.join('\n\n'), decisions: '此任务直接来源于缺陷工作台，缺陷原始信息作为任务上下文。', next: '分析并复现缺陷，完成修复与必要测试，汇报验证结果。', files: (bug.attachments || []).map((item) => `- ${item.name || '附件'}：${item.url || '无链接'}`).join('\n') };
-  }
-  function extractResponseText(payload: ModelPayload) {
-    if (typeof payload?.output_text === 'string' && payload.output_text.trim()) return payload.output_text.trim();
-    const chunks: string[] = []; for (const item of payload?.output || []) for (const part of item?.content || []) if (typeof part?.text === 'string') chunks.push(part.text);
-    const text = chunks.join('\n').trim(); if (!text) throw new Error('模型响应为空。'); return text;
   }
 function startAssignmentRecommendationsForBugs(bugs: RuntimeIssue[]) {
   const jobId = ++assignmentJobSeq;
@@ -385,47 +436,46 @@ async function recommendBugAssignee(bug: RuntimeIssue): Promise<AssignmentRecomm
     };
   }
 
-  if (!environment.OPENAI_API_KEY) {
+  const { aiAssignmentModel, openaiBaseUrl, openaiTimeoutMs } = state.config;
+  const apiKey = effectiveModelKey(openaiBaseUrl, savedModelKey);
+  if (!apiKey) {
     return {
       status: "error",
       source: "model",
-      error: "未配置 OPENAI_API_KEY，无法生成 AI 分配建议。",
+      error: "当前模型地址未配置 OpenAI API Key，无法生成 AI 分配建议。",
       createdAt: new Date().toISOString()
     };
   }
 
-  const model = String(state.config.aiAssignmentModel || DEFAULT_AI_ASSIGNMENT_MODEL);
-  const baseUrl = normalizeUrl(state.config.openaiBaseUrl, "https://api.openai.com/v1").replace(/\/+$/, "");
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), state.config.openaiTimeoutMs).unref();
-  const startedAt = Date.now();
+  const model = aiAssignmentModel || DEFAULT_AI_ASSIGNMENT_MODEL;
+  const signal = AbortSignal.timeout(openaiTimeoutMs);
   console.info(`[ai-assignment] request ${JSON.stringify({
     bugCode: bug.code || bug.id || "unknown",
     model,
-    baseUrl,
-    peopleCount: state.assignmentPeople.length,
-    title: bug.title || ""
+    peopleCount: state.assignmentPeople.length
   })}`);
 
   try {
-    const { payload, response } = await postAssignmentModelRequest({
-      baseUrl,
+    const payload = await requestAssignmentModel(openaiBaseUrl, apiKey, {
       model,
-      bug,
-      signal: controller.signal
-    });
-
-    console.info(`[ai-assignment] response bug=${bug.code || bug.id || "unknown"} status=${response.status} elapsedMs=${Date.now() - startedAt}`);
-
-    if (!response.ok) {
-      throw new Error(`模型分配请求失败 HTTP ${response.status}: ${payload.error?.message || JSON.stringify(payload)}`);
-    }
+      input: [
+        { role: "system", content: buildAssignmentSystemPrompt(state.assignmentPeople) },
+        { role: "user", content: JSON.stringify(buildAssignmentUserPayload(bug, state.assignmentPeople)) }
+      ],
+      text: { format: { type: "json_schema", name: "bug_assignment", strict: true, schema: buildAssignmentJsonSchema(state.assignmentPeople) } }
+    }, signal, deployedModelUrl);
+    const text = assignmentResponseText(payload);
+    let output: unknown;
+    try { output = JSON.parse(text); }
+    catch { throw httpError(502, '模型服务未返回有效的分配建议'); }
 
     const recommendation = applyAssignmentBusinessRules(
       bug,
-      normalizeAssignmentRecommendation(JSON.parse(extractResponseText(payload)), { model, people: state.assignmentPeople }),
+      normalizeAssignmentRecommendation(output, { model, people: state.assignmentPeople }),
       state.assignmentPeople
     );
+    recommendation.reason = recommendation.reason.replaceAll(apiKey, '[redacted]');
+    recommendation.matchedResponsibility = recommendation.matchedResponsibility.replaceAll(apiKey, '[redacted]');
     console.info(`[ai-assignment] result bug=${bug.code || bug.id || "unknown"} ${JSON.stringify({
       assigneeId: recommendation.assigneeId,
       assigneeName: recommendation.assigneeName,
@@ -434,7 +484,7 @@ async function recommendBugAssignee(bug: RuntimeIssue): Promise<AssignmentRecomm
     })}`);
     return recommendation;
   } catch (error: unknown) {
-    const message = asError(error).name === "AbortError" ? `模型分配超时：${state.config.openaiTimeoutMs}ms` : sanitizeError(error);
+    const message = assignmentModelError(error, signal).message;
     console.warn(`[ai-assignment] error bug=${bug.code || bug.id || "unknown"} ${message}`);
     return {
       status: "error",
@@ -443,43 +493,7 @@ async function recommendBugAssignee(bug: RuntimeIssue): Promise<AssignmentRecomm
       error: message,
       createdAt: new Date().toISOString()
     };
-  } finally {
-    clearTimeout(timer);
   }
-}
-
-async function postAssignmentModelRequest({ baseUrl, model, bug, signal }: { baseUrl: string; model: string; bug: RuntimeIssue; signal: AbortSignal }) {
-  const response = await fetch(`${baseUrl}/responses`, {
-    method: "POST",
-    signal,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${environment.OPENAI_API_KEY}`
-    },
-    body: JSON.stringify({
-      model,
-      input: [
-        {
-          role: "system",
-          content: buildAssignmentSystemPrompt(state.assignmentPeople)
-        },
-        {
-          role: "user",
-          content: JSON.stringify(buildAssignmentUserPayload(bug, state.assignmentPeople))
-        }
-      ],
-      text: {
-        format: {
-          type: "json_schema",
-          name: "bug_assignment",
-          strict: true,
-          schema: buildAssignmentJsonSchema(state.assignmentPeople)
-        }
-      }
-    })
-  });
-  const payload = await response.json().catch(() => ({})) as ModelPayload;
-  return { response, payload };
 }
 
 async function applyBugAssignment(bug: RuntimeIssue, body: { assigneeId?: unknown } = {}) {
@@ -625,18 +639,36 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
     const value = String(config.assignee || (config.selfOnly && config.operatorId) || config.operatorId || 'default').trim().toLowerCase();
     return value.replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'default';
   }
-  function updateConfig(body: JsonObject) {
-    const next = body || {};
-    state.config = {
+  function effectiveModelKey(baseUrl: string, savedKey: string) {
+    return savedKey || (baseUrl === deployedModelUrl ? deployedModelKey || '' : '');
+  }
+  function readModelConfig(input: JsonObject) {
+    const { openaiApiKey, openaiBaseUrl, openaiTimeoutMs, aiAssignmentModel } = input;
+    const baseUrl = openaiBaseUrl === undefined ? state.config.openaiBaseUrl : modelBaseUrl(openaiBaseUrl);
+    if (openaiTimeoutMs !== undefined && (typeof openaiTimeoutMs !== 'number' || !Number.isInteger(openaiTimeoutMs) || openaiTimeoutMs < 5000 || openaiTimeoutMs > 120000)) {
+      throw httpError(400, 'OpenAI 请求超时必须为 5000–120000 毫秒');
+    }
+    const keepSavedKey = openaiApiKey === undefined && baseUrl === state.config.openaiBaseUrl;
+    return {
+      aiAssignmentModel: aiAssignmentModel === undefined ? state.config.aiAssignmentModel || DEFAULT_AI_ASSIGNMENT_MODEL : assignmentModelId(aiAssignmentModel),
+      openaiBaseUrl: baseUrl,
+      openaiTimeoutMs: openaiTimeoutMs ?? state.config.openaiTimeoutMs,
+      savedKey: keepSavedKey ? savedModelKey : openaiApiKey == null ? '' : modelApiKey(openaiApiKey)
+    };
+  }
+  function nextConfig(next: JsonObject, { aiAssignmentModel, openaiBaseUrl, openaiTimeoutMs }: ReturnType<typeof readModelConfig>): RuntimeConfig {
+    const models = state.config.aiAssignmentCustomModels;
+    const addModel = Object.hasOwn(next, 'aiAssignmentModel') && !AI_ASSIGNMENT_MODELS.some(model => model.id === aiAssignmentModel) && !models.includes(aiAssignmentModel);
+    if (addModel && models.length >= 50) throw httpError(400, '最多可保存 50 个自定义模型');
+    return {
       ...state.config, mode, ...issueSourceConfig({ environment, config: state.config }, next),
       assignee: stringConfig(next, 'assignee', state.config.assignee), operatorId: stringConfig(next, 'operatorId', state.config.operatorId),
       selfOnly: booleanConfig(next, 'selfOnly', state.config.selfOnly), intervalMinutes: numberConfig(next, 'intervalMinutes', 1, 240, state.config.intervalMinutes),
       codexWorkspaceDir: stringConfig(next, 'codexWorkspaceDir', state.config.codexWorkspaceDir) ? resolveWorkspaceDir(stringConfig(next, 'codexWorkspaceDir', state.config.codexWorkspaceDir)) : '',
       enableAIAssignment: booleanConfig(next, 'enableAIAssignment', state.config.enableAIAssignment),
       enableAutoAssignment: booleanConfig(next, 'enableAutoAssignment', state.config.enableAutoAssignment),
-      aiAssignmentModel: stringConfig(next, 'aiAssignmentModel', state.config.aiAssignmentModel),
-      openaiBaseUrl: normalizeUrl(stringConfig(next, 'openaiBaseUrl', state.config.openaiBaseUrl), 'https://api.openai.com/v1'),
-      openaiTimeoutMs: numberConfig(next, 'openaiTimeoutMs', 5000, 120000, state.config.openaiTimeoutMs)
+      aiAssignmentModel, openaiBaseUrl, openaiTimeoutMs,
+      aiAssignmentCustomModels: addModel ? [...models, aiAssignmentModel] : models
     };
   }
   function hasOwn(object: JsonObject, key: string) { return Object.prototype.hasOwnProperty.call(object, key); }
@@ -657,7 +689,7 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
       return { ok: false, message: state.scheduler.lastRunMessage, ...getBootstrap() };
     }
   }
-  function issueSource() { return createIssueSource({ config: state.config, environment }); }
+  function issueSource(config = state.config) { return createIssueSource({ config, environment }); }
   function configureScheduler(enabled: boolean) {
     if (schedulerTimer) clearInterval(schedulerTimer); schedulerTimer = null;
     if (!enabled) { state.scheduler.nextRunAt = null; return; }
@@ -676,7 +708,7 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
   function clampNumber(value: unknown, min: number, max: number, fallback: number) { const number = Number(value); return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback; }
   function parseBooleanConfig(persisted: unknown, env: unknown, fallback: boolean) { if (typeof persisted === 'boolean') return persisted; return typeof env === 'string' ? /^(true|1|yes|on)$/i.test(env.trim()) : fallback; }
   function resolveWorkspaceDir(value: unknown) { const raw = String(value || '').trim(); return raw ? path.resolve(rootDir, raw) : rootDir; }
-  function normalizeUrl(value: unknown, fallback: string) { try { return new URL(String(value || fallback)).toString().replace(/\/+$/, ''); } catch { return fallback; } }
+  function normalizeModelUrl(value: unknown, fallback: string) { try { return modelBaseUrl(value); } catch { return fallback; } }
   function nextRunIso() { return new Date(Date.now() + state.config.intervalMinutes * 60 * 1000).toISOString(); }
   function sleep(ms: number) { return new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, ms))); }
   function sanitizeError(error: unknown) {
@@ -694,8 +726,9 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
   const codexExecution = createCodexExecution({ database, attachmentRoot: path.join(rootDir, '.workflow-data', 'attachments', createHash('sha256').update(tenant.id).digest('hex')), tenantId: tenant.id, workspace: () => state.config.codexWorkspaceDir, history: agentHistory, environment });
   const remoteGit = createRemoteGit(database, tenant.id);
   const historyImages = createHistoryImages(database, tenant.id);
-  const summarize = parseBooleanConfig(undefined, environment.ENABLE_CONTEXT_SUMMARY, Boolean(environment.OPENAI_API_KEY))
-    ? createContextModelSummarizer({ apiKey: environment.OPENAI_API_KEY, baseUrl: state.config.openaiBaseUrl, model: environment.CONTEXT_SUMMARY_MODEL || state.config.aiAssignmentModel, timeoutMs: state.config.openaiTimeoutMs })
+  const summaryModel = environment.CONTEXT_SUMMARY_MODEL || (state.config.openaiBaseUrl === deployedModelUrl ? state.config.aiAssignmentModel : environment.AI_ASSIGNMENT_MODEL || DEFAULT_AI_ASSIGNMENT_MODEL);
+  const summarize = parseBooleanConfig(undefined, environment.ENABLE_CONTEXT_SUMMARY, Boolean(deployedModelKey))
+    ? createContextModelSummarizer({ apiKey: deployedModelKey, baseUrl: deployedModelUrl, model: summaryModel, timeoutMs: state.config.openaiTimeoutMs })
     : undefined;
   const conversations = createConversations({ database, tenantId: tenant.id, history: agentHistory, delivery: sessionDelivery, execution: codexExecution, environment,
     summarize, vectorSearch,
@@ -732,9 +765,9 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
         database.audit(tenant.id, principal.user, 'api.request', '/api/task-center/execution-action', { method: 'WEBSOCKET', status });
       }
     },
-    closeStreams: () => { taskCenterStream.close(); deviceControl.close(); },
+    closeStreams: () => { taskCenterStream.close(); deviceControl.close(); modelConnectionProbe?.abort(); },
     async handleApi(req: IncomingMessage, res: ServerResponse, url: URL, principal: Principal) {
-      const mutation = req.method !== 'GET';
+      const mutation = req.method !== 'GET' && url.pathname !== modelConnectionPath;
       if (mutation && mutationPending) { sendJson(res, 409, { error: 'tenant_busy', message: '当前账号正在处理其他请求，请稍后重试' }); req.resume(); return; }
       if (mutation) mutationPending = true;
       try { await requestIdentity.run(principal, () => handleApi(req, res, url)); }

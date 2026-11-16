@@ -23,6 +23,12 @@
 .advanced summary { width: fit-content; max-width: 100%; color: var(--text); font-size: 13px; cursor: pointer; }
 .advanced summary span { margin-left: 12px; color: var(--muted); font-size: 12px; }
 .advanced > .fields { margin-top: 20px; }
+.modelPicker, .keyField, .connection { display: grid; gap: 6px; min-width: 0; }
+.modelPicker button, .connection button { justify-self: start; }
+.connection { align-self: end; }
+.connection p { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.connection p[data-success='true'] { color: #486639; }
+.connection p[data-success='false'] { color: #9b3730; }
 .fullWidth { grid-column: 1 / -1; min-width: 0; }
 .managed { display: grid; gap: 6px; font-size: 13px; }
 .managed code { padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #f7f8f6; overflow-wrap: anywhere; }

@@ -108,7 +108,7 @@ test('temporary device authorization binds the signed-in user and rejects unauth
   assert.equal(connector.user?.id, owner.user.id);
   assert.deepEqual(connector.permissions, ['read', 'work.execute']);
   assert.equal((await request('/api/auth/session', connector.token, undefined, 'GET')).status, 200);
-  for (const [endpoint, method] of [[issue, 'POST'], ['/api/auth/password', 'PUT'], ['/api/organization/members', 'GET'], ['/api/config', 'PUT'], ['/api/bootstrap', 'GET'], ['/api/task-center/execute', 'POST']]) {
+  for (const [endpoint, method] of [[issue, 'POST'], ['/api/auth/password', 'PUT'], ['/api/organization/members', 'GET'], ['/api/config', 'PUT'], ['/api/config/model-connection', 'POST'], ['/api/bootstrap', 'GET'], ['/api/task-center/execute', 'POST']]) {
     assert.equal((await request(endpoint, connector.token, {}, method)).status, 403, endpoint);
   }
   assert.equal((await request('/api/task-center', connector.token, { action: 'heartbeat', deviceId: 'temporary-device', name: '临时令牌设备', agents: [], sessions: [] })).status, 200);

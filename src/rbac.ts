@@ -56,7 +56,7 @@ export function permissionForRoute(method: string | undefined, pathname: string)
   if (method === 'GET' && pathname === '/api/issues/diagnostics') return 'config.manage';
   if (method === 'PUT' && pathname === '/api/config') return 'config.manage';
   if (method === 'PUT' && pathname === '/api/assignment/people') return 'people.manage';
-  if (method === 'POST' && pathname === '/api/scheduler') return 'config.manage';
+  if (method === 'POST' && ['/api/scheduler', '/api/config/model-connection'].includes(pathname)) return 'config.manage';
   if (method === 'POST' && ['/api/sync', '/api/assignments/apply-all'].includes(pathname)) return 'work.execute';
   if (method === 'POST' && /^\/api\/bugs\/[^/]+\/task$/.test(pathname)) return 'work.execute';
   if (method === 'POST' && /^\/api\/bugs\/[^/]+\/assignment\/(recommend|apply)$/.test(pathname)) return 'work.execute';
