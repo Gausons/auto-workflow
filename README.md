@@ -677,7 +677,9 @@ docker compose -f compose.postgres.yaml up -d --wait
  docker compose -f compose.postgres.yaml stop
 ```
 
-如果开发时使用服务器数据库，在本机 `.env` 中设置 `DEV_SERVER_DB=true`。将 `PGHOST`、`PGPORT`、`PGDATABASE`、`PGUSER` 和 `PGPASSWORD` 配置到 `.env.server-db`，并在忽略目录中准备 `.workflow-data/dev-server-db.sh`。启动时 `pnpm dev` 会用这些连接配置调用该脚本的 `--prepare` 模式，脚本应建立 SSH 隧道并在确认数据库可连接后退出。应用监听本机地址并禁用旧数据导入。启动命令中的 `DEV_SERVER_DB=false pnpm dev` 可临时使用 `.env` 中的数据库配置。
+需要连接服务器数据库时，运行 `pnpm dev:remote`。将 `PGHOST`、`PGPORT`、`PGDATABASE`、`PGUSER` 和 `PGPASSWORD` 配置到 `.env.server-db`，并在忽略目录中准备 `.workflow-data/dev-server-db.sh`。远端命令用这些连接配置调用脚本的 `--prepare` 模式，脚本应建立或复用 SSH 隧道，并在确认数据库可连接后退出。应用监听本机地址并跳过旧数据导入。常规的 `pnpm dev` 继续使用 `.env` 中的本地数据库配置。两个命令默认都使用 HTTP 端口 `4173`，切换前先停止当前开发进程。
+
+会话后台检查只从数据库取待处理记录，群聊推进先检查是否有进行中的讨论，任务中心实时心跳只读取同步版本。任务中心首屏仍需加载快照，经 SSH 访问远端数据库时可用 `ssh -C` 压缩传输。
 
 ### PostgreSQL 生产部署与迁移
 

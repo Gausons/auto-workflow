@@ -115,6 +115,6 @@ port.on('message', async ({ operation, sql, params }: { operation: string; sql: 
     const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : 'DATABASE_OPERATION_FAILED';
     const fatal = broken || operation === 'initialize' || operation === 'exec' && sql === 'COMMIT' || !/^[0-9A-Z]{5}$/.test(code) || /^(08|57)/.test(code);
     if (fatal) { broken = true; void client?.end(); }
-    port.postMessage({ error: `PostgreSQL 操作失败（${code}）${fatal ? '，连接已关闭，请核对操作结果' : ''}`, fatal });
+    port.postMessage({ error: `PostgreSQL 操作失败（${code}）${fatal ? '，连接已关闭，请核对操作结果' : ''}`, code, fatal });
   } finally { Atomics.store(signal, 0, 1); Atomics.notify(signal, 0); }
 });

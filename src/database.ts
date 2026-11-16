@@ -8,7 +8,7 @@ import { normalizeIssueState } from './issueStore.js';
 import { createIdentityStore } from './identity.js';
 import type { IssueState } from './issueStore.js';
 import type { WorkIssue } from './issueSources/types.js';
-import type { HistoryMessage, RemoteHistory, TaskCenterData } from '../shared/taskTypes.js';
+import type { Execution, HistoryMessage, RemoteHistory, Session, TaskCenterData } from '../shared/taskTypes.js';
 import type { SessionImage, SessionImageInfo, SessionImageList } from '../shared/historyImageTypes.js';
 import { httpError } from './rbac.js';
 import { FULL_HISTORY_BYTES, validateRemoteHistory } from './remoteHistory.js';
@@ -23,11 +23,21 @@ export interface TenantSettings { config: Record<string, unknown>; assignmentPeo
 type JsonRecord = Record<string, unknown>;
 const emptyTaskCenter = '{"syncVersion":0,"tasks":[],"devices":[],"sessions":[],"handoffs":[]}';
 const record = (value: unknown): JsonRecord => value && typeof value === 'object' && !Array.isArray(value) ? value as JsonRecord : {};
+const taskCenterVersion = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 const parseTaskCenter = (value: unknown): TaskCenterData => {
   const parsed = JSON.parse(String(value || emptyTaskCenter)) as TaskCenterData;
-  parsed.syncVersion = Number.isSafeInteger(parsed.syncVersion) && (parsed.syncVersion || 0) >= 0 ? parsed.syncVersion : 0;
+  parsed.syncVersion = taskCenterVersion(parsed.syncVersion);
   return parsed;
 };
+
+function readTaskCenterProjection<T>(project: () => T, readLegacy: () => T): T {
+  try { return project(); }
+  catch (error) {
+    // PostgreSQL cannot decode every escape that JSON.stringify can store in a TEXT column.
+    if (!(error instanceof Error) || !('code' in error) || (error.code !== '22P05' && error.code !== '22P02')) throw error;
+    return readLegacy();
+  }
+}
 
 export const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
 
@@ -314,6 +324,48 @@ export function openDatabase(environment: Record<string, string | undefined>) {
     },
     isTeamWorkspace: (tenantId: string) => Boolean(db.prepare('SELECT 1 FROM team_workspaces WHERE tenant_id = ?').get(tenantId)),
     readTaskCenter,
+    readTaskCenterVersion: (tenantId: string) => readTaskCenterProjection(() => taskCenterVersion(db.prepare(
+      "SELECT payload::json -> 'syncVersion' AS version FROM task_centers WHERE tenant_id = ?"
+    ).get(tenantId)?.version), () => readTaskCenter(tenantId).syncVersion || 0),
+    readConversationExecutionCandidates: (tenantId: string) => readTaskCenterProjection(() => {
+      const rows = db.prepare(`
+        SELECT job AS execution
+        FROM task_centers
+        CROSS JOIN LATERAL json_array_elements(NULLIF((payload::json -> 'executions')::text, 'null')::json)
+          WITH ORDINALITY AS entries(job, position)
+        WHERE tenant_id = ?
+          AND job ->> 'status' = 'queued'
+          AND job ->> 'deviceId' = 'local'
+          AND NULLIF(job ->> 'contextSourceDeviceId', '') <> 'local'
+          AND NULLIF(job ->> 'resumeSessionId', '') IS NULL
+          AND NULLIF(job ->> 'resumeThreadId', '') IS NULL
+        ORDER BY position
+      `).all(tenantId) as unknown as Array<{ execution: Execution }>;
+      return rows.map(row => row.execution);
+    }, () => readTaskCenter(tenantId).executions || []),
+    readConversationSessionCandidates: (tenantId: string) => readTaskCenterProjection(() => {
+      const rows = db.prepare(`
+        SELECT session AS pending
+        FROM task_centers
+        CROSS JOIN LATERAL json_array_elements(NULLIF((payload::json -> 'sessions')::text, 'null')::json)
+          WITH ORDINALITY AS entries(session, position)
+        WHERE tenant_id = ?
+          AND session ->> 'source' = 'conversation'
+          AND (
+            session ->> 'status' = 'preparing'
+            OR (session ->> 'status' = 'ready' AND NULLIF(session ->> 'pendingMessage', '') IS NOT NULL)
+          )
+        ORDER BY position
+      `).all(tenantId) as unknown as Array<{ pending: Session }>;
+      return rows.map(row => row.pending);
+    }, () => readTaskCenter(tenantId).sessions),
+    hasRunningGroupChat: (tenantId: string) => readTaskCenterProjection(() => Boolean(db.prepare(`
+      SELECT 1
+      FROM task_centers
+      CROSS JOIN LATERAL json_array_elements(NULLIF((payload::json -> 'groupChatRooms')::text, 'null')::json) AS rooms(room)
+      WHERE tenant_id = ? AND room -> 'round' ->> 'status' = 'running'
+      LIMIT 1
+    `).get(tenantId)), () => Boolean(readTaskCenter(tenantId).groupChatRooms?.some(room => room.round?.status === 'running'))),
     readTaskCenterChanges: (tenantId: string, since: number) => transaction(() => {
       const data = readTaskCenter(tenantId), version = data.syncVersion || 0;
       if (since === version) return { data, version, reset: false, changes: {} as TaskCenterChangeIds };

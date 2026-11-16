@@ -20,9 +20,9 @@ export function createTaskCenterStream(database: ReturnType<typeof openDatabase>
         delivered = version; send({ version, changes, ...(reset && { reset: true }) });
       };
       const unsubscribe = database.subscribeTaskCenter(tenantId, publish);
-      try { publish(database.readTaskCenter(tenantId).syncVersion || 0); }
+      try { publish(database.readTaskCenterVersion(tenantId)); }
       catch (error) { unsubscribe(); throw error; }
-      return { check: () => publish(database.readTaskCenter(tenantId).syncVersion || 0), close: unsubscribe };
+      return { check: () => publish(database.readTaskCenterVersion(tenantId)), close: unsubscribe };
     },
     close() { for (const response of connections) response.end(); },
     async serve(req: IncomingMessage, res: ServerResponse, params: URLSearchParams) {
@@ -46,7 +46,7 @@ export function createTaskCenterStream(database: ReturnType<typeof openDatabase>
           const principal = database.authenticateSession(token);
           if (!principal || principal.tenant.id !== tenantId || !permissionsFor(principal.user.role).includes('read')) { res.end(); return; }
           // Also detect commits from another process, whose in-memory listeners are separate.
-          publish(database.readTaskCenter(tenantId).syncVersion || 0);
+          publish(database.readTaskCenterVersion(tenantId));
           if (!res.destroyed && !res.writableEnded && !res.write(': keep-alive\n\n')) res.end();
         } catch { res.destroy(); }
       }, 15_000);
@@ -59,7 +59,7 @@ export function createTaskCenterStream(database: ReturnType<typeof openDatabase>
         req.once('aborted', close); res.once('close', close);
         if (res.destroyed) close();
         else {
-          try { publish(database.readTaskCenter(tenantId).syncVersion || 0); }
+          try { publish(database.readTaskCenterVersion(tenantId)); }
           catch (error) { close(); res.destroy(); throw error; }
         }
       });

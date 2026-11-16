@@ -39,11 +39,11 @@ export function openPostgres(config: PostgresConfig): Connection {
       }
       Atomics.wait(signal, 0, 0, remaining);
     }
-    const response = receiveMessageOnPort(port1)?.message as { result?: unknown; error?: string; fatal?: boolean } | undefined;
+    const response = receiveMessageOnPort(port1)?.message as { result?: unknown; error?: string; code?: string; fatal?: boolean } | undefined;
     if (!response) { terminate(); throw new Error('PostgreSQL 工作线程响应丢失，操作结果未确认'); }
     if (response.error) {
       if (response.fatal) terminate();
-      throw new Error(response.error);
+      throw Object.assign(new Error(response.error), { code: response.code });
     }
     return response.result;
   }

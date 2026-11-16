@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createApp, openDatabase } from '../scripts/testing/database.js';
+import { createApp, openDatabase, rawDatabase } from '../scripts/testing/database.js';
 import { freezeSnapshot } from '@auto-workflow/context-engine';
 import { detachSnapshot } from '@auto-workflow/context-engine/detached-bundle';
 
@@ -81,6 +81,58 @@ test('application can start against a populated database with local legacy impor
     await app?.close();
     db.close();
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('background task center reads select only tenant-local work and preserve legacy JSON text', () => {
+  const key = 'task-center-background';
+  const db = openDatabase(key), raw = rawDatabase(key);
+  try {
+    db.createTenant({ id: 'a', token: tokenA });
+    db.createTenant({ id: 'b', token: tokenB });
+    db.createTenant({ id: 'empty', token: 'c'.repeat(43) });
+    const write = (tenantId: string, payload: unknown) => raw.prepare(`
+      INSERT INTO task_centers (tenant_id, payload) VALUES (?, ?)
+      ON CONFLICT (tenant_id) DO UPDATE SET payload = excluded.payload
+    `).run(tenantId, JSON.stringify(payload));
+    const taskCenter = { tasks: [], devices: [], handoffs: [] };
+    const job = { deviceId: 'local', contextSourceDeviceId: 'remote', status: 'queued' };
+    write('a', { ...taskCenter, syncVersion: 7, executions: [
+      { ...job, id: 'first' },
+      { ...job, id: 'resume', resumeSessionId: 'existing' },
+      { ...job, id: 'remote', deviceId: 'remote' },
+      { ...job, id: 'complete', status: 'completed' },
+      { ...job, id: 'second', resumeThreadId: '' },
+    ], sessions: [
+      { id: 'preparing', source: 'conversation', status: 'preparing' },
+      { id: 'empty', source: 'conversation', status: 'ready', pendingMessage: '' },
+      { id: 'ready', source: 'conversation', status: 'ready', pendingMessage: 'send' },
+      { id: 'history', status: 'preparing' },
+    ], groupChatRooms: [{ round: { status: 'completed' } }] });
+    write('b', { ...taskCenter, syncVersion: '42', sessions: [], executions: [{ ...job, id: 'other' }], groupChatRooms: [{ round: { status: 'running' } }] });
+    write('empty', { ...taskCenter, sessions: [], groupChatRooms: null });
+
+    assert.deepEqual(db.readConversationExecutionCandidates('a').map(item => item.id), ['first', 'second']);
+    assert.deepEqual(db.readConversationSessionCandidates('a').map(item => item.id), ['preparing', 'ready']);
+    assert.deepEqual(db.readConversationExecutionCandidates('empty'), []);
+    assert.deepEqual(db.readConversationSessionCandidates('empty'), []);
+    assert.equal(db.hasRunningGroupChat('a'), false);
+    assert.equal(db.hasRunningGroupChat('b'), true);
+    assert.equal(db.hasRunningGroupChat('empty'), false);
+    assert.equal(db.readTaskCenterVersion('a'), 7);
+    assert.equal(db.readTaskCenterVersion('b'), 0);
+    assert.equal(db.readTaskCenterVersion('empty'), 0);
+
+    for (const text of ['before\0after', 'before\ud800after']) {
+      const legacyMessage = { id: 'legacy', source: 'conversation', status: 'ready', pendingMessage: text };
+      write('a', { ...taskCenter, syncVersion: 8, sessions: [legacyMessage], executions: [], groupChatRooms: [{ round: { status: 'running' } }] });
+      assert.deepEqual(db.readConversationSessionCandidates('a'), [legacyMessage]);
+      assert.equal(db.hasRunningGroupChat('a'), true);
+      assert.equal(db.readTaskCenterVersion('a'), 8);
+    }
+  } finally {
+    raw.close();
+    db.close();
   }
 });
 

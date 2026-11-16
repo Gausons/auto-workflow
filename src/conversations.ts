@@ -495,7 +495,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
       if (preparing || closed) return;
       preparing = true;
       try {
-        for (const job of read().executions.filter(item => item.deviceId === 'local' && item.contextSourceDeviceId && item.contextSourceDeviceId !== 'local' && !item.resumeSessionId && !item.resumeThreadId && item.status === 'queued')) {
+        for (const job of database.readConversationExecutionCandidates(tenantId).filter(item => item.deviceId === 'local' && item.contextSourceDeviceId && item.contextSourceDeviceId !== 'local' && !item.resumeSessionId && !item.resumeThreadId && item.status === 'queued')) {
           if (closed || !job.conversationId) return;
           const transferred = database.readSessionContext(tenantId, job.id);
           if (!transferred && !job.contextTransferError) continue;
@@ -523,7 +523,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
             });
           }
         }
-        for (const pending of read().sessions.filter((session): session is ManagedSession => session.source === 'conversation' && (session.status === 'preparing' || (session.status === 'ready' && Boolean(session.pendingMessage))))) {
+        for (const pending of database.readConversationSessionCandidates(tenantId).filter((session): session is ManagedSession => session.source === 'conversation' && (session.status === 'preparing' || (session.status === 'ready' && Boolean(session.pendingMessage))))) {
           if (busy(read(), pending.taskId)) continue;
           try {
             if (pending.status === 'ready') {

@@ -172,6 +172,7 @@ export function createGroupChats({ database, tenantId, execution }: { database: 
       if (closed || progressing) return;
       progressing = true;
       try {
+        if (!database.hasRunningGroupChat(tenantId)) return;
         const snapshot = read();
         for (const saved of snapshot.groupChatRooms || []) {
           if (closed || saved.round?.status !== 'running') continue;
