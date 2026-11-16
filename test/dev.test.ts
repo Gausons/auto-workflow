@@ -90,3 +90,26 @@ test('development closes the browser watcher when the server launcher fails', { 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('development prepares the configured server database before starting and disables legacy import', { timeout: 30000 }, async () => {
+  const root = await fixture();
+  await mkdir(path.join(root, '.workflow-data'));
+  const prepare = path.join(root, '.workflow-data/dev-server-db.sh');
+  await writeFile(path.join(root, '.env'), 'DEV_SERVER_DB=true\nPGPORT=15432\n');
+  await writeFile(path.join(root, '.env.server-db'), 'PGHOST=127.0.0.1\nPGPORT=15433\nPGDATABASE=workflow_test\nPGUSER=fixture\nPGPASSWORD=fixture\n');
+  await writeFile(path.join(root, 'server.ts'), 'console.log("READY:" + process.env.PGPORT + ":" + process.env.IMPORT_LEGACY_DATA);');
+  await writeFile(prepare, 'exit 1\n');
+  let run = launch(root);
+  try {
+    assert.deepEqual(await run.exited, [1, null]);
+    assert.match(run.output(), /服务器数据库连接准备失败/);
+    assert.doesNotMatch(run.output(), /READY:/);
+
+    await writeFile(prepare, 'test "$1" = --prepare && test "$PGPORT" = 15433 && echo "TUNNEL READY"\n');
+    run = launch(root);
+    await run.until(() => /TUNNEL READY[\s\S]*READY:15433:false/.test(run.output()));
+  } finally {
+    if (run.child.exitCode === null && run.child.signalCode === null) { run.child.kill('SIGTERM'); await run.exited; }
+    await rm(root, { recursive: true, force: true });
+  }
+});

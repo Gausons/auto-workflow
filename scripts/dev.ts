@@ -1,8 +1,37 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { parseEnv } from 'node:util';
 import { build } from 'vite';
 
 const root = path.resolve(import.meta.dirname, '..');
+const dotenv = path.join(root, '.env');
+const devSettings = existsSync(dotenv) ? parseEnv(readFileSync(dotenv, 'utf8')) : {};
+const useServerDatabase = process.env.DEV_SERVER_DB ?? devSettings.DEV_SERVER_DB;
+if (useServerDatabase !== undefined && useServerDatabase !== 'true' && useServerDatabase !== 'false') {
+  throw new Error('DEV_SERVER_DB 必须为 true 或 false');
+}
+let serverEnv = process.env;
+if (useServerDatabase === 'true') {
+  const profilePath = path.join(root, '.env.server-db');
+  if (!existsSync(profilePath)) throw new Error('DEV_SERVER_DB=true 需要 .env.server-db');
+  const profile = parseEnv(readFileSync(profilePath, 'utf8'));
+  const { PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD } = profile;
+  if (!PGHOST || !PGPORT || !PGDATABASE || !PGUSER || !PGPASSWORD) {
+    throw new Error('.env.server-db 缺少 PostgreSQL 连接配置');
+  }
+  serverEnv = {
+    ...process.env, HOST: '127.0.0.1', DATABASE_DRIVER: 'postgres',
+    PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD, PGSCHEMA: profile.PGSCHEMA ?? '',
+    IMPORT_LEGACY_DATA: 'false',
+  };
+  const prepare = path.join(root, '.workflow-data/dev-server-db.sh');
+  if (!existsSync(prepare)) throw new Error('DEV_SERVER_DB=true 需要 .workflow-data/dev-server-db.sh');
+  const result = spawnSync('bash', [prepare, '--prepare'], { cwd: root, env: serverEnv, stdio: 'inherit' });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error('服务器数据库连接准备失败');
+}
+
 // Keep the same manifest and HTTP origin as production. predev supplies the
 // initial assets; subsequent browser edits rebuild without restarting Node.
 const watcher = await build({ root, build: { watch: {}, emptyOutDir: false } });
@@ -11,7 +40,7 @@ const frontend = watcher;
 
 const server = spawn(process.execPath, [
   '--import', 'tsx', '--import', './src/issueSources/preload.ts', '--watch', 'server.ts'
-], { cwd: root, stdio: 'inherit' });
+], { cwd: root, env: serverEnv, stdio: 'inherit' });
 
 let stopping = false;
 async function stop(code: number) {

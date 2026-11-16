@@ -677,6 +677,8 @@ docker compose -f compose.postgres.yaml up -d --wait
  docker compose -f compose.postgres.yaml stop
 ```
 
+如果开发时使用服务器数据库，在本机 `.env` 中设置 `DEV_SERVER_DB=true`。将 `PGHOST`、`PGPORT`、`PGDATABASE`、`PGUSER` 和 `PGPASSWORD` 配置到 `.env.server-db`，并在忽略目录中准备 `.workflow-data/dev-server-db.sh`。启动时 `pnpm dev` 会用这些连接配置调用该脚本的 `--prepare` 模式，脚本应建立 SSH 隧道并在确认数据库可连接后退出。应用监听本机地址并禁用旧数据导入。启动命令中的 `DEV_SERVER_DB=false pnpm dev` 可临时使用 `.env` 中的数据库配置。
+
 ### PostgreSQL 生产部署与迁移
 
 生产使用独立 `auto-workflow-postgres` 容器，通过 `auto-workflow` Docker 网络访问，不映射数据库端口到公网。先加载 `pgvector/pgvector:0.8.6-pg17-bookworm` 镜像，再以 root 执行：
