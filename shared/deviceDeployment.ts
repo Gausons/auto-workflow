@@ -1,4 +1,5 @@
 export interface DeviceDeployment { url: string; deploymentToken: string; expiresAt: number }
+export type DeviceDeploymentMode = 'service' | 'background';
 
 export function deviceDeploymentOrigin(url: string) {
   const address = new URL(url);
@@ -14,9 +15,10 @@ export function validateDeviceDeployment(value: unknown): DeviceDeployment {
   return { url: deviceDeploymentOrigin(data.url), deploymentToken: data.deploymentToken, expiresAt: data.expiresAt };
 }
 
-export function deviceDeploymentCommand(value: unknown) {
+export function deviceDeploymentCommand(value: unknown, mode: DeviceDeploymentMode = 'service') {
   const config = validateDeviceDeployment(value);
   const bytes = new TextEncoder().encode(JSON.stringify(config));
   const encoded = btoa(Array.from(bytes, byte => String.fromCharCode(byte)).join('')).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  if (mode === 'service') return `pnpm add -g agent-workbench-connector@latest && agent-workbench-connector --connect ${encoded} --service`;
   return `npx --yes agent-workbench-connector@latest --connect ${encoded}`;
 }

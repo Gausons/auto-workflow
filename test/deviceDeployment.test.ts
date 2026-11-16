@@ -8,7 +8,10 @@ const config = () => ({ url: 'https://work.example.com', deploymentToken: 'd'.re
 
 test('deployment round trips safe shell arguments and rejects invalid or insecure addresses', () => {
   const value = config();
-  assert.deepEqual(parseDeployment(deviceDeploymentCommand(value).split(' ').at(-1)!), value);
+  for (const command of [deviceDeploymentCommand(value), deviceDeploymentCommand(value, 'background')]) {
+    const args = command.split(' ');
+    assert.deepEqual(parseDeployment(args[args.indexOf('--connect') + 1]), value);
+  }
   for (const bad of ['', '$bad', 'a'.repeat(8193), encode(null), encode({}), encode({ ...value, deploymentToken: 'secret;$(bad)' }),
     ...['file:///tmp/file', 'http://work.example.com', 'https://user:pass@work.example.com', 'https://work.example.com/path', 'https://work.example.com/?token=secret'].map(url => encode({ ...value, url }))]) {
     assert.throws(() => parseDeployment(bad), /部署参数无效/);

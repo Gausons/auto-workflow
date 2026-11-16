@@ -2,6 +2,8 @@
 .heading { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .badge { padding: 3px 9px; border-radius: 6px; background: #e9f0e2; color: #54723f; font-size: 12px; }
 .steps { display: flex; flex-wrap: wrap; gap: 8px 24px; color: #69765a; font-size: 13px; }
+.mode { display: grid; gap: 6px; min-width: 0; }
+.mode select { min-width: 0; width: 100%; }
 .command { width: 100%; min-width: 0; box-sizing: border-box; padding: 14px; border: 1px solid #dce2d6; border-radius: 10px; font-family: monospace; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; resize: vertical; background: #fff; color: #30362d; }
 .status { color: #54723f; }
 .details { border-top: 1px solid #e3e7df; padding-top: 12px; font-size: 13px; }

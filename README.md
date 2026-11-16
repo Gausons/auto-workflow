@@ -261,25 +261,25 @@ IDE_HISTORY_SCOPE=all
 
 ### 从网页连接开发机并远程控制
 
-在浏览器点击“设备与 Agent → 连接设备 → 生成并复制部署命令”，在开发机终端粘贴运行。命令通过 Node.js 自带的 `npx` 获取最新连接器，自动兑换服务端签发的临时令牌并接入当前账号；无需输入密码、全局安装、下载源码或创建配置文件，Google 登录账号也适用。支持 macOS、Linux 和 Windows PowerShell，需要 Node.js 22.16+ 及已安装登录的 Agent（Git 分支管理还需要 Git）。
+在浏览器点击“设备与 Agent → 连接设备 → 生成并复制部署命令”，在开发机终端粘贴运行。页面默认选择“macOS 常驻”，命令通过 pnpm 全局安装连接器，再用 `--service` 接入。需在 macOS 桌面登录，并已配置 pnpm 全局安装。Linux、Windows PowerShell 或临时接入可选择“普通后台”，命令通过 Node.js 自带的 `npx` 运行。两种模式都使用一次性令牌，支持 Google 登录账号，需要 Node.js 22.16+ 及已安装登录的 Agent（Git 分支管理还需要 Git）。
 
 临时令牌最长有效 10 分钟、仅可兑换一次，绑定签发时的登录会话、账号和租户；重新生成会使该浏览器登录会话此前的命令失效。服务端只存摘要，兑换与消费在同一个数据库事务内完成。退出浏览器登录、登录会话过期或账号失去执行权限后，未兑换令牌失效。命令包含一次性接入凭据，请勿分享；不包含浏览器登录令牌或密码。跨设备使用时，先通过开发机可访问的工作台 HTTPS 地址打开网页再生成命令；HTTP 仅允许 localhost 回环调试。
 
 普通模式兑换后签发独立的 24 小时设备会话，只能访问连接器所需接口及设备控制实时通道，不能修改密码、配置或管理成员，也不能继续签发部署令牌。普通设备会话只保留在连接器进程内存中。退出浏览器不会终止已兑换的设备会话，账号停用、密码重置或撤销执行权限会使设备授权失效。退出普通连接器、会话过期或兑换结果未知时，需手动重新生成命令；连接器不自动重试兑换，也不切换为密码登录。
 
-macOS 可选用 `agent-workbench-connector --connect <部署参数> --service` 启用常驻连接。launchd 在用户登录桌面后启动连接器，并在进程崩溃后拉起原设备。常驻模式使用权限为 `0600` 的本机凭据文件，启动和运行中自动续期，超过 30 天未续期需要重新接入。需先更新服务端和迁移 010，再安装新版连接器。安装、状态查询及撤销方式见 [连接器常驻连接说明](packages/device-agent/README.md#macos-常驻连接)。
+macOS 常驻模式通过 launchd 在用户登录桌面后启动连接器，并在进程崩溃后拉起原设备。常驻模式使用权限为 `0600` 的本机凭据文件，启动和运行中自动续期，超过 30 天未续期需要重新接入。使用常驻模式需工作台已应用迁移 010，且连接器为 0.4.0 或更新版本。安装、状态查询及撤销方式见 [连接器常驻连接说明](packages/device-agent/README.md#macos-常驻连接)。
 
 常驻模式在一次性令牌兑换请求中显式提交 `renewable: true`，服务端返回可续期的受限设备会话。客户端使用该会话调用 `POST /api/auth/device-session/renew`，服务端验证原账号、空间和执行权限后延长有效期。数据库只保存凭据哈希。退出常驻设备可通过 `POST /api/auth/logout` 撤销会话。
 
 工作台重新部署时，设备连接会暂时断开。保留原 PostgreSQL 数据库、地址及有效设备会话时，运行中的连接器会自动重连（失败后退避，最长间隔 30 秒），执行模式重连成功后立即补发心跳恢复在线状态，无需重新生成部署命令；不会重新兑换临时令牌或重发 Agent 指令。此行为需要升级并重启开发机上的连接器。若持续离线，使用 `npx --yes agent-workbench-connector@latest --status` 核对进程与日志；已退出、授权过期或被撤销的连接器需重新接入。
 
-页面每 3 秒更新设备状态，显示临时令牌剩余有效时间；复制失败可单独重试复制，过期后隐藏命令。复制成功不代表已部署。新版连接器的 `--connect` 默认启动后台进程，服务器确认设备上线后返回命令提示符，可以关闭终端；日志与本机控制信息位于 `~/.workflow-data/connectors/`，普通设备会话仅通过私有 IPC 交给后台进程。`npx --yes agent-workbench-connector@latest --status` 查看连接标识、状态和日志路径，`npx --yes agent-workbench-connector@latest --stop <连接标识>` 正常停止。重复或并发启动同一设备会明确失败；再次启动前先正常停止，旧版前台进程仍使用 Ctrl+C 退出。添加 `--foreground` 可保持前台输出以排查问题。普通后台模式在退出或授权过期后需重新接入。默认启用远程执行及历史摘要同步，默认工作目录是用户主目录。
+页面每 3 秒更新设备状态，显示临时令牌剩余有效时间；复制失败可单独重试复制，过期后隐藏命令。复制成功不代表已部署。不带 `--service` 的 `--connect` 启动普通后台进程，服务器确认设备上线后返回命令提示符，可以关闭终端；日志与本机控制信息位于 `~/.workflow-data/connectors/`，普通设备会话仅通过私有 IPC 交给后台进程。`npx --yes agent-workbench-connector@latest --status` 查看连接标识、状态和日志路径，`npx --yes agent-workbench-connector@latest --stop <连接标识>` 正常停止。重复或并发启动同一设备会明确失败；再次启动前先正常停止，旧版前台进程仍使用 Ctrl+C 退出。普通部署命令可添加 `--foreground` 保持前台输出以排查问题。普通后台模式在退出或授权过期后需重新接入。默认启用远程执行及历史摘要同步，默认工作目录是用户主目录。
 
 状态和停止请求通过仅监听 `127.0.0.1` 的控制通道校验独立随机密钥，不会依据状态文件中的 PID 杀进程。控制端口由设备状态目录确定，操作系统在进程异常退出后释放，因此可使用新命令重新启动；若与其他程序端口冲突，会明确提示需检查和释放该端口。工作台凭据和设备会话令牌均不写入控制文件。
 
 维护者须先发布支持令牌版 `--connect` 的新版连接器，再部署包含迁移 `008_device_deployment_tokens.sql` 的工作台（服务端与网页一起更新，命令使用 registry 的 `latest`）。未发布时，可将页面命令中的 `npx --yes agent-workbench-connector@latest` 替换为本地打包安装的新版命令。`--connect` 不读取默认 `~/.bugflow/agent.env`，不接受 `--env-file` 或 `--once`，会覆盖环境中的旧登录凭据，保留其他高级设置。
 
-新增接口：`POST /api/auth/device-deployment` 要求登录及 `work.execute` 权限，请求体为空对象，返回 `deploymentToken`、`expiresAt`；`POST /api/auth/device-deployment/exchange` 仅接受 `{ deploymentToken }`，返回受限设备会话。两者返回 `Cache-Control: no-store`，签发/兑换均限流并记录不含令牌的审计事件。账号和租户只能由服务端绑定，请求中不接受覆盖。
+新增接口：`POST /api/auth/device-deployment` 要求登录及 `work.execute` 权限，请求体为空对象，返回 `deploymentToken`、`expiresAt`；`POST /api/auth/device-deployment/exchange` 接受 `deploymentToken` 和可选的布尔值 `renewable`，返回受限设备会话。两者返回 `Cache-Control: no-store`，签发/兑换均限流并记录不含令牌的审计事件。账号和租户只能由服务端绑定，请求中不接受覆盖。
 
 高级用户仍可手动创建 `agent.env` 并配置 `WORKBENCH_URL`、`WORKBENCH_USERNAME`、`WORKBENCH_PASSWORD` 及其他环境变量，再运行：
 

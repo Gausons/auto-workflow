@@ -36,16 +36,17 @@ function setup(permissions: string[], failSnapshot = false, execution: unknown =
 describe('DevicesPage', () => {
   afterEach(() => { cleanup(); sessionStorage.clear(); vi.unstubAllGlobals(); });
 
-  it('generates a single-use deployment command without exposing the browser token', async () => {
+  it('copies a macOS service deployment command by default without exposing the browser token', async () => {
     const fetchMock = setup(['read', 'work.execute']);
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: '连接设备' }));
-    expect(screen.getByText(/设备上线后自动转入后台，可关闭终端/)).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: '部署模式' })).toHaveProperty('value', 'service');
+    expect(screen.getByText(/启用登录后自动上线和设备授权续期/)).toBeTruthy();
     expect(screen.queryByLabelText('一键部署命令')).toBeNull();
     await user.click(screen.getByRole('button', { name: '生成并复制部署命令' }));
     const command = (await screen.findByLabelText('一键部署命令') as HTMLTextAreaElement).value;
-    expect(command).toMatch(/^npx --yes agent-workbench-connector@latest --connect [A-Za-z0-9_-]+$/);
-    const config = JSON.parse(Buffer.from(command.split(' ').at(-1)!, 'base64url').toString('utf8'));
+    expect(command).toMatch(/^pnpm add -g agent-workbench-connector@latest && agent-workbench-connector --connect [A-Za-z0-9_-]+ --service$/);
+    const config = JSON.parse(Buffer.from(command.split(' ').at(-2)!, 'base64url').toString('utf8'));
     expect(config.url).toBe(location.origin);
     expect(config.deploymentToken).toBe('d'.repeat(43));
     expect(config.username).toBeUndefined();
@@ -54,6 +55,21 @@ describe('DevicesPage', () => {
     expect(screen.getByRole('status').textContent).toContain('尚未部署');
     expect(fetchMock.mock.calls.filter(([path]) => path === '/api/auth/device-deployment')).toHaveLength(1);
     await user.click(screen.getByRole('button', { name: '已复制，再次复制' }));
+    expect(fetchMock.mock.calls.filter(([path]) => path === '/api/auth/device-deployment')).toHaveLength(1);
+  });
+
+  it('can switch to a portable background command without requesting a new token', async () => {
+    const fetchMock = setup(['work.execute']);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: '连接设备' }));
+    await user.click(screen.getByRole('button', { name: '生成并复制部署命令' }));
+    const output = await screen.findByLabelText<HTMLTextAreaElement>('一键部署命令');
+    const encoded = output.value.split(' ').at(-2);
+    await user.selectOptions(screen.getByRole('combobox', { name: '部署模式' }), 'background');
+    expect(output.value).toBe(`npx --yes agent-workbench-connector@latest --connect ${encoded}`);
+    expect(screen.getByText(/设备上线后自动转入后台，可关闭终端/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: '复制部署命令' }));
+    expect(await navigator.clipboard.readText()).toBe(output.value);
     expect(fetchMock.mock.calls.filter(([path]) => path === '/api/auth/device-deployment')).toHaveLength(1);
   });
 
