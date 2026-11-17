@@ -1,5 +1,20 @@
 export const DEFAULT_AI_ASSIGNMENT_MODEL = 'gpt-6-luna';
 
+export interface AssignmentModelConnection {
+  baseUrl: string;
+  models: string[];
+  timeoutMs: number;
+}
+
+export interface PublicAssignmentModelConnection extends AssignmentModelConnection {
+  apiKeyConfigured: boolean;
+  apiKeySaved: boolean;
+}
+
+export interface AssignmentModelConnectionInput extends AssignmentModelConnection {
+  apiKey?: string | null;
+}
+
 export const AI_ASSIGNMENT_MODELS = [
   { id: 'gpt-6-astra', name: 'GPT-6 Astra' },
   { id: 'gpt-6-sol', name: 'GPT-6 Sol' },

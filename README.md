@@ -214,11 +214,15 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_TIMEOUT_MS=30000
 ```
 
-在“设置 → 分配规则”中维护候选人员及职责。在“设置 → 对接配置”的“智能分配”中选择预设模型，或点“手动添加模型”并输入服务商提供的模型 ID。默认使用 GPT-6 Luna。保存后，自定义模型会留在当前空间的下拉列表中，最多可保存 50 个。`ENABLE_AI_ASSIGNMENT` 只生成建议；只有开启 `ENABLE_AUTO_ASSIGNMENT` 后，系统才会调用问题数据源自动修改经办人。
+在“设置 → 分配规则”中维护候选人员及职责。在“设置 → 对接配置 → 高级配置”的 OpenAI Base URL 列表中添加、编辑或移除连接。每个连接分别设置 URL、API Key、超时和模型 ID，模型 ID 每行一个。一个 URL 可绑定多个模型，每个模型 ID 对应一个 URL。旧的单连接配置、模型和已保存的 Key 会显示在第一条连接中。
 
-在“高级配置”填写 OpenAI Base URL、API Key 和请求超时，点“测试连接”即可用表单里的模型和连接参数发起一条最小的 Responses API 请求，验证认证、模型和结构化输出。测试请求可能消耗少量用量，仅在点“保存配置”后才更新当前空间设置。服务端保存 API Key，后续页面只返回配置状态。相同地址留空会保留现有 Key，勾选“移除已保存的 Key”后保存可移除页面配置的 Key。服务端 `OPENAI_API_KEY` 只用于对应的部署地址，更换地址时应提供对应服务的 Key。
+在“智能分配”选择模型并保存后，工作台使用该模型绑定的地址和 Key 生成分配建议。移除当前模型后需重新选择模型。`ENABLE_AI_ASSIGNMENT` 只生成建议，开启 `ENABLE_AUTO_ASSIGNMENT` 后系统会调用问题数据源自动修改经办人。
 
-连接从工作台服务端发起，内网服务（包括 `localhost`）需由部署管理员在对应租户的环境中设置 `OPENAI_BASE_URL` 后重启服务。会话交接摘要的服务地址仍由环境变量设置。`POST /api/config/model-connection` 需要 `config.manage` 权限，接收可选的 `aiAssignmentModel`、`openaiBaseUrl`、`openaiApiKey`、`openaiTimeoutMs`，未提供时使用当前配置。成功返回 `{ "ok": true }`。
+编辑连接时可选一个模型点“测试连接”，用表单里的参数验证认证、模型和 Responses API 的结构化输出。测试请求可能消耗少量用量，点“保存配置”才应用更改。服务端保存 Key，页面只显示配置状态。相同地址下留空会保留现有 Key，勾选“移除已保存的 Key”可清除页面设置的 Key。服务端 `OPENAI_API_KEY` 只用于对应的部署地址，更换地址时请填写对应服务的 Key。
+
+连接从工作台服务端发起。可在页面直接填写服务端可达的 HTTP 或 HTTPS 地址，支持内网、公网、`localhost`、IPv4 和 IPv6。IPv6 字面量需加方括号，例如 `http://[::1]:8317/v1`。会话交接摘要的服务地址由环境变量设置。`POST /api/config/model-connection` 需要 `config.manage` 权限，接收可选的 `aiAssignmentModel`、`openaiBaseUrl`、`openaiApiKey`、`openaiTimeoutMs`，未提供时使用当前配置。成功返回 `{ "ok": true }`。
+
+`PUT /api/config` 使用 `openaiModelConnections` 更新列表，每项包含 `baseUrl`、`models`、`timeoutMs` 和可选的 `apiKey`。省略 `apiKey` 会保留相同地址的已存 Key，传 `null` 会移除该 Key。提交列表时需要带上配置响应中的 `modelConfigRevision` 作为 `expectedModelConfigRevision`，版本冲突返回 409。`aiAssignmentModel` 保存所选模型 ID，或以空字符串清除选择。
 
 同步间隔和定时同步开关可在“设置 → 对接配置”中管理。定时开关属于当前运行状态，服务重启后默认关闭。对接配置按数据源、定时同步和智能分配分区展示，模型连接参数与 IDE 执行路径收纳在“高级配置”中；管理员托管的执行路径只读。页面使用服务端返回的配置，不额外填入模型、间隔或超时默认值。扩展数据源经办人仅通过下拉框选择，可选择“不指定经办人”清空；候选人员来自“分配规则”，已保存但不在列表中的人员 ID 会保留为当前选项。
 

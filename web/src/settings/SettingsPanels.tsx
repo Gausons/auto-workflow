@@ -1,15 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
 import { AI_ASSIGNMENT_MODELS } from '../../../shared/assignmentModels.js';
+import type { PublicAssignmentModelConnection } from '../../../shared/assignmentModels.js';
+import { AssignmentModelConnections, connectionInput, draftModels, modelConnectionDraft } from './AssignmentModelConnections.js';
 import styles from './SettingsPanels.module.css';
 
 interface Person { name: string; employeeId: string; responsibility: string }
 interface Config {
   assignee?: string; operatorId?: string; codexWorkspaceDir?: string; intervalMinutes?: number;
   selfOnly?: boolean; enableAIAssignment?: boolean; enableAutoAssignment?: boolean;
-  aiAssignmentModel?: string; aiAssignmentCustomModels?: string[]; openaiBaseUrl?: string; openaiTimeoutMs?: number;
-  openaiApiKeyConfigured?: boolean; openaiApiKeySaved?: boolean;
+  aiAssignmentModel?: string; modelConfigRevision?: number; openaiModelConnections?: PublicAssignmentModelConnection[];
   workspaceManaged?: boolean; issueSourceConfigured?: boolean; issueSourceLabel?: string;
 }
 interface SettingsBootstrap {
@@ -21,20 +22,8 @@ interface SettingsBootstrap {
 
 const settingsKey = ['settings', 'bootstrap'] as const;
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
-type ConfigPayload = Record<string, FormDataEntryValue | number | boolean | null>;
-
-function modelPayload(form: FormData, manualModel: boolean): ConfigPayload {
-  const model = form.get(manualModel ? 'customModel' : 'aiAssignmentModel');
-  const baseUrl = form.get('openaiBaseUrl');
-  const key = form.get('openaiApiKey');
-  const timeout = form.get('openaiTimeoutMs');
-  return {
-    ...(model || manualModel ? { aiAssignmentModel: String(model ?? '').trim() } : {}),
-    ...(baseUrl !== null ? { openaiBaseUrl: baseUrl } : {}),
-    ...(form.has('removeModelKey') ? { openaiApiKey: null } : key ? { openaiApiKey: key } : {}),
-    ...(timeout ? { openaiTimeoutMs: Number(timeout) } : {})
-  };
-}
+type ConfigPayload = Record<string, unknown>;
+const modelNames = new Map<string, string>(AI_ASSIGNMENT_MODELS.map(model => [model.id, model.name]));
 
 function useSettings(section: 'config' | 'assignment') {
   const isActive = () => location.pathname === `/settings/${section}` || location.hash === `#settings/${section}` || location.hash === `#${section}` || (section === 'assignment' && (location.pathname === '/settings' || location.hash === '#settings'));
@@ -62,10 +51,7 @@ export function ConfigPanel() {
   const query = useSettings('config');
   const [status, setStatus] = useState('');
   const [formVersion, setFormVersion] = useState(0);
-  const [manualModel, setManualModel] = useState(false);
-  const [removeKey, setRemoveKey] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [connectionResult, setConnectionResult] = useState<{ ok: boolean; message: string }>();
   const canManage = query.data?.permissions.includes('config.manage') === true;
   const save = useMutation({
     retry: false,
@@ -73,21 +59,11 @@ export function ConfigPanel() {
     mutationFn: (payload: ConfigPayload) => apiRequest<SettingsBootstrap>('/api/config', { method: 'PUT', body: JSON.stringify(payload) }),
     onSuccess: data => {
       publish(client, data);
-      setManualModel(false);
-      setRemoveKey(false);
       setFormVersion(value => value + 1);
       setStatus('配置已保存');
     },
     onError: error => setStatus(errorMessage(error)),
     onSettled: (): void => { save.reset(); }
-  });
-  const connection = useMutation({
-    retry: false,
-    gcTime: 0,
-    mutationFn: (payload: ConfigPayload) => apiRequest<{ ok: true }>('/api/config/model-connection', { method: 'POST', body: JSON.stringify(payload) }),
-    onSuccess: () => setConnectionResult({ ok: true, message: '连接成功，所选模型可用。' }),
-    onError: error => setConnectionResult({ ok: false, message: errorMessage(error) }),
-    onSettled: (): void => { connection.reset(); }
   });
   const scheduler = useMutation({
     retry: false,
@@ -95,36 +71,52 @@ export function ConfigPanel() {
     onSuccess: data => { publish(client, data); setStatus(data.scheduler.enabled ? '定时同步已开启' : '定时同步已关闭'); },
     onError: error => setStatus(errorMessage(error))
   });
+  if (query.isPending) return <div className="config-band" role="status">正在读取配置…</div>;
+  if (query.isError) return <div className="config-band" role="alert">{errorMessage(query.error)} <button type="button" onClick={() => query.refetch()}>重试</button></div>;
+  if (!canManage) return <div className="config-band">当前账号没有配置权限。</div>;
+  return <ConfigForm key={formVersion} data={query.data} saving={save.isPending} busy={save.isPending || scheduler.isPending} status={status}
+    advancedOpen={advancedOpen} onToggleAdvanced={setAdvancedOpen}
+    onSave={payload => { setStatus(''); save.mutate(payload); }} onToggleScheduler={() => scheduler.mutate(!query.data.scheduler.enabled)} />;
+}
+
+interface ConfigFormProps {
+  data: SettingsBootstrap; saving: boolean; busy: boolean; status: string; advancedOpen: boolean;
+  onSave: (payload: ConfigPayload) => void; onToggleScheduler: () => void; onToggleAdvanced: (open: boolean) => void;
+}
+
+function ConfigForm({ data, saving, busy, status, advancedOpen, onSave, onToggleScheduler, onToggleAdvanced }: ConfigFormProps) {
+  const { config } = data;
+  const [drafts, setDrafts] = useState(() => (config.openaiModelConnections ?? []).map((connection, id) => modelConnectionDraft(id, connection)));
+  const [initialModel] = useState(config.aiAssignmentModel || '');
+  const [initialRevision] = useState(config.modelConfigRevision);
+  const [model, setModel] = useState(initialModel);
+  const [connectionsEdited, setConnectionsEdited] = useState(false);
+  const nextId = useRef(drafts.length);
+  const availableModels = new Map<string, string>();
+  for (const draft of drafts) for (const id of draftModels(draft.modelsText)) {
+    if (!availableModels.has(id)) availableModels.set(id, draft.baseUrl.trim());
+  }
+  const selectedModel = availableModels.has(model) ? model : '';
   const submit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (save.isPending || connection.isPending) return;
+    if (busy) return;
     const form = new FormData(event.currentTarget);
     const interval = form.get('intervalMinutes');
+    const modelEdited = connectionsEdited || selectedModel !== initialModel;
     const payload: ConfigPayload = {
-      ...modelPayload(form, manualModel),
+      ...(modelEdited ? { aiAssignmentModel: selectedModel, expectedModelConfigRevision: initialRevision } : {}),
+      ...(connectionsEdited ? { openaiModelConnections: drafts.map(connectionInput) } : {}),
       assignee: String(form.get('assignee') ?? ''), operatorId: String(form.get('operatorId') ?? ''),
       ...(form.has('codexWorkspaceDir') ? { codexWorkspaceDir: String(form.get('codexWorkspaceDir')) } : {}),
       ...(interval ? { intervalMinutes: Number(interval) } : {}),
       selfOnly: form.has('selfOnly'), enableAIAssignment: form.has('enableAIAssignment'), enableAutoAssignment: form.has('enableAutoAssignment')
     };
-    if (payload.openaiBaseUrl === '' && !query.data?.config.openaiBaseUrl) delete payload.openaiBaseUrl;
-    setStatus(''); save.mutate(payload);
+    onSave(payload);
   };
-
-  if (query.isPending) return <div className="config-band" role="status">正在读取配置…</div>;
-  if (query.isError) return <div className="config-band" role="alert">{errorMessage(query.error)} <button type="button" onClick={() => query.refetch()}>重试</button></div>;
-  if (!canManage) return <div className="config-band">当前账号没有配置权限。</div>;
-  const config = query.data.config;
-  const busy = save.isPending || scheduler.isPending || connection.isPending;
-  const modelFieldsLocked = save.isPending || connection.isPending;
-  const selectedModel = config.aiAssignmentModel || '';
-  const customModels = [...new Set([...(config.aiAssignmentCustomModels ?? []), selectedModel])]
-    .filter(model => model && !AI_ASSIGNMENT_MODELS.some(preset => preset.id === model));
   const savedAssignee = config.assignee || '';
-  const unlistedAssignee = savedAssignee && !query.data.assignmentPeople.some(person => person.employeeId === savedAssignee);
-  const clearConnectionResult = () => setConnectionResult(undefined);
+  const unlistedAssignee = savedAssignee && !data.assignmentPeople.some(person => person.employeeId === savedAssignee);
   return <div className={`config-band ${styles.panel}`} id="config">
-    <form key={formVersion} className={styles.form} id="configForm" onSubmit={submit}>
+    <form className={styles.form} id="configForm" onSubmit={submit}>
       <header className={styles.heading}>
         <div><h2>对接配置</h2><p>管理数据源同步与智能分配。</p></div>
         <span className={styles.sourceState} data-configured={Boolean(config.issueSourceConfigured)}>
@@ -139,9 +131,9 @@ export function ConfigPanel() {
             <select name="assignee" id="configAssignee" aria-labelledby="assigneeLabel" defaultValue={savedAssignee} aria-describedby="assigneeHelp">
               <option value="">不指定经办人</option>
               {unlistedAssignee && <option value={savedAssignee}>当前配置（{savedAssignee}，未在人员列表中）</option>}
-              {query.data.assignmentPeople.map(person => <option key={person.employeeId} value={person.employeeId}>{person.name}（{person.employeeId}）</option>)}
+              {data.assignmentPeople.map(person => <option key={person.employeeId} value={person.employeeId}>{person.name}（{person.employeeId}）</option>)}
             </select>
-            <small id="assigneeHelp">{query.data.assignmentPeople.length ? '候选人员在“分配规则”中维护。' : '暂无候选人员，请先在“分配规则”中添加。'}</small>
+            <small id="assigneeHelp">{data.assignmentPeople.length ? '候选人员在“分配规则”中维护。' : '暂无候选人员，请先在“分配规则”中添加。'}</small>
           </label>
           <label htmlFor="configOperator"><span id="operatorLabel">扩展数据源操作人</span>
             <input id="configOperator" aria-labelledby="operatorLabel" aria-describedby="operatorHelp" name="operatorId" defaultValue={config.operatorId || ''} autoComplete="off" />
@@ -155,8 +147,8 @@ export function ConfigPanel() {
         <div className={styles.fields}>
           <label><span id="intervalLabel">轮询间隔（分钟）</span><input aria-labelledby="intervalLabel" aria-describedby="intervalHelp" name="intervalMinutes" type="number" min="1" max="240" defaultValue={config.intervalMinutes ?? ''} /><small id="intervalHelp">支持 1–240 分钟，保存后生效。</small></label>
           <div className={styles.scheduler}>
-            <div><strong>{query.data.scheduler.enabled ? '定时同步已开启' : '定时同步已关闭'}</strong><small>服务重启后默认关闭。</small></div>
-            <button className="button secondary" type="button" disabled={busy} onClick={() => scheduler.mutate(!query.data.scheduler.enabled)}>{query.data.scheduler.enabled ? '关闭定时' : '开启定时'}</button>
+            <div><strong>{data.scheduler.enabled ? '定时同步已开启' : '定时同步已关闭'}</strong><small>服务重启后默认关闭。</small></div>
+            <button className="button secondary" type="button" disabled={busy} onClick={onToggleScheduler}>{data.scheduler.enabled ? '关闭定时' : '开启定时'}</button>
           </div>
         </div>
       </section>
@@ -165,39 +157,27 @@ export function ConfigPanel() {
         <div className={styles.fields}>
           <label className={styles.check}><input name="enableAIAssignment" aria-labelledby="aiAssignmentLabel" aria-describedby="aiAssignmentHelp" type="checkbox" defaultChecked={Boolean(config.enableAIAssignment)} /><span><span id="aiAssignmentLabel">开启 AI 分配建议</span><small id="aiAssignmentHelp">同步后生成经办人建议。</small></span></label>
           <label className={styles.check}><input name="enableAutoAssignment" aria-labelledby="autoAssignmentLabel" aria-describedby="autoAssignmentHelp" type="checkbox" defaultChecked={Boolean(config.enableAutoAssignment)} /><span><span id="autoAssignmentLabel">开启自动分配</span><small id="autoAssignmentHelp">将可用建议自动应用到数据源。</small></span></label>
-          <div className={styles.modelPicker}>
-            <label>AI 分配模型<select name="aiAssignmentModel" defaultValue={selectedModel} disabled={modelFieldsLocked || manualModel} onChange={clearConnectionResult}>
-              {!selectedModel && <option value="">使用服务端配置</option>}
-              {AI_ASSIGNMENT_MODELS.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
-              {customModels.map(model => <option key={model} value={model}>{model}</option>)}
+          <div className={styles.assignmentModel}>
+            <label>AI 分配模型<select value={selectedModel} disabled={busy} aria-describedby="assignmentModelUrl" onChange={event => setModel(event.target.value)}>
+              <option value="">请选择模型</option>
+              {[...availableModels.keys()].map(id => <option key={id} value={id}>{modelNames.get(id) ?? id}</option>)}
             </select></label>
-            <button className="button secondary" type="button" disabled={modelFieldsLocked} onClick={() => { setManualModel(!manualModel); clearConnectionResult(); }}>
-              {manualModel ? '返回模型列表' : '手动添加模型'}
-            </button>
+            <small id="assignmentModelUrl">{availableModels.get(selectedModel) || '在高级配置中管理模型与 Base URL。'}</small>
           </div>
-          {manualModel && <label>自定义模型 ID<input name="customModel" placeholder="填写服务商提供的模型 ID" maxLength={256} required autoComplete="off" readOnly={modelFieldsLocked} onChange={clearConnectionResult} /></label>}
         </div>
       </section>
-      <details className={styles.advanced} open={advancedOpen} onToggle={event => setAdvancedOpen(event.currentTarget.open)}>
+      <details className={styles.advanced} open={advancedOpen} onToggle={event => onToggleAdvanced(event.currentTarget.open)}>
         <summary>高级配置<span>模型连接与执行目录</span></summary>
         <div className={styles.fields}>
-          <label>OpenAI Base URL<input name="openaiBaseUrl" defaultValue={config.openaiBaseUrl || ''} inputMode="url" maxLength={2048} autoComplete="off" readOnly={modelFieldsLocked} onChange={clearConnectionResult} /></label>
-          <div className={styles.keyField}>
-            <label htmlFor="openaiApiKey">OpenAI API Key</label>
-            <input id="openaiApiKey" name="openaiApiKey" type="password" maxLength={4096} autoComplete="new-password" aria-describedby="openaiApiKeyHelp" readOnly={modelFieldsLocked} disabled={removeKey} onChange={clearConnectionResult} />
-            <small id="openaiApiKeyHelp">{config.openaiApiKeyConfigured ? '当前地址已配置 Key。更换地址时请填写对应的 Key。' : '填写当前模型服务的 API Key。'}</small>
-            {config.openaiApiKeySaved && <label className={styles.check}><input name="removeModelKey" type="checkbox" checked={removeKey} disabled={modelFieldsLocked} onChange={event => { setRemoveKey(event.target.checked); clearConnectionResult(); }} /><span>移除已保存的 Key</span></label>}
-          </div>
-          <label>OpenAI 请求超时（ms）<input name="openaiTimeoutMs" type="number" min="5000" max="120000" defaultValue={config.openaiTimeoutMs ?? ''} readOnly={modelFieldsLocked} onChange={clearConnectionResult} /></label>
-          <div className={styles.connection}>
-            <button className="button secondary" type="button" disabled={busy} onClick={event => {
-              const form = event.currentTarget.form;
-              if (!form) return;
-              setConnectionResult(undefined);
-              connection.mutate(modelPayload(new FormData(form), manualModel));
-            }}>{connection.isPending ? '正在测试…' : '测试连接'}</button>
-            {(connection.isPending || connectionResult) && <p role="status" data-success={connectionResult?.ok}>{connectionResult?.message || '正在连接模型服务…'}</p>}
-          </div>
+          <AssignmentModelConnections drafts={drafts} activeModel={selectedModel} busy={busy}
+            onAdd={() => {
+              const id = nextId.current++;
+              setDrafts(current => [...current, modelConnectionDraft(id)]);
+              setConnectionsEdited(true);
+              return id;
+            }}
+            onEdit={draft => { setDrafts(current => current.map(item => item.id === draft.id ? draft : item)); setConnectionsEdited(true); }}
+            onRemove={id => { setDrafts(current => current.filter(item => item.id !== id)); setConnectionsEdited(true); }} />
           <div className={styles.fullWidth}>
             {config.workspaceManaged ? <div className={styles.managed}><span>IDE 执行路径</span><code>{config.codexWorkspaceDir || '未配置'}</code><small>工作目录由团队管理员配置；需要调整时请联系管理员。</small></div>
               : <label>IDE 执行路径<input name="codexWorkspaceDir" defaultValue={config.codexWorkspaceDir || ''} autoComplete="off" /></label>}
@@ -206,7 +186,7 @@ export function ConfigPanel() {
       </details>
       <footer className={styles.footer}>
         <p role="status" aria-live="polite">{status}</p>
-        <button className="button primary" type="submit" disabled={busy}>{save.isPending ? '正在保存…' : '保存配置'}</button>
+        <button className="button primary" type="submit" disabled={busy}>{saving ? '正在保存…' : '保存配置'}</button>
       </footer>
     </form>
   </div>;

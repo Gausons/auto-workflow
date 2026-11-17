@@ -38,7 +38,8 @@ test('integration settings group fields and save the assignee select at desktop 
   const select = page.getByRole('combobox', { name: '扩展数据源经办人', exact: true });
   await expect(select).toHaveValue('001');
   await expect(page.getByRole('textbox', { name: '扩展数据源经办人' })).toHaveCount(0);
-  await expect(page.getByLabel('OpenAI Base URL')).toBeHidden();
+  const connections = page.getByRole('region', { name: 'OpenAI Base URL 列表' });
+  await expect(connections).toBeHidden();
   for (const width of [1440, 1000, 390]) {
     await page.setViewportSize({ width, height: 1000 });
     for (const name of ['数据源', '定时同步', '智能分配']) await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
@@ -61,7 +62,7 @@ test('integration settings group fields and save the assignee select at desktop 
   await page.reload();
   await expect(select).toHaveValue('42');
   await page.getByText('高级配置', { exact: false }).click();
-  await expect(page.getByLabel('OpenAI Base URL')).toBeVisible();
+  await expect(connections).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
   await select.selectOption('');
   await page.getByRole('button', { name: '保存配置', exact: true }).click();
@@ -73,20 +74,26 @@ test('integration settings group fields and save the assignee select at desktop 
     connectionPayload = route.request().postDataJSON() as Record<string, unknown>;
     return route.fulfill({ json: { ok: true } });
   });
-  await page.getByRole('button', { name: '手动添加模型' }).click();
-  await page.getByLabel('自定义模型 ID').fill('vendor/e2e-model');
-  await page.getByLabel('OpenAI Base URL').fill('https://models.example.com/v1');
+  await connections.getByRole('button', { name: '添加 Base URL' }).click();
+  await page.getByLabel('模型 ID（每行一个）').fill('vendor/e2e-model\nvendor/e2e-secondary');
+  await page.getByLabel('OpenAI Base URL', { exact: true }).fill('https://models.example.com/v1');
   await page.getByLabel('OpenAI API Key', { exact: true }).fill('synthetic-e2e-key');
+  await page.getByLabel('测试模型').selectOption('vendor/e2e-secondary');
   await page.getByRole('button', { name: '测试连接', exact: true }).click();
   await expect(page.getByText('连接成功，所选模型可用。')).toBeVisible();
-  expect(connectionPayload).toMatchObject({ aiAssignmentModel: 'vendor/e2e-model', openaiBaseUrl: 'https://models.example.com/v1', openaiApiKey: 'synthetic-e2e-key' });
-  expect(configPayload).not.toHaveProperty('openaiApiKey');
+  expect(connectionPayload).toMatchObject({ aiAssignmentModel: 'vendor/e2e-secondary', openaiBaseUrl: 'https://models.example.com/v1', openaiApiKey: 'synthetic-e2e-key' });
+  expect(configPayload).not.toHaveProperty('openaiModelConnections');
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+  await page.getByLabel('AI 分配模型').selectOption('vendor/e2e-model');
   await page.getByRole('button', { name: '保存配置', exact: true }).click();
-  await expect(page.getByLabel('AI 分配模型')).toHaveValue('vendor/e2e-model');
-  await expect(page.getByLabel('OpenAI API Key', { exact: true })).toHaveValue('');
+  await expect(page.getByText('配置已保存')).toBeVisible();
+  await expect(connections.getByRole('listitem').filter({ hasText: 'vendor/e2e-secondary' })).toBeVisible();
   await page.reload();
   await expect(page.getByLabel('AI 分配模型')).toHaveValue('vendor/e2e-model');
+  await page.getByText('高级配置', { exact: false }).click();
+  await connections.getByRole('button', { name: '编辑', exact: true }).last().click();
+  await expect(page.getByLabel('OpenAI API Key', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('模型 ID（每行一个）')).toHaveValue('vendor/e2e-model\nvendor/e2e-secondary');
 });
 
 test('page configuration survives navigation and reload without changing Git branches', async ({ page }) => {

@@ -1,28 +1,8 @@
-import { lookup } from 'node:dns';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { BlockList, isIP } from 'node:net';
 import { httpError } from './rbac.js';
 
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1';
-
-const privateAddress = new BlockList();
-for (const [address, prefix] of [
-  ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['169.254.0.0', 16], ['172.16.0.0', 12],
-  ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15],
-  ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 3]
-] as const) privateAddress.addSubnet(address, prefix);
-for (const [address, prefix] of [['2001::', 23], ['2001:db8::', 32], ['2002::', 16], ['3fff::', 20]] as const) {
-  privateAddress.addSubnet(address, prefix, 'ipv6');
-}
-const globalIpv6 = new BlockList();
-globalIpv6.addSubnet('2000::', 3, 'ipv6');
-
-function publicAddress(address: string, family: number) {
-  return family === 4 ? !privateAddress.check(address) : globalIpv6.check(address, 'ipv6') && !privateAddress.check(address, 'ipv6');
-}
-
-const blocked = () => httpError(400, '内网模型地址需由部署管理员通过 OPENAI_BASE_URL 配置');
 
 export function modelBaseUrl(value: unknown) {
   const text = typeof value === 'string' ? value.trim() : '';
@@ -49,12 +29,8 @@ export function assignmentModelId(value: unknown) {
 
 export interface AssignmentModelPayload { output_text?: string; output?: Array<{ content?: Array<{ text?: string }> }> }
 
-export function requestAssignmentModel(baseUrl: string, apiKey: string, body: unknown, signal: AbortSignal, trustedBaseUrl: string) {
+export function requestAssignmentModel(baseUrl: string, apiKey: string, body: unknown, signal: AbortSignal) {
   const url = new URL(`${baseUrl}/responses`);
-  const hostname = url.hostname.replace(/^\[|\]$/g, '');
-  const family = isIP(hostname);
-  const trusted = baseUrl === trustedBaseUrl;
-  if (!trusted && family && !publicAddress(hostname, family)) throw blocked();
   const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
   const data = JSON.stringify(body);
   return new Promise<AssignmentModelPayload>((resolve, reject) => {
@@ -63,16 +39,6 @@ export function requestAssignmentModel(baseUrl: string, apiKey: string, body: un
       headers: {
         Authorization: `Bearer ${apiKey}`, Accept: 'application/json', 'Accept-Encoding': 'identity',
         'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data)
-      },
-      // Validate the exact address used by the socket, retaining the URL hostname for TLS.
-      lookup: trusted ? undefined : (host, options, callback) => {
-        lookup(host, { ...options, all: true }, (error, addresses) => {
-          if (error) return callback(error, '', 0);
-          const allowed = addresses.filter(item => publicAddress(item.address, item.family));
-          if (!allowed.length) return callback(blocked(), '', 0);
-          if (options.all) callback(null, allowed);
-          else callback(null, allowed[0].address, allowed[0].family);
-        });
       }
     }, response => {
       response.on('error', reject);

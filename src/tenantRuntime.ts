@@ -6,8 +6,8 @@ import { createTaskCenterStream, taskCenterSince } from './taskCenterStream.js';
 import { createDeviceControl } from './deviceControl.js';
 import path from 'node:path';
 import { taskContent } from '../shared/taskContent.js';
-import { AI_ASSIGNMENT_MODELS, DEFAULT_AI_ASSIGNMENT_MODEL } from '../shared/assignmentModels.js';
-import { assignmentModelError, assignmentModelId, assignmentResponseText, DEFAULT_OPENAI_BASE_URL, modelApiKey, modelBaseUrl, requestAssignmentModel } from './assignmentModelConnection.js';
+import { assignmentModelError, assignmentResponseText, requestAssignmentModel } from './assignmentModelConnection.js';
+import { assignmentConnectionFor, assignmentConnectionKey, assignmentModelDeployment, assignmentModelProbe, loadAssignmentModelSettings, publicAssignmentModelSettings, storedAssignmentModelSettings, updateAssignmentModelSettings } from './assignmentModelSettings.js';
 import { createHash } from 'node:crypto';
 import { connectorActionAllowed, httpError, publicIdentity } from './rbac.js';
 import type { ExecutionFeedback, RealtimeEvent, RealtimeSubscription } from '../shared/realtime.js';
@@ -42,8 +42,9 @@ interface RuntimeIssue extends WorkIssue {
 interface RuntimeConfig extends JsonObject {
   mode: string; assignee: string; operatorId: string; selfOnly: boolean; intervalMinutes: number;
   codexWorkspaceDir: string; enableAIAssignment: boolean; enableAutoAssignment: boolean;
-  aiAssignmentModel: string; aiAssignmentCustomModels: string[]; openaiBaseUrl: string; openaiTimeoutMs: number; requestDelayMs: number;
+  requestDelayMs: number;
 }
+type ModelSettings = ReturnType<typeof loadAssignmentModelSettings>;
 interface SchedulerState {
   enabled: boolean; lastSyncTime: string | null; nextRunAt: string | null;
   lastRunStatus: string; lastRunMessage: string;
@@ -64,10 +65,9 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
   const requestIdentity = new AsyncLocalStorage<Principal>();
   const mode = issueSourceId(environment);
   const storedSettings = database.readSettings(tenant.id);
-  const { openaiApiKey: persistedModelKey, ...persistedConfig } = storedSettings.config;
-  const deployedModelUrl = normalizeModelUrl(environment.OPENAI_BASE_URL || DEFAULT_OPENAI_BASE_URL, '');
-  const deployedModelKey = deployedModelUrl ? environment.OPENAI_API_KEY?.trim() : undefined;
-  let savedModelKey = typeof persistedModelKey === 'string' ? persistedModelKey : '';
+  const { openaiApiKey: _legacyKey, openaiModelConnections: _connections, ...persistedConfig } = storedSettings.config;
+  const modelDeployment = assignmentModelDeployment(environment);
+  let modelSettings = loadAssignmentModelSettings(storedSettings.config, modelDeployment);
   let modelConnectionProbe: AbortController | undefined;
   const state: RuntimeState = {
     config: {
@@ -80,10 +80,6 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
       codexWorkspaceDir: environment.CODEX_WORKSPACE_DIR ? resolveWorkspaceDir(environment.CODEX_WORKSPACE_DIR) : (tenant.id === 'default' ? resolveWorkspaceDir(persistedConfig.codexWorkspaceDir || rootDir) : ''),
       enableAIAssignment: parseBooleanConfig(persistedConfig.enableAIAssignment, environment.ENABLE_AI_ASSIGNMENT, true),
       enableAutoAssignment: parseBooleanConfig(persistedConfig.enableAutoAssignment, environment.ENABLE_AUTO_ASSIGNMENT, false),
-      aiAssignmentModel: String(persistedConfig.aiAssignmentModel ?? environment.AI_ASSIGNMENT_MODEL ?? DEFAULT_AI_ASSIGNMENT_MODEL),
-      aiAssignmentCustomModels: Array.isArray(persistedConfig.aiAssignmentCustomModels) ? persistedConfig.aiAssignmentCustomModels.filter((model): model is string => typeof model === 'string') : [],
-      openaiBaseUrl: normalizeModelUrl(persistedConfig.openaiBaseUrl ?? persistedConfig.aiRoutingBaseUrl, deployedModelUrl || DEFAULT_OPENAI_BASE_URL),
-      openaiTimeoutMs: Math.trunc(clampNumber(persistedConfig.openaiTimeoutMs ?? persistedConfig.aiRoutingTimeoutMs ?? environment.OPENAI_TIMEOUT_MS ?? environment.AI_ROUTING_TIMEOUT_MS, 5000, 120000, 30000)),
       requestDelayMs: clampNumber(persistedConfig.requestDelayMs, 0, 60000, 0)
     },
     assignmentPeople: normalizeAssignmentPeople(storedSettings.assignmentPeople, { fallback: [] }) as AssignmentPerson[],
@@ -106,14 +102,14 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     if (closing) return;
     await issueStore.writeUserState(state.storageUserKey, { bugs: state.bugs, updatedAt: new Date().toISOString() });
   }
-  async function saveConfig(config: RuntimeConfig, apiKey: string) {
+  async function saveConfig(config: RuntimeConfig, models: ModelSettings) {
     const nextKey = sourceStorageKey(issueSource(config), resolveUserStorageKey(config));
     const switching = nextKey !== state.storageUserKey;
     if (switching) await persistIssueState();
     const stored = switching ? issueStore.readUserState(nextKey) : undefined;
-    persistConfig(config, apiKey);
+    persistConfig(config, models);
     state.config = config;
-    savedModelKey = apiKey;
+    modelSettings = models;
     if (!stored) return;
     state.storageUserKey = stored.userKey;
     state.bugs = stored.bugs as RuntimeIssue[];
@@ -121,15 +117,13 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     state.scheduler.lastRunStatus = 'idle';
     state.scheduler.lastRunMessage = '已切换经办人，等待同步';
   }
-  function persistConfig(config: RuntimeConfig, apiKey: string) {
+  function persistConfig(config: RuntimeConfig, models: ModelSettings) {
     database.writeSettings(tenant.id, { config: {
       ...issueSourceConfig({ environment, config }),
       assignee: config.assignee, operatorId: config.operatorId, selfOnly: config.selfOnly,
       intervalMinutes: config.intervalMinutes, codexWorkspaceDir: config.codexWorkspaceDir,
       enableAIAssignment: config.enableAIAssignment, enableAutoAssignment: config.enableAutoAssignment,
-      aiAssignmentModel: config.aiAssignmentModel, aiAssignmentCustomModels: config.aiAssignmentCustomModels,
-      openaiBaseUrl: config.openaiBaseUrl, openaiTimeoutMs: config.openaiTimeoutMs,
-      ...(apiKey ? { openaiApiKey: apiKey } : {})
+      ...storedAssignmentModelSettings(models)
     }});
   }
   async function persistAssignmentPeople() {
@@ -246,31 +240,29 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
       if (hasBackgroundWork()) { sendJson(res, 409, { error: 'tenant_busy', message: '当前账号有后台任务执行中，请稍后修改配置' }); return; }
       const body = await readJson(req);
       validateWorkspace(body.codexWorkspaceDir ?? state.config.codexWorkspaceDir);
-      const modelConfig = readModelConfig(body);
-      const { openaiApiKey: _key, ...settings } = body;
-      const config = nextConfig(settings, modelConfig);
-      await saveConfig(config, modelConfig.savedKey);
+      const models = updateAssignmentModelSettings(modelSettings, body);
+      const { openaiApiKey: _key, openaiModelConnections: _connections, ...settings } = body;
+      await saveConfig(nextConfig(settings), models);
       configureScheduler(state.scheduler.enabled);
       sendJson(res, 200, getBootstrap()); return;
     }
     if (req.method === 'POST' && url.pathname === modelConnectionPath) {
-      const connection = readModelConfig(await readJson(req, 16_384));
+      const input = await readJson(req, 16_384);
       if (res.destroyed) return;
       if (modelConnectionProbe) throw httpError(409, '正在测试模型连接，请稍后再试');
-      const apiKey = effectiveModelKey(connection.openaiBaseUrl, connection.savedKey);
-      if (!apiKey) throw httpError(400, '请填写当前 Base URL 对应的 OpenAI API Key');
+      const { baseUrl, model, apiKey, timeoutMs } = assignmentModelProbe(modelSettings, modelDeployment, input);
       const controller = new AbortController();
       const cancel = () => controller.abort();
       const { signal } = controller;
-      const timeout = setTimeout(() => controller.abort(new DOMException('模型服务连接超时', 'TimeoutError')), connection.openaiTimeoutMs).unref();
+      const timeout = setTimeout(() => controller.abort(new DOMException('模型服务连接超时', 'TimeoutError')), timeoutMs).unref();
       modelConnectionProbe = controller;
       res.once('close', cancel);
       try {
-        const payload = await requestAssignmentModel(connection.openaiBaseUrl, apiKey, {
-          model: connection.aiAssignmentModel, store: false, input: 'Return a JSON object with ok set to true.',
+        const payload = await requestAssignmentModel(baseUrl, apiKey, {
+          model, store: false, input: 'Return a JSON object with ok set to true.',
           text: { format: { type: 'json_schema', name: 'connection_test', strict: true,
             schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false } } }
-        }, signal, deployedModelUrl);
+        }, signal);
         const text = assignmentResponseText(payload);
         let output: unknown;
         try { output = JSON.parse(text); }
@@ -337,8 +329,7 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
       search: { vectorEnabled: vectorSearchEnabled(environment) },
       config: {
         ...state.config,
-        openaiApiKeyConfigured: Boolean(effectiveModelKey(state.config.openaiBaseUrl, savedModelKey)),
-        openaiApiKeySaved: Boolean(savedModelKey),
+        ...publicAssignmentModelSettings(modelSettings, modelDeployment),
         workspaceManaged: Boolean(environment.CODEX_WORKSPACE_DIR) || database.listTenants().length > 1,
         issueSourceLabel: source.label, issueSourceConfigured: source.configured
       },
@@ -436,19 +427,19 @@ async function recommendBugAssignee(bug: RuntimeIssue): Promise<AssignmentRecomm
     };
   }
 
-  const { aiAssignmentModel, openaiBaseUrl, openaiTimeoutMs } = state.config;
-  const apiKey = effectiveModelKey(openaiBaseUrl, savedModelKey);
-  if (!apiKey) {
+  const { model } = modelSettings;
+  const connection = assignmentConnectionFor(modelSettings);
+  const apiKey = connection && assignmentConnectionKey(connection, modelDeployment);
+  if (!connection || !apiKey) {
     return {
       status: "error",
       source: "model",
-      error: "当前模型地址未配置 OpenAI API Key，无法生成 AI 分配建议。",
+      error: connection ? "当前模型地址未配置 OpenAI API Key，无法生成 AI 分配建议。" : "请选择已绑定 Base URL 的 AI 分配模型。",
       createdAt: new Date().toISOString()
     };
   }
 
-  const model = aiAssignmentModel || DEFAULT_AI_ASSIGNMENT_MODEL;
-  const signal = AbortSignal.timeout(openaiTimeoutMs);
+  const signal = AbortSignal.timeout(connection.timeoutMs);
   console.info(`[ai-assignment] request ${JSON.stringify({
     bugCode: bug.code || bug.id || "unknown",
     model,
@@ -456,14 +447,14 @@ async function recommendBugAssignee(bug: RuntimeIssue): Promise<AssignmentRecomm
   })}`);
 
   try {
-    const payload = await requestAssignmentModel(openaiBaseUrl, apiKey, {
+    const payload = await requestAssignmentModel(connection.baseUrl, apiKey, {
       model,
       input: [
         { role: "system", content: buildAssignmentSystemPrompt(state.assignmentPeople) },
         { role: "user", content: JSON.stringify(buildAssignmentUserPayload(bug, state.assignmentPeople)) }
       ],
       text: { format: { type: "json_schema", name: "bug_assignment", strict: true, schema: buildAssignmentJsonSchema(state.assignmentPeople) } }
-    }, signal, deployedModelUrl);
+    }, signal);
     const text = assignmentResponseText(payload);
     let output: unknown;
     try { output = JSON.parse(text); }
@@ -639,36 +630,14 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
     const value = String(config.assignee || (config.selfOnly && config.operatorId) || config.operatorId || 'default').trim().toLowerCase();
     return value.replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'default';
   }
-  function effectiveModelKey(baseUrl: string, savedKey: string) {
-    return savedKey || (baseUrl === deployedModelUrl ? deployedModelKey || '' : '');
-  }
-  function readModelConfig(input: JsonObject) {
-    const { openaiApiKey, openaiBaseUrl, openaiTimeoutMs, aiAssignmentModel } = input;
-    const baseUrl = openaiBaseUrl === undefined ? state.config.openaiBaseUrl : modelBaseUrl(openaiBaseUrl);
-    if (openaiTimeoutMs !== undefined && (typeof openaiTimeoutMs !== 'number' || !Number.isInteger(openaiTimeoutMs) || openaiTimeoutMs < 5000 || openaiTimeoutMs > 120000)) {
-      throw httpError(400, 'OpenAI 请求超时必须为 5000–120000 毫秒');
-    }
-    const keepSavedKey = openaiApiKey === undefined && baseUrl === state.config.openaiBaseUrl;
-    return {
-      aiAssignmentModel: aiAssignmentModel === undefined ? state.config.aiAssignmentModel || DEFAULT_AI_ASSIGNMENT_MODEL : assignmentModelId(aiAssignmentModel),
-      openaiBaseUrl: baseUrl,
-      openaiTimeoutMs: openaiTimeoutMs ?? state.config.openaiTimeoutMs,
-      savedKey: keepSavedKey ? savedModelKey : openaiApiKey == null ? '' : modelApiKey(openaiApiKey)
-    };
-  }
-  function nextConfig(next: JsonObject, { aiAssignmentModel, openaiBaseUrl, openaiTimeoutMs }: ReturnType<typeof readModelConfig>): RuntimeConfig {
-    const models = state.config.aiAssignmentCustomModels;
-    const addModel = Object.hasOwn(next, 'aiAssignmentModel') && !AI_ASSIGNMENT_MODELS.some(model => model.id === aiAssignmentModel) && !models.includes(aiAssignmentModel);
-    if (addModel && models.length >= 50) throw httpError(400, '最多可保存 50 个自定义模型');
+  function nextConfig(next: JsonObject): RuntimeConfig {
     return {
       ...state.config, mode, ...issueSourceConfig({ environment, config: state.config }, next),
       assignee: stringConfig(next, 'assignee', state.config.assignee), operatorId: stringConfig(next, 'operatorId', state.config.operatorId),
       selfOnly: booleanConfig(next, 'selfOnly', state.config.selfOnly), intervalMinutes: numberConfig(next, 'intervalMinutes', 1, 240, state.config.intervalMinutes),
       codexWorkspaceDir: stringConfig(next, 'codexWorkspaceDir', state.config.codexWorkspaceDir) ? resolveWorkspaceDir(stringConfig(next, 'codexWorkspaceDir', state.config.codexWorkspaceDir)) : '',
       enableAIAssignment: booleanConfig(next, 'enableAIAssignment', state.config.enableAIAssignment),
-      enableAutoAssignment: booleanConfig(next, 'enableAutoAssignment', state.config.enableAutoAssignment),
-      aiAssignmentModel, openaiBaseUrl, openaiTimeoutMs,
-      aiAssignmentCustomModels: addModel ? [...models, aiAssignmentModel] : models
+      enableAutoAssignment: booleanConfig(next, 'enableAutoAssignment', state.config.enableAutoAssignment)
     };
   }
   function hasOwn(object: JsonObject, key: string) { return Object.prototype.hasOwnProperty.call(object, key); }
@@ -708,7 +677,6 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
   function clampNumber(value: unknown, min: number, max: number, fallback: number) { const number = Number(value); return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback; }
   function parseBooleanConfig(persisted: unknown, env: unknown, fallback: boolean) { if (typeof persisted === 'boolean') return persisted; return typeof env === 'string' ? /^(true|1|yes|on)$/i.test(env.trim()) : fallback; }
   function resolveWorkspaceDir(value: unknown) { const raw = String(value || '').trim(); return raw ? path.resolve(rootDir, raw) : rootDir; }
-  function normalizeModelUrl(value: unknown, fallback: string) { try { return modelBaseUrl(value); } catch { return fallback; } }
   function nextRunIso() { return new Date(Date.now() + state.config.intervalMinutes * 60 * 1000).toISOString(); }
   function sleep(ms: number) { return new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, ms))); }
   function sanitizeError(error: unknown) {
@@ -726,9 +694,10 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
   const codexExecution = createCodexExecution({ database, attachmentRoot: path.join(rootDir, '.workflow-data', 'attachments', createHash('sha256').update(tenant.id).digest('hex')), tenantId: tenant.id, workspace: () => state.config.codexWorkspaceDir, history: agentHistory, environment });
   const remoteGit = createRemoteGit(database, tenant.id);
   const historyImages = createHistoryImages(database, tenant.id);
-  const summaryModel = environment.CONTEXT_SUMMARY_MODEL || (state.config.openaiBaseUrl === deployedModelUrl ? state.config.aiAssignmentModel : environment.AI_ASSIGNMENT_MODEL || DEFAULT_AI_ASSIGNMENT_MODEL);
-  const summarize = parseBooleanConfig(undefined, environment.ENABLE_CONTEXT_SUMMARY, Boolean(deployedModelKey))
-    ? createContextModelSummarizer({ apiKey: deployedModelKey, baseUrl: deployedModelUrl, model: summaryModel, timeoutMs: state.config.openaiTimeoutMs })
+  const summaryConnection = modelSettings.connections.find(connection => connection.baseUrl === modelDeployment.baseUrl);
+  const summaryModel = environment.CONTEXT_SUMMARY_MODEL || (summaryConnection?.models.includes(modelSettings.model) ? modelSettings.model : modelDeployment.model);
+  const summarize = parseBooleanConfig(undefined, environment.ENABLE_CONTEXT_SUMMARY, Boolean(modelDeployment.apiKey))
+    ? createContextModelSummarizer({ apiKey: modelDeployment.apiKey, baseUrl: modelDeployment.baseUrl, model: summaryModel, timeoutMs: summaryConnection?.timeoutMs ?? modelDeployment.timeoutMs })
     : undefined;
   const conversations = createConversations({ database, tenantId: tenant.id, history: agentHistory, delivery: sessionDelivery, execution: codexExecution, environment,
     summarize, vectorSearch,

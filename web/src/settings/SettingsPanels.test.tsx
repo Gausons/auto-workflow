@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AssignmentPanel, ConfigPanel } from './SettingsPanels.js';
 
+const originalConnection = { baseUrl: 'https://api.openai.com/v1', models: ['gpt-5.4-mini'], timeoutMs: 30000, apiKeyConfigured: true, apiKeySaved: true };
 const bootstrap = (permissions: string[]) => ({
-  config: { intervalMinutes: 15, openaiTimeoutMs: 30000, aiAssignmentModel: 'gpt-5.4-mini', enableAIAssignment: true, issueSourceLabel: 'Jira', issueSourceConfigured: true },
+  config: { intervalMinutes: 15, aiAssignmentModel: 'gpt-5.4-mini', modelConfigRevision: 4, openaiModelConnections: [originalConnection], enableAIAssignment: true, issueSourceLabel: 'Jira', issueSourceConfigured: true },
   scheduler: { enabled: false },
   assignmentPeople: [{ name: '小李', employeeId: '42', responsibility: '前端' }],
   permissions
@@ -35,7 +36,7 @@ describe('settings panels', () => {
     const body = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as Record<string, unknown>;
     expect(body.enableAIAssignment).toBe(false);
     expect(body.intervalMinutes).toBe(15);
-    expect(body.openaiTimeoutMs).toBe(30000);
+    expect(body).not.toHaveProperty('openaiModelConnections');
   });
 
   it('uses only a select for assignees and submits selection and clearing', async () => {
@@ -72,7 +73,7 @@ describe('settings panels', () => {
     expect((screen.getByLabelText('轮询间隔（分钟）') as HTMLInputElement).value).toBe('');
     expect((screen.getByLabelText('AI 分配模型') as HTMLSelectElement).value).toBe('');
     await user.click(screen.getByText('高级配置'));
-    expect((screen.getByLabelText('OpenAI 请求超时（ms）') as HTMLInputElement).value).toBe('');
+    expect(screen.queryByLabelText('OpenAI 请求超时（ms）')).toBeNull();
     expect(screen.queryByRole('textbox', { name: 'IDE 执行路径' })).toBeNull();
     expect(screen.getByText('/managed/repo')).toBeTruthy();
     await user.click(screen.getByRole('button', { name: '保存配置' }));
@@ -111,8 +112,9 @@ describe('settings panels', () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
-  it('tests the draft connection, then saves the custom model and write-only key', async () => {
+  it('manages model routes and tests a draft connection before saving its write-only key', async () => {
     const data = bootstrap(['config.manage']);
+    const baseUrl = 'https://models.example.com/v1';
     let probeCount = 0;
     const fetchMock = vi.fn().mockImplementation((path: string, init?: RequestInit) => {
       if (path === '/api/config/model-connection') {
@@ -120,18 +122,23 @@ describe('settings panels', () => {
         return Promise.resolve(probeCount === 1 ? Response.json({ message: '模型服务拒绝认证' }, { status: 502 }) : Response.json({ ok: true }));
       }
       if (init?.method === 'PUT') return Promise.resolve(Response.json({ ...data, config: {
-        ...data.config, aiAssignmentModel: 'vendor/alpha', aiAssignmentCustomModels: ['vendor/alpha'],
-        openaiBaseUrl: 'https://models.example.com/v1', openaiApiKeyConfigured: true, openaiApiKeySaved: true
+        ...data.config, aiAssignmentModel: 'vendor/alpha', modelConfigRevision: 5,
+        openaiModelConnections: [originalConnection, { baseUrl, models: ['vendor/alpha', 'vendor/beta'], timeoutMs: 30000, apiKeyConfigured: true, apiKeySaved: true }]
       } }));
       return Promise.resolve(Response.json(data));
     });
     vi.stubGlobal('fetch', fetchMock);
     renderPanel(<ConfigPanel />, '#settings/config');
     const user = userEvent.setup();
-    await user.click(await screen.findByRole('button', { name: '手动添加模型' }));
-    await user.type(screen.getByLabelText('自定义模型 ID'), 'vendor/alpha');
-    await user.click(screen.getByText('高级配置'));
-    await user.type(screen.getByLabelText('OpenAI Base URL'), 'https://models.example.com/v1');
+    await user.click(await screen.findByText('高级配置'));
+    const list = screen.getByRole('region', { name: 'OpenAI Base URL 列表' });
+    expect(within(list).getByText(originalConnection.baseUrl)).toBeTruthy();
+    await user.click(within(list).getByRole('button', { name: '添加 Base URL' }));
+    await user.type(screen.getByLabelText('OpenAI Base URL', { exact: true }), baseUrl);
+    await user.type(screen.getByLabelText('模型 ID（每行一个）'), 'vendor/alpha{Enter}vendor/beta');
+    await user.selectOptions(screen.getByLabelText('AI 分配模型', { exact: true }), 'vendor/alpha');
+    expect(screen.getByLabelText('AI 分配模型', { exact: true }).getAttribute('aria-describedby')).toBe('assignmentModelUrl');
+    await user.selectOptions(screen.getByLabelText('测试模型'), 'vendor/beta');
     const key = screen.getByLabelText('OpenAI API Key') as HTMLInputElement;
     expect(key.type).toBe('password');
     await user.type(key, 'synthetic-key');
@@ -142,18 +149,28 @@ describe('settings panels', () => {
     await user.click(screen.getByRole('button', { name: '测试连接' }));
     await screen.findByText('连接成功，所选模型可用。');
     expect(fetchMock.mock.calls.map(([path]) => path)).toEqual(['/api/bootstrap', '/api/config/model-connection', '/api/config/model-connection']);
-    const connection = { aiAssignmentModel: 'vendor/alpha', openaiBaseUrl: 'https://models.example.com/v1', openaiApiKey: 'synthetic-key-replacement', openaiTimeoutMs: 30000 };
+    const connection = { aiAssignmentModel: 'vendor/beta', openaiBaseUrl: baseUrl, openaiApiKey: 'synthetic-key-replacement', openaiTimeoutMs: 30000 };
     expect(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).toEqual(connection);
 
     await user.click(screen.getByRole('button', { name: '保存配置' }));
     await screen.findByText('配置已保存');
-    expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toMatchObject(connection);
+    expect(JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body))).toMatchObject({
+      aiAssignmentModel: 'vendor/alpha', expectedModelConfigRevision: 4, openaiModelConnections: [
+        { baseUrl: originalConnection.baseUrl, models: originalConnection.models, timeoutMs: 30000 },
+        { baseUrl, models: ['vendor/alpha', 'vendor/beta'], timeoutMs: 30000, apiKey: 'synthetic-key-replacement' }
+      ]
+    });
     expect((screen.getByLabelText('AI 分配模型') as HTMLSelectElement).value).toBe('vendor/alpha');
+    expect(screen.getByText('vendor/beta', { selector: 'li' })).toBeTruthy();
+    await user.click(screen.getAllByRole('button', { name: '编辑' })[1]);
     expect((screen.getByLabelText('OpenAI API Key') as HTMLInputElement).value).toBe('');
     await user.click(screen.getByLabelText('移除已保存的 Key'));
+    await user.click(screen.getAllByRole('button', { name: '移除' })[0]);
     await user.click(screen.getByRole('button', { name: '保存配置' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
-    expect(JSON.parse(String(fetchMock.mock.calls[4]?.[1]?.body))).toMatchObject({ openaiApiKey: null });
+    expect(JSON.parse(String(fetchMock.mock.calls[4]?.[1]?.body))).toMatchObject({
+      expectedModelConfigRevision: 5, openaiModelConnections: [{ baseUrl, models: ['vendor/alpha', 'vendor/beta'], apiKey: null }]
+    });
   });
 
   it('replaces the saved assignment list once and renders the server result', async () => {
