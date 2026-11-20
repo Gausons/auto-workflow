@@ -19,6 +19,6 @@ export function deviceDeploymentCommand(value: unknown, mode: DeviceDeploymentMo
   const config = validateDeviceDeployment(value);
   const bytes = new TextEncoder().encode(JSON.stringify(config));
   const encoded = btoa(Array.from(bytes, byte => String.fromCharCode(byte)).join('')).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  if (mode === 'service') return `pnpm add -g agent-workbench-connector@latest && agent-workbench-connector --connect ${encoded} --service`;
-  return `npx --yes agent-workbench-connector@latest --connect ${encoded}`;
+  if (mode === 'service') return `pnpm add -g agent-workbench-connector@latest --registry=https://registry.npmjs.org && agent-workbench-connector --connect ${encoded} --service`;
+  return `npx --yes --registry=https://registry.npmjs.org agent-workbench-connector@latest --connect ${encoded}`;
 }

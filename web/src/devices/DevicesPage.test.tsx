@@ -45,7 +45,7 @@ describe('DevicesPage', () => {
     expect(screen.queryByLabelText('一键部署命令')).toBeNull();
     await user.click(screen.getByRole('button', { name: '生成并复制部署命令' }));
     const command = (await screen.findByLabelText('一键部署命令') as HTMLTextAreaElement).value;
-    expect(command).toMatch(/^pnpm add -g agent-workbench-connector@latest && agent-workbench-connector --connect [A-Za-z0-9_-]+ --service$/);
+    expect(command).toMatch(/^pnpm add -g agent-workbench-connector@latest --registry=https:\/\/registry\.npmjs\.org && agent-workbench-connector --connect [A-Za-z0-9_-]+ --service$/);
     const config = JSON.parse(Buffer.from(command.split(' ').at(-2)!, 'base64url').toString('utf8'));
     expect(config.url).toBe(location.origin);
     expect(config.deploymentToken).toBe('d'.repeat(43));
@@ -66,7 +66,7 @@ describe('DevicesPage', () => {
     const output = await screen.findByLabelText<HTMLTextAreaElement>('一键部署命令');
     const encoded = output.value.split(' ').at(-2);
     await user.selectOptions(screen.getByRole('combobox', { name: '部署模式' }), 'background');
-    expect(output.value).toBe(`npx --yes agent-workbench-connector@latest --connect ${encoded}`);
+    expect(output.value).toBe(`npx --yes --registry=https://registry.npmjs.org agent-workbench-connector@latest --connect ${encoded}`);
     expect(screen.getByText(/设备上线后自动转入后台，可关闭终端/)).toBeTruthy();
     await user.click(screen.getByRole('button', { name: '复制部署命令' }));
     expect(await navigator.clipboard.readText()).toBe(output.value);

@@ -285,7 +285,7 @@ macOS 常驻模式通过 launchd 在用户登录桌面后启动连接器，并�
 
 状态和停止请求通过仅监听 `127.0.0.1` 的控制通道校验独立随机密钥，不会依据状态文件中的 PID 杀进程。控制端口由设备状态目录确定，操作系统在进程异常退出后释放，因此可使用新命令重新启动；若与其他程序端口冲突，会明确提示需检查和释放该端口。工作台凭据和设备会话令牌均不写入控制文件。
 
-维护者须先发布支持令牌版 `--connect` 的新版连接器，再部署包含迁移 `008_device_deployment_tokens.sql` 的工作台（服务端与网页一起更新，命令使用 registry 的 `latest`）。未发布时，可将页面命令中的 `npx --yes agent-workbench-connector@latest` 替换为本地打包安装的新版命令。`--connect` 不读取默认 `~/.bugflow/agent.env`，不接受 `--env-file` 或 `--once`，会覆盖环境中的旧登录凭据，保留其他高级设置。
+维护者须先发布支持令牌版 `--connect` 的新版连接器，再部署包含迁移 `008_device_deployment_tokens.sql` 的工作台（服务端与网页一起更新）。两种部署命令都从 npm 官方源 `https://registry.npmjs.org` 获取 `latest`，避免镜像尚未同步而装回旧版。未发布时，可先安装本地打包的新版，再使用 `agent-workbench-connector` 运行页面命令中的 `--connect` 及后续参数。`--connect` 不读取默认 `~/.bugflow/agent.env`，不接受 `--env-file` 或 `--once`，会覆盖环境中的旧登录凭据，保留其他高级设置。
 
 新增接口：`POST /api/auth/device-deployment` 要求登录及 `work.execute` 权限，请求体为空对象，返回 `deploymentToken`、`expiresAt`；`POST /api/auth/device-deployment/exchange` 接受 `deploymentToken` 和可选的布尔值 `renewable`，返回受限设备会话。两者返回 `Cache-Control: no-store`，签发/兑换均限流并记录不含令牌的审计事件。账号和租户只能由服务端绑定，请求中不接受覆盖。
 

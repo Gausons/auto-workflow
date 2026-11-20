@@ -23,7 +23,7 @@ npx --yes agent-workbench-connector@latest --stop <连接标识>
 
 兑换不会跟随重定向、自动重试或回退到密码登录。网络失败会提示结果未知并停止，不启动替代连接。该模式不读取默认配置文件，不使用环境中的旧账号密码或令牌，不能与 `--env-file` / `--once` 混用；其他高级环境变量仍保留。设备会话通过父子进程的私有 IPC 通道传递，不放入后台进程的命令参数、环境变量、日志或控制文件。先停止已有连接器再启动。
 
-维护者需先发布支持令牌版 `--connect` 的连接器，再部署带临时令牌接口、数据库迁移 008 及新版网页的工作台。未发布时，安装维护者提供的 tgz，使用 `agent-workbench-connector` 替换页面命令的 `npx --yes agent-workbench-connector@latest` 前缀。
+维护者需先发布支持令牌版 `--connect` 的连接器，再部署带临时令牌接口、数据库迁移 008 及新版网页的工作台。两种部署命令都从 npm 官方源 `https://registry.npmjs.org` 获取 `latest`。未发布时，可先安装维护者提供的 tgz，再使用 `agent-workbench-connector` 运行页面命令中的 `--connect` 及后续参数。
 
 高级用户仍可使用配置文件：
 
@@ -49,7 +49,7 @@ agent-workbench-connector --env-file ./agent.env
 工作台应用迁移 010 后，设备页面可直接生成 macOS 常驻命令。先用 `--status` 检查原连接器，必要时用 `--stop <连接标识>` 停止它。登录目标 Mac 的桌面，确保已配置 pnpm 全局安装，并以普通用户粘贴运行页面生成的命令。
 
 ```bash
-pnpm add -g agent-workbench-connector@latest && agent-workbench-connector --connect '<页面生成的部署参数>' --service
+pnpm add -g agent-workbench-connector@latest --registry=https://registry.npmjs.org && agent-workbench-connector --connect '<页面生成的部署参数>' --service
 agent-workbench-connector --status
 ```
 
