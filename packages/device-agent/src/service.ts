@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { deviceDeploymentOrigin } from '../../../shared/deviceDeployment.js';
+import { deviceFetch } from '../../../src/deviceTransport.js';
 import { resolveDeviceStateDirectory } from '../../../src/deviceConnector.js';
 import { bindDeviceConnection } from '../../../src/deviceConnectionIdentity.js';
 import { runManagedConnector } from './background.js';
@@ -126,7 +127,7 @@ async function readProfile(root: string, id: string): Promise<ServiceProfile | u
 
 async function revokeAuthorization({ origin, token }: Pick<Authorization, 'origin' | 'token'>) {
   try {
-    const response = await fetch(new URL('/api/auth/logout', origin), { method: 'POST', redirect: 'error',
+    const response = await deviceFetch(new URL('/api/auth/logout', origin), { method: 'POST', redirect: 'error',
       headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000) });
     await response.body?.cancel();
     return response.ok || response.status === 401;

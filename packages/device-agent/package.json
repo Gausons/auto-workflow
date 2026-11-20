@@ -14,5 +14,5 @@
   "files": ["dist", "README.md"],
   "engines": { "node": ">=22.16.0" },
   "scripts": { "prepack": "node --import tsx ../../scripts/build-device-agent.ts" },
-  "dependencies": { "@agentclientprotocol/sdk": "1.4.0" }
+  "dependencies": { "@agentclientprotocol/sdk": "1.4.0", "undici": "^7.30.2" }
 }

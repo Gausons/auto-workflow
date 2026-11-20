@@ -8,6 +8,7 @@ import { createSessionDelivery } from './sessionDelivery/index.js';
 import { RemoteCodexWorker } from './remoteCodexWorker.js';
 import { runDeviceControl, watchDeviceUpdates } from './deviceControlClient.js';
 import { retryDeviceConnection, withDeviceConnectionTimeout } from './deviceReconnect.js';
+import { deviceFetch } from './deviceTransport.js';
 import type { ExecutionFeedback, SendExecutionFeedback } from '../shared/realtime.js';
 import { bindDeviceConnection } from './deviceConnectionIdentity.js';
 import { normalizeRemoteHistory, FULL_HISTORY_BYTES } from './remoteHistory.js';
@@ -239,7 +240,7 @@ async function connectDevice({ environment = { ...process.env }, once = false, r
   if (!token) {
     if (!environment.WORKBENCH_USERNAME || !environment.WORKBENCH_PASSWORD) throw new Error('请设置 WORKBENCH_USERNAME 和 WORKBENCH_PASSWORD，或 WORKBENCH_TOKEN');
     const result = await withDeviceConnectionTimeout(signal, async attemptSignal => {
-      const response = await fetch(new URL('/api/auth/login', base), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: environment.WORKBENCH_USERNAME, password: environment.WORKBENCH_PASSWORD }), signal: attemptSignal });
+      const response = await deviceFetch(new URL('/api/auth/login', base), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: environment.WORKBENCH_USERNAME, password: environment.WORKBENCH_PASSWORD }), signal: attemptSignal });
       if (!response.ok) throw await responseError(response, '登录失败');
       return record(await response.json());
     });
@@ -247,7 +248,7 @@ async function connectDevice({ environment = { ...process.env }, once = false, r
     token = result.token;
   }
   const readIdentity = () => withDeviceConnectionTimeout(signal, async attemptSignal => {
-    const response = await fetch(new URL('/api/auth/session', base), { headers: { Authorization: `Bearer ${token}` }, signal: attemptSignal, ...(renewable ? { redirect: 'error' } : {}) });
+    const response = await deviceFetch(new URL('/api/auth/session', base), { headers: { Authorization: `Bearer ${token}` }, signal: attemptSignal, ...(renewable ? { redirect: 'error' } : {}) });
     if (!response.ok) throw await responseError(response, '连接器身份检查失败');
     return record(await response.json());
   });
@@ -288,7 +289,7 @@ async function runAuthenticatedConnector({ environment, once, renewable, signal,
       if (stopping.signal.aborted) abort();
     }
     try {
-      const response = await fetch(new URL(endpoint, base), { method, ...(renewable ? { redirect: 'error' } : {}),
+      const response = await deviceFetch(new URL(endpoint, base), { method, ...(renewable ? { redirect: 'error' } : {}),
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': binary ? 'application/octet-stream' : 'application/json' },
         ...(body !== undefined ? { body: binary ? Buffer.from(body) : JSON.stringify(body) } : {}),
         signal: controller.signal });

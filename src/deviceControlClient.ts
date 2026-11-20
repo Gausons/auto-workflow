@@ -1,13 +1,14 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { realtimeEvent, realtimeMaxPayload, realtimeProtocol, realtimeUrl, type SendExecutionFeedback } from '../shared/realtime.js';
 import { createDeviceReconnectBackoff } from './deviceReconnect.js';
+import { openDeviceSocket } from './deviceTransport.js';
 
 export async function connectDeviceUpdates(options: {
   url: URL; token: string; deviceId: string; signal: AbortSignal; wake: () => void;
   onFeedback?: (send: SendExecutionFeedback | undefined) => void; onReady?: () => void;
 }) {
   if (options.signal.aborted) return;
-  const socket = new WebSocket(realtimeUrl(options.url), realtimeProtocol);
+  const socket = openDeviceSocket(realtimeUrl(options.url), realtimeProtocol);
   await new Promise<void>((resolve, reject) => {
     let ended = false, sequence = 0, ready = false;
     const pending = new Map<string, { resolve(): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
@@ -34,10 +35,10 @@ export async function connectDeviceUpdates(options: {
     });
     const abort = () => finish();
     const open = () => socket.send(JSON.stringify({ type: 'subscribe', channel: 'device-control', token: options.token, deviceId: options.deviceId }));
-    const message = (event: MessageEvent<unknown>) => {
+    const message = (event: Event) => {
       try {
         clearTimeout(timer); timer = setTimeout(() => finish(new Error('设备实时连接心跳超时')), 45_000);
-        if (typeof event.data !== 'string' || event.data.length > 1_000_000) throw new Error('设备实时消息无效');
+        if (!('data' in event) || typeof event.data !== 'string' || event.data.length > 1_000_000) throw new Error('设备实时消息无效');
         const input: unknown = JSON.parse(event.data);
         if (!input || typeof input !== 'object' || !('type' in input)) throw new Error('设备实时消息无效');
         if (input.type === 'heartbeat') { socket.send(JSON.stringify({ type: 'pong' })); return; }
@@ -67,7 +68,10 @@ export async function connectDeviceUpdates(options: {
       } catch (error) { finish(error instanceof Error ? error : new Error('设备实时消息无效')); }
     };
     const failed = () => finish(new Error('设备 WebSocket 连接失败'));
-    const close = (event: CloseEvent) => finish([4401, 4403].includes(event.code) ? Object.assign(new Error('设备实时连接权限已失效'), { status: event.code === 4401 ? 401 : 403 }) : undefined);
+    const close = (event: Event) => {
+      const code = 'code' in event ? event.code : undefined;
+      finish(code === 4401 || code === 4403 ? Object.assign(new Error('设备实时连接权限已失效'), { status: code === 4401 ? 401 : 403 }) : undefined);
+    };
     socket.addEventListener('open', open); socket.addEventListener('message', message);
     socket.addEventListener('error', failed); socket.addEventListener('close', close);
     options.signal.addEventListener('abort', abort, { once: true });

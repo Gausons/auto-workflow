@@ -6,14 +6,15 @@ import { build } from 'vite';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const outDir = path.join(root, 'packages/device-agent/dist');
+const runtimeDependencies = ['@agentclientprotocol/sdk', 'undici'];
 await build({
   configFile: false, root, publicDir: false,
-  ssr: { noExternal: [/^@auto-workflow\//], external: ['@agentclientprotocol/sdk'] },
+  ssr: { noExternal: [/^@auto-workflow\//], external: runtimeDependencies },
   build: {
     ssr: path.join(root, 'packages/device-agent/src/cli.ts'), target: 'node22',
     outDir, emptyOutDir: true, minify: false, sourcemap: false,
     rollupOptions: {
-      external: [...builtinModules, ...builtinModules.map(name => `node:${name}`), '@agentclientprotocol/sdk'],
+      external: [...builtinModules, ...builtinModules.map(name => `node:${name}`), ...runtimeDependencies],
       output: { format: 'es', entryFileNames: 'agent.mjs', banner: '#!/usr/bin/env node' }
     }
   }

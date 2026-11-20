@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { deploymentEnvironment, parseDeployment } from '../packages/device-agent/src/connect.js';
 import { deviceDeploymentCommand } from '../shared/deviceDeployment.js';
+import { DeviceCertificateError } from '../src/deviceTransport.js';
 
 const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
 const config = () => ({ url: 'https://work.example.com', deploymentToken: 'd'.repeat(43), expiresAt: Date.now() + 600_000 });
@@ -52,4 +53,13 @@ test('expired, consumed, denied and uncertain exchanges never retry or leak secr
     await assert.rejects(deploymentEnvironment(encode(config()), {}, async () => new Response('server-secret', { status })), /临时令牌已使用或失效|设备授权失败/);
   }
   await assert.rejects(deploymentEnvironment(encode(config()), {}, async () => new Response('{}')), /响应无效/);
+});
+
+test('deployment reports a TLS certificate rejection without retrying the exchange', async () => {
+  let attempts = 0;
+  await assert.rejects(deploymentEnvironment(encode(config()), {}, async () => {
+    attempts++;
+    throw new DeviceCertificateError();
+  }), /无法验证工作台的 HTTPS 证书/);
+  assert.equal(attempts, 1);
 });

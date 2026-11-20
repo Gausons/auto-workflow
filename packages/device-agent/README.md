@@ -8,6 +8,8 @@
 
 推荐在工作台“设备与 Agent → 连接设备”点击“生成并复制部署命令”，在开发机终端粘贴运行。页面默认生成 macOS 常驻命令，使用 pnpm 全局安装连接器。Linux、Windows PowerShell 或临时接入可选择“普通后台”，使用 Node.js 自带的 `npx`。两种模式均兑换一次性临时令牌，Google 登录账号也适用。
 
+macOS 直接连接内网 HTTPS 工作台时，如果 Node.js 无法建立证书信任链，连接器会用钥匙串验证该连接的证书、有效期和访问地址。只要工作台 CA 已受钥匙串信任，普通后台和 macOS 常驻都可以直接运行页面命令，无需手动导出证书。此校验也用于 HTTPS API 和安全 WebSocket 重连，以及停止常驻服务时撤销授权。显式启用 Node.js 环境代理时，连接器沿用 Node.js 的代理和 CA 设置。
+
 不带 `--service` 的 `--connect` 启动普通后台进程，在服务器确认设备上线后返回命令提示符，可以关闭终端。终端会显示连接标识、日志路径及停止命令。
 
 ```bash
@@ -75,6 +77,6 @@ agent-workbench-connector --status
 
 日常发布可在 GitHub **Actions → Release Agent → Run workflow** 选择 main 和 `patch` / `minor` / `major`。流程自动更新本包版本、提交并打标签，再启动现有 CI / CD 检查和 npm 发布；最终发布状态查看 CI / CD，而非仅看 Release Agent。main / 标签保护必须允许该机器人的推送，否则继续使用版本 PR 和手动标签，不绕过仓库规则。现有 npm Trusted Publisher 仍是 `ci-cd.yml`，无需更换。
 
-在工作台仓库运行 `pnpm agent:pack`，生成 `dist/device-agent/agent-workbench-connector-0.3.3.tgz`。包内只包含编译后的连接器、说明、许可证和包元数据；上下文工作区代码已打包，无 `workspace:*` 运行时依赖，ACP SDK 由包管理器安装。源码改动后必须重新打包。
+在工作台仓库运行 `pnpm agent:pack`，生成 `dist/device-agent/agent-workbench-connector-<版本>.tgz`。包内只包含编译后的连接器、说明、许可证和包元数据；上下文工作区代码已打包，无 `workspace:*` 运行时依赖，ACP SDK 和 Undici 由包管理器安装。源码改动后必须重新打包。
 
 CI / CD 在 `agent-vX.Y.Z` 标签推送后执行完整检查，再发布同一次构建的 tgz。标签版本必须与本包版本一致，提交必须已合入 main；PR 和普通 main 提交只打包不发布。发布使用独立的 GitHub `npm` Environment 和 npm Trusted Publisher（`Gausons/auto-workflow`、`ci-cd.yml`、Environment `npm`），首次发布也可配置临时 `NPM_TOKEN` Secret。具体初始化步骤见仓库 README 的“连接器 npm 发布”。本机 npm 登录状态不会传递给 CI；包版本一旦发布不能覆盖。安装或构建本身不会自动发布，也不会要求用户在安装机器上构建。
