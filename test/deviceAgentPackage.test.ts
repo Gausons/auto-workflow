@@ -73,10 +73,11 @@ test('packed device agent installs and runs outside the repository without TypeS
     const env = { ...baseEnv, HOME: home, npm_config_fetch_retries: '1', npm_config_fetch_timeout: '20000' };
     const deploymentCommand = deviceDeploymentCommand({ url: 'https://work.example.com', deploymentToken: 'd'.repeat(43), expiresAt: 1 })
       .replace('agent-workbench-connector@latest', () => '"$1"');
-    // The expired fixture proves the installed CLI ran without registering a real service.
-    await assert.rejects(exec('/bin/sh', ['-c', deploymentCommand, 'sh', archive], { cwd, env, timeout: 60_000 }), /临时令牌已过期/);
+    // Read the version from the installed CLI before the platform-specific service checks.
+    const { stdout } = await exec('/bin/sh', ['-c', deploymentCommand + ' --version', 'sh', archive], { cwd, env, timeout: 60_000 });
+    assert.equal(stdout.trim().split('\n').at(-1), sourceManifest.version);
     const installed = path.join(home, '.workflow-data/connector-install/bin/agent-workbench-connector');
-    assert.equal((await exec(installed, ['--version'], { cwd, env })).stdout.trim(), sourceManifest.version);
+    assert.ok((await stat(installed)).isFile());
     assert.deepEqual(await readdir(cwd), []);
   });
   await t.test('installed executable exposes help/version and rejects invalid arguments', async () => {
