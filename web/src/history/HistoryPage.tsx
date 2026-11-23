@@ -1,5 +1,5 @@
 import { PageHeading } from '../components/PageHeading.js';
-import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
 import { preferenceRecord, useBrowserPreference } from '../api/browserPreference.js';
@@ -19,19 +19,22 @@ interface HistoryWorkspace { path: string; count: number }
 interface HistoryListResponse {
   search?: { mode: 'keyword' | 'hybrid'; warning?: string };
   offset: number; limit: number; total: number; scope: string; providers: HistoryProvider[];
+  devices: { id: string; name: string }[]; agents: { id: string; label: string }[];
   workspaces: HistoryWorkspace[]; sessions: HistorySession[];
 }
-interface HistoryFilters { offset: number; agent: string; query: string; workspace: string }
+interface HistoryFilters { offset: number; deviceId: string; agent: string; query: string; workspace: string }
+const defaultFilters = { deviceId: '', agent: '', workspace: '' };
 function historyPreference(value: unknown) {
   const record = preferenceRecord(value);
-  return { agent: typeof record.agent === 'string' && record.agent.length <= 100 ? record.agent : '', workspace: typeof record.workspace === 'string' && record.workspace.length <= 2000 ? record.workspace : '' };
+  return { deviceId: typeof record.deviceId === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(record.deviceId) ? record.deviceId : '', agent: typeof record.agent === 'string' && record.agent.length <= 100 ? record.agent : '', workspace: typeof record.workspace === 'string' && record.workspace.length <= 2000 ? record.workspace : '' };
 }
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 const statusLabels: Record<string, string> = { ready: '等待输入', preparing: '正在准备上下文', queued: '等待执行', launching: '正在连接', running: '正在回复', waiting: '等待处理', failed: '执行失败', completed: '本轮结束', interrupted: '已中断', error: '发生错误', unknown: '运行状态未知' };
 const sourceLabels: Record<string, string> = { available: '可读取', missing: '未找到历史目录', unconfigured: '未配置', error: '无法读取目录' };
 const statusLabel = (value: unknown) => statusLabels[String(value)] || '运行状态未知';
 const time = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('zh-CN') : '时间未知';
-const directoryName = (value: string | undefined) => value?.split('/').filter(Boolean).at(-1) || '未知工作区';
+const directoryName = (value: string | undefined) => value?.split(/[\\/]/).filter(Boolean).at(-1) || value || '未知工作区';
+const projectName = (path: string) => path === '__unknown__' ? '未知项目' : directoryName(path);
 const currentRoute = () => ({ active: /^\/history(?:\/|$)/.test(location.pathname) || /^#history(?:\/|$)/.test(location.hash), id: /^\/history\/([a-f0-9]{64})$/.exec(location.pathname)?.[1] || /^#history\/([a-f0-9]{64})$/.exec(location.hash)?.[1] || null });
 
 function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) {
@@ -138,7 +141,7 @@ function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) 
 export function HistoryPage() {
   const queryClient = useQueryClient();
   const [route, setRoute] = useState(currentRoute);
-  const [selection, setSelection] = useBrowserPreference('history-filters', { agent: '', workspace: '' }, historyPreference);
+  const [selection, setSelection] = useBrowserPreference('history-filters', defaultFilters, historyPreference);
   const [filters, setFilters] = useState<HistoryFilters>(() => ({ offset: 0, query: '', ...selection }));
   const [draft, setDraft] = useState('');
   useEffect(() => {
@@ -154,8 +157,9 @@ export function HistoryPage() {
   useTaskCenterUpdates(route.active, snapshot.data?.syncVersion);
   const list = useQuery({
     queryKey: ['history', 'list', filters],
-    queryFn: ({ signal }) => apiRequest<HistoryListResponse>(`/api/agent-sessions?${new URLSearchParams({ offset: String(filters.offset), limit: '30', agent: filters.agent, q: filters.query, workspace: filters.workspace })}`, { signal }),
+    queryFn: ({ signal }) => apiRequest<HistoryListResponse>(`/api/agent-sessions?${new URLSearchParams({ offset: String(filters.offset), limit: '30', deviceId: filters.deviceId, agent: filters.agent, q: filters.query, workspace: filters.workspace })}`, { signal }),
     enabled: route.active && hasSessionToken(),
+    placeholderData: keepPreviousData,
     refetchOnWindowFocus: false
   });
   const identity = useQuery({
@@ -165,14 +169,25 @@ export function HistoryPage() {
     refetchOnWindowFocus: false
   });
   if (!route.active) return null;
-  const data = list.data;
+  const data = list.isPlaceholderData ? undefined : list.data;
   const changeFilters = (next: Partial<HistoryFilters>) => {
     setFilters(previous => ({ ...previous, ...next, offset: 0 }));
-    if (next.agent !== undefined || next.workspace !== undefined) setSelection(previous => ({ ...previous, ...(next.agent !== undefined ? { agent: next.agent } : {}), ...(next.workspace !== undefined ? { workspace: next.workspace } : {}) }));
+    const { deviceId, agent, workspace } = { ...filters, ...next };
+    if (deviceId !== filters.deviceId || agent !== filters.agent || workspace !== filters.workspace) setSelection({ deviceId, agent, workspace });
     if (route.id) location.hash = 'history';
   };
   const sourceText = data && `${data.scope === 'all' ? '全部本地工作区' : '仅配置的工作目录'} · ${data.providers.map(provider => `${provider.label}：${sourceLabels[provider.status] || provider.status}${provider.skipped ? `（${provider.skipped} 项未能读取）` : ''}`).join(' · ')}`;
-  const workspaceOptions = data?.workspaces || [];
+  const deviceOptions = list.data?.devices || [];
+  const deviceNames = new Map(deviceOptions.map(device => [device.id, device.name]));
+  const canPickAgent = Boolean(filters.deviceId || filters.agent);
+  const canPickProject = Boolean((filters.deviceId && filters.agent) || filters.workspace);
+  const agentOptions = canPickAgent ? data?.agents || [] : [];
+  const workspaceOptions = canPickProject ? data?.workspaces || [] : [];
+  const projectNames = new Map<string, number>();
+  for (const workspace of workspaceOptions) {
+    const name = projectName(workspace.path);
+    projectNames.set(name, (projectNames.get(name) || 0) + 1);
+  }
   return <>
     <PageHeading title="会话" description="Agent 历史记录" />
     <div className="history-layout">
@@ -187,17 +202,33 @@ export function HistoryPage() {
           else changeFilters({ query });
         }}>
           <label className="history-search">搜索会话<input value={draft} onChange={event => setDraft(event.target.value)} placeholder="搜索会话…" maxLength={200} /></label>
-          <div className="history-selects">
-            <label>Agent<select value={filters.agent} onChange={event => changeFilters({ agent: event.target.value })}><option value="">全部 Agent</option>{data?.providers.map(provider => <option key={provider.id} value={provider.id}>{provider.label}</option>)}{filters.agent && !data?.providers.some(provider => provider.id === filters.agent) && <option value={filters.agent}>{filters.agent}</option>}</select></label>
-            <label>工作区<select value={filters.workspace} onChange={event => changeFilters({ workspace: event.target.value })}><option value="">全部工作区</option>{workspaceOptions.map(workspace => <option key={workspace.path} value={workspace.path}>{workspace.path === '__unknown__' ? '未知工作区' : workspace.path} ({workspace.count})</option>)}{filters.workspace && !workspaceOptions.some(item => item.path === filters.workspace) && <option value={filters.workspace}>{filters.workspace} (0)</option>}</select></label>
+          <div className={styles.filters}>
+            <label>设备<select value={filters.deviceId} onChange={event => changeFilters({ deviceId: event.target.value, agent: '', workspace: '' })}>
+              <option value="">全部设备</option>
+              {deviceOptions.map(device => <option key={device.id} value={device.id}>{device.name}</option>)}
+              {filters.deviceId && !deviceNames.has(filters.deviceId) && <option value={filters.deviceId}>{filters.deviceId}</option>}
+            </select></label>
+            <label>Agent<select value={filters.agent} disabled={!canPickAgent || (list.isFetching && !data)} onChange={event => changeFilters({ agent: event.target.value, workspace: '' })}>
+              <option value="">{canPickAgent ? '全部 Agent' : '先选择设备'}</option>
+              {agentOptions.map(agent => <option key={agent.id} value={agent.id}>{agent.label}</option>)}
+              {filters.agent && !agentOptions.some(agent => agent.id === filters.agent) && <option value={filters.agent}>{filters.agent}</option>}
+            </select></label>
+            <label>项目<select value={filters.workspace} disabled={!canPickProject || (list.isFetching && !data)} onChange={event => changeFilters({ workspace: event.target.value })}>
+              <option value="">{canPickProject ? '全部项目' : '先选择 Agent'}</option>
+              {workspaceOptions.map(workspace => {
+                const name = projectName(workspace.path);
+                return <option key={workspace.path} value={workspace.path} title={workspace.path}>{name} ({workspace.count}){(projectNames.get(name) || 0) > 1 ? ` · ${workspace.path}` : ''}</option>;
+              })}
+              {filters.workspace && !workspaceOptions.some(item => item.path === filters.workspace) && <option value={filters.workspace} title={filters.workspace}>{projectName(filters.workspace)}</option>}
+            </select></label>
           </div>
           <button className="button secondary" type="submit">刷新会话</button>
         </form>
         {data?.search?.warning && <p role="alert">{data.search.warning}</p>}
-        <p role={list.isError ? 'alert' : 'status'} aria-live="polite">{list.isPending ? '正在读取历史会话，首次索引可能需要一些时间…' : list.isError ? `加载失败：${errorMessage(list.error)}` : data?.total ? `共 ${data.total} 个会话，${data.search?.mode === 'hybrid' ? '关键词优先，包含语义相关结果' : '按最近更新时间排序'}` : '没有匹配的会话，试试其他工作区或搜索词。'}</p>
+        <p role={list.isError ? 'alert' : 'status'} aria-live="polite">{list.isPending || list.isPlaceholderData ? '正在读取历史会话…' : list.isError ? `加载失败：${errorMessage(list.error)}` : data?.total ? `共 ${data.total} 个会话，${data.search?.mode === 'hybrid' ? '关键词优先，包含语义相关结果' : '按最近更新时间排序'}` : '没有匹配的会话，试试其他筛选条件或搜索词。'}</p>
         {list.isError && <button className="button secondary" type="button" onClick={() => list.refetch()}>重试</button>}
         <div className="history-list">{data?.sessions.map(session => <button className="history-card" type="button" key={session.id} aria-pressed={session.id === route.id} onClick={() => { location.hash = `history/${session.id}`; }}>
-          <strong>{session.title}</strong><span className="history-meta">{session.agentLabel} · {time(session.updatedAt)}</span>
+          <strong>{session.title}</strong><span className="history-meta">{[deviceNames.get(session.deviceId), session.agentLabel, time(session.updatedAt)].filter(Boolean).join(' · ')}</span>
           <span>{statusLabel(session.status)} · {session.recordMode === 'excerpt' ? (session.messageCount > 0 ? '仅同步摘要' : '正文未同步') : session.turnCount !== undefined ? `${session.turnCount} 轮问答` : `${session.messageCount} 条记录`}{session.managed ? ' · 已继承上下文' : ''}{session.archived ? ' · 已归档' : ''}{session.partial && session.recordMode !== 'excerpt' ? session.recordMode === 'synced' ? ' · 已同步部分记录' : ' · 部分记录' : ''}</span>
           <span className="history-meta">{directoryName(session.cwd)}{session.branch ? ` · ${session.branch}` : ''}</span>
         </button>)}</div>

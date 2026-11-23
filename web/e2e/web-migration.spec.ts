@@ -97,7 +97,7 @@ test('integration settings group fields and save the assignee select at desktop 
 });
 
 test('page configuration survives navigation and reload without changing Git branches', async ({ page }) => {
-  const projects = ['first', 'selected'].map(id => ({ id, deviceId: 'local', deviceName: '本机', name: id === 'first' ? 'Codex' : 'Claude Code', cwd: '/repo', online: true,
+  const projects = ['first', 'selected'].map(id => ({ id, deviceId: 'local', deviceName: '本机', agent: id === 'first' ? 'codex' : 'claude', name: id === 'first' ? 'Codex' : 'Claude Code', cwd: '/repo', online: true,
     models: [{ id: 'model', name: '测试模型', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }] }], defaultModel: 'model' }));
   const gitActions: string[] = [];
   await page.route('**/api/task-center/codex', route => route.fulfill({ json: { projects } }));
@@ -106,14 +106,28 @@ test('page configuration survives navigation and reload without changing Git bra
     gitActions.push(body.action);
     return route.fulfill({ json: { repository: true, current: body.cwd === '/repo/remembered' ? 'feature/remembered' : 'main', branches: ['main', 'feature/remembered'], changes: 0 } });
   });
-  await page.route('**/api/agent-sessions?*', route => route.fulfill({ json: { offset: 0, limit: 30, total: 0, scope: 'all', sessions: [], providers: [{ id: 'codex', label: 'Codex', status: 'available' }], workspaces: [{ path: '/repo/history', count: 0 }] } }));
+  await page.route('**/api/agent-sessions?*', route => route.fulfill({ json: { offset: 0, limit: 30, total: 0, scope: 'all', sessions: [], devices: [{ id: 'local', name: '本机' }], agents: [{ id: 'codex', label: 'Codex' }], providers: [{ id: 'codex', label: 'Codex', status: 'available' }], workspaces: [{ path: '/repo/history', count: 0 }] } }));
   await login(page);
   const sidebar = page.getByRole('navigation', { name: '主导航' });
   await sidebar.getByRole('link', { name: 'Agent 历史会话' }).click();
+  await page.getByRole('combobox', { name: '设备', exact: true }).selectOption('local');
   await page.getByRole('combobox', { name: 'Agent', exact: true }).selectOption('codex');
-  await page.getByRole('combobox', { name: '工作区', exact: true }).selectOption('/repo/history');
+  await page.getByRole('combobox', { name: '项目', exact: true }).selectOption('/repo/history');
   await sidebar.getByRole('link', { name: '新建任务' }).click();
-  await page.getByLabel('执行位置', { exact: true }).selectOption('1');
+  await page.getByRole('button', { name: '执行位置', exact: true }).click();
+  const picker = page.getByRole('group', { name: '选择执行位置' });
+  await expect(picker.getByRole('combobox', { name: '设备' })).toHaveValue('local');
+  await picker.getByRole('combobox', { name: 'Agent' }).selectOption('claude');
+  await picker.getByRole('combobox', { name: '项目' }).selectOption('selected');
+  await picker.getByRole('button', { name: '确定' }).click();
+  const viewport = page.viewportSize()!;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('button', { name: '执行位置', exact: true }).click();
+  await expect(picker.getByRole('combobox', { name: '项目' })).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(picker).toBeHidden();
+  await page.setViewportSize(viewport);
   await page.getByLabel('工作目录：/repo', { exact: true }).click();
   await page.getByLabel('工作目录', { exact: true }).fill('/repo/remembered');
   await expect(page.getByLabel('Git 分支', { exact: true })).toContainText('feature/remembered');
@@ -123,7 +137,7 @@ test('page configuration survives navigation and reload without changing Git bra
   await sidebar.getByRole('link', { name: '任务中心', exact: true }).click();
   await sidebar.getByRole('link', { name: '新建任务' }).click();
   await page.reload();
-  await expect(page.getByLabel('执行位置', { exact: true })).toHaveValue('1');
+  await expect(page.getByRole('button', { name: '执行位置', exact: true })).toContainText('本机 · Claude Code · repo');
   await expect(page.getByLabel('工作目录：/repo/remembered', { exact: true })).toBeVisible();
   await expect(page.getByLabel('Git 分支', { exact: true })).toContainText('feature/remembered');
   await page.getByLabel('模型与思考强度').click();
@@ -131,8 +145,9 @@ test('page configuration survives navigation and reload without changing Git bra
   await expect(page.getByRole('slider', { name: '思考强度' })).toHaveAttribute('aria-valuetext', '高');
   await sidebar.getByRole('link', { name: 'Agent 历史会话' }).click();
   await page.reload();
+  await expect(page.getByRole('combobox', { name: '设备', exact: true })).toHaveValue('local');
   await expect(page.getByRole('combobox', { name: 'Agent', exact: true })).toHaveValue('codex');
-  await expect(page.getByRole('combobox', { name: '工作区', exact: true })).toHaveValue('/repo/history');
+  await expect(page.getByRole('combobox', { name: '项目', exact: true })).toHaveValue('/repo/history');
   expect(gitActions.length).toBeGreaterThan(0);
   expect(gitActions.every(action => action === 'list')).toBe(true);
 });
@@ -560,7 +575,8 @@ test('history list scrolls independently while search and filters stay visible',
   const before = await search.boundingBox();
   await page.getByRole('button', { name: /^历史会话 30 / }).scrollIntoViewIfNeeded();
   await expect(search).toBeInViewport();
-  await expect(page.getByRole('combobox', { name: '工作区', exact: true })).toBeInViewport();
+  await expect(page.getByRole('combobox', { name: '设备', exact: true })).toBeInViewport();
+  await expect(page.getByRole('combobox', { name: '项目', exact: true })).toBeInViewport();
   expect((await search.boundingBox())?.y).toBe(before?.y);
   expect(await page.locator('.history-list').evaluate(element => element.scrollTop)).toBeGreaterThan(0);
   expect(await page.getByRole('complementary', { name: '历史会话列表' }).evaluate(element => element.scrollTop)).toBe(0);
@@ -668,7 +684,7 @@ test('history uses Codex-style message layout, folded progress and Markdown tabl
   expect(geometry.rightGap).toBeLessThan(2);
   expect(geometry.bubbleWidth).toBeLessThan(geometry.parentWidth / 2);
   await expect(page.getByLabel('当前会话配置')).toContainText('Codex');
-  await expect(page.getByRole('combobox', { name: '执行位置' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '执行位置' })).toHaveCount(0);
   await page.locator('.history-chat-scroll').evaluate(element => { element.scrollTop = 0; });
   await page.screenshot({ path: testInfo.outputPath('codex-style-desktop.png'), fullPage: true });
   await page.locator('.history-detail').screenshot({ path: testInfo.outputPath('codex-style-conversation.png') });
@@ -888,8 +904,7 @@ test('device setup selects remote target and browser controls a remote original 
   await expect(device).toContainText('支持 Codex 原会话续聊');
   await device.getByRole('link', { name: '新建远端任务' }).click();
   await expect(page).toHaveURL(/deviceId=browser-remote/);
-  await expect(page.getByRole('combobox', { name: '执行位置' }).locator('option:checked')).toContainText('浏览器远端开发机');
-  await expect(page.getByRole('combobox', { name: '执行位置' })).toContainText('远端项目');
+  await expect(page.getByRole('button', { name: '执行位置' })).toContainText('浏览器远端开发机 · Codex · 远端项目');
   const list = await request.get('/api/agent-sessions', { headers });
   const { sessions } = await list.json() as { sessions: Array<{ id: string; deviceId: string }> };
   const session = sessions.find(item => item.deviceId === deviceId)!;

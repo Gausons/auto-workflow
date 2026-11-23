@@ -60,7 +60,7 @@ describe.each(['task', 'history'] as const)('%s branch menu', page => {
     expect(branch).toHaveProperty('disabled', false);
     await userEvent.setup().click(branch);
     await screen.findByText('正在切换分支…');
-    expect(screen.getByLabelText('执行位置')).toHaveProperty('disabled', true);
+    expect(screen.getByLabelText('执行位置').getAttribute('aria-disabled')).toBe('true');
     await waitFor(() => expect(fixture.refreshSignal()?.aborted).toBe(true));
     expect(fixture.fetchMock.mock.calls.filter(([url, init]) => url === '/api/task-center/git' && JSON.parse(String(init?.body)).action === 'switch')).toHaveLength(1);
     await act(async () => { fixture.mutation.resolve(fixture.response('feature/work')); });

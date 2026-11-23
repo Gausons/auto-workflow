@@ -851,6 +851,36 @@ test('history listing merges, filters and paginates managed conversations withou
   await assert.rejects(f.service.historyList(new URLSearchParams({ limit: '0' })), { statusCode: 400 });
 });
 
+test('history facets and counts are scoped by device and agent before pagination', async t => {
+  const f = await fixture(t);
+  const updatedAt = '2026-10-02T00:00:00Z';
+  f.database.mutateTaskCenter('default', data => {
+    data.devices.push({ id: 'dev-a', name: '研发 A', agents: ['codex', 'deepseekharness'], lastSeen: updatedAt, transport: 'connector' },
+      { id: 'dev-b', name: '研发 B', agents: ['codex'], lastSeen: updatedAt, transport: 'connector' });
+    data.sessions.push(
+      { id: 'a1', deviceId: 'dev-a', agent: 'codex', title: 'A Codex', cwd: '/work/repo', updatedAt },
+      { id: 'a2', deviceId: 'dev-a', agent: 'deepseekharness', agentLabel: 'DeepSeek Harness', title: 'A DeepSeek', cwd: '/work/repo', updatedAt },
+      { id: 'a3', deviceId: 'dev-a', agent: 'deepseekharness', title: 'A 第二个项目', cwd: '/other/repo', updatedAt },
+      { id: 'b1', deviceId: 'dev-b', agent: 'codex', title: 'B Codex', cwd: '/work/repo', updatedAt });
+  });
+  const scoped = await f.service.historyList(new URLSearchParams({ deviceId: 'dev-a', agent: 'deepseekharness', workspace: '/work/repo', limit: '1' }));
+  assert.deepEqual(scoped.sessions.map(session => session.id), ['a2']);
+  assert.equal(scoped.total, 1);
+  assert.deepEqual(scoped.devices.filter(device => device.id !== 'local'), [{ id: 'dev-a', name: '研发 A' }, { id: 'dev-b', name: '研发 B' }]);
+  assert.deepEqual(scoped.agents, [{ id: 'codex', label: 'Codex' }, { id: 'deepseekharness', label: 'DeepSeek Harness' }]);
+  assert.deepEqual(scoped.workspaces, [{ path: '/other/repo', count: 1 }, { path: '/work/repo', count: 1 }]);
+  const byDevice = await f.service.historyList(new URLSearchParams({ deviceId: 'dev-b', workspace: '/work/repo' }));
+  assert.deepEqual(byDevice.sessions.map(session => session.id), ['b1']);
+  assert.deepEqual(byDevice.agents, [{ id: 'codex', label: 'Codex' }]);
+  const allDevices = await f.service.historyList(new URLSearchParams({ workspace: '/work/repo' }));
+  assert.equal(allDevices.total, 3);
+  const local = await f.service.historyList(new URLSearchParams({ deviceId: 'local' }));
+  assert.deepEqual(local.sessions.map(session => session.id), [f.source]);
+  const foreign = createConversations({ ...f.options, tenantId: 'other', history: { catalog: async () => ({ sessions: [] }) } });
+  assert.deepEqual((await foreign.historyList(new URLSearchParams({ deviceId: 'dev-a' }))).devices, []);
+  await assert.rejects(f.service.historyList(new URLSearchParams({ deviceId: '../dev-a' })), { statusCode: 400 });
+});
+
 test('history semantic search applies agent/workspace filters before ranking and pagination', async t => {
   const f = await fixture(t);
   const { createVectorSearch } = await import('../src/vectorSearch.js');

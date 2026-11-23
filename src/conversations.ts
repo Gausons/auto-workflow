@@ -1,6 +1,8 @@
 import type { VectorSearch } from './vectorSearch.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
+import { hostname } from 'node:os';
+import { agentDisplayName } from '../shared/agentLabels.js';
 import { taskContent } from '../shared/taskContent.js';
 import type { AgentProject, Execution, HistoryMessage, RemoteContextHandoff, Session, TaskCenterData } from '../shared/taskTypes.js';
 import { cleanContextEntries, contextPrompt, freezeContext, readContext, type ContextDelivery, type ContextEntry, type SessionContext } from './contextCompiler.js';
@@ -172,8 +174,9 @@ export function createConversations({ database, tenantId, history, delivery, exe
     async historyList(params = new URLSearchParams()) {
       const offset = Number(params.get('offset') || 0), limit = Number(params.get('limit') || 30);
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw httpError(400, '分页参数无效');
-      const q = (params.get('q') || '').trim().toLowerCase(), agent = params.get('agent') || '', workspace = params.get('workspace') || '';
+      const q = (params.get('q') || '').trim().toLowerCase(), agent = params.get('agent') || '', workspace = params.get('workspace') || '', deviceId = params.get('deviceId') || '';
       if (q.length > 200) throw httpError(400, '搜索词不能超过 200 字符');
+      if (deviceId && !/^[a-zA-Z0-9_-]{1,80}$/.test(deviceId)) throw httpError(400, '设备标识无效');
       const catalog = await history.catalog(), data = read();
       const continued = data.sessions.filter(session => session.source === 'conversation');
       const nativeKeys = new Set(continued.filter(session => session.nativeId).map(session => `${session.deviceId}:${session.agent}:${session.nativeId}`));
@@ -181,13 +184,22 @@ export function createConversations({ database, tenantId, history, delivery, exe
         .filter(session => !executionSession(session) || !data.sessions.some(other => other.source !== 'conversation' && !executionSession(other) && sameNativeSession(session, other)))
         .map(session => sessionExecutionResult(session, data));
       const added = [...continued, ...remote].map(session => ({ ...remoteHistorySummary(session), recordMode: session.source === 'conversation' ? undefined : session.recordMode === 'synced' ? 'synced' as const : 'excerpt' as const, sessionId: session.nativeId, workspaces: session.cwd ? [session.cwd] : [], model: session.model || '', branch: session.branch || '', messageCount: session.source === 'conversation' ? currentMessages(data, session.id).length : session.syncedRange?.total ?? (session.excerpt ? 1 : 0) }));
-      const sessions = [...catalog.sessions.filter(session => !nativeKeys.has(`local:${session.agent}:${session.sessionId}`)), ...added];
+      const sessions = [...catalog.sessions.filter(session => !nativeKeys.has(`local:${session.agent}:${session.sessionId}`)).map(session => ({ ...session, deviceId: 'local' })), ...added];
       const providers = [...(catalog.providers || [])];
       for (const session of added) if (!providers.some(provider => provider.id === session.agent)) providers.push({ id: session.agent, label: session.agentLabel || session.agent, status: 'available' });
       if (agent && !providers.some(provider => provider.id === agent)) throw httpError(400, '不支持的 Agent');
+      const deviceNames = new Map(data.devices.map(device => [device.id, device.name]));
+      deviceNames.set('local', hostname());
+      const devices = [...new Set(sessions.map(session => session.deviceId || 'local'))]
+        .map(id => ({ id, name: deviceNames.get(id) || id })).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+      const deviceSessions = deviceId ? sessions.filter(session => (session.deviceId || 'local') === deviceId) : sessions;
+      const availableAgents = new Set(deviceSessions.map(session => session.agent));
+      const agents = providers.filter(provider => availableAgents.has(provider.id))
+        .map(({ id, label }) => ({ id, label: label && label !== id ? label : agentDisplayName(id) }));
+      const agentSessions = agent ? deviceSessions.filter(session => session.agent === agent) : deviceSessions;
       const counts = new Map<string, number>();
-      for (const session of sessions.filter(session => !agent || session.agent === agent)) for (const cwd of session.workspaces?.length ? session.workspaces : ['__unknown__']) counts.set(cwd, (counts.get(cwd) || 0) + 1);
-      const candidates = sessions.filter(session => (!agent || session.agent === agent) && (!workspace || (workspace === '__unknown__' ? !session.workspaces?.length : session.workspaces?.includes(workspace))))
+      for (const session of agentSessions) for (const cwd of session.workspaces?.length ? session.workspaces : ['__unknown__']) counts.set(cwd, (counts.get(cwd) || 0) + 1);
+      const candidates = agentSessions.filter(session => !workspace || (workspace === '__unknown__' ? !session.workspaces?.length : session.workspaces?.includes(workspace)))
         .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)) || left.id.localeCompare(right.id));
       const text = (session: typeof candidates[number]) => [session.title, session.cwd, session.nativeId, session.sessionId, session.model, session.branch].filter(Boolean).join(' ');
       const search = vectorSearch && q ? await vectorSearch.search('history', q, candidates.map(session => ({ id: session.id, text: text(session) }))) : undefined;
@@ -201,7 +213,7 @@ export function createConversations({ database, tenantId, history, delivery, exe
           return live && live.title === session.title && live.cwd === session.cwd && live.updatedAt === session.updatedAt;
         });
       }
-      return { ...(search ? { search: { mode: search.mode, warning: search.warning } } : {}), sessions: matches.slice(offset, offset + limit), total: matches.length, offset, limit, providers, scope: catalog.scope, workspace, workspaces: [...counts].map(([path, count]) => ({ path, count })).sort((a, b) => a.path.localeCompare(b.path)) };
+      return { ...(search ? { search: { mode: search.mode, warning: search.warning } } : {}), sessions: matches.slice(offset, offset + limit), total: matches.length, offset, limit, providers, devices, agents, scope: catalog.scope, workspace, workspaces: [...counts].map(([path, count]) => ({ path, count })).sort((a, b) => a.path.localeCompare(b.path)) };
     },
     remoteDetail(id: string, params = new URLSearchParams()) {
       const data = read();

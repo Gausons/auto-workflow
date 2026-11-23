@@ -2,3 +2,13 @@
   scroll-behavior: auto;
   overflow-anchor: none;
 }
+
+.filters {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 8px;
+}
+
+.filters > label:first-child {
+  grid-column: 1 / -1;
+}

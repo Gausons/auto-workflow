@@ -146,8 +146,12 @@ describe('NewTaskPage', () => {
     const other = { ...targets.projects[0], id: 'other', deviceId: 'other-device', deviceName: '另一设备' };
     setup(['work.execute'], false, false, null, true, true, false, [other, ...targets.projects]);
     const user = userEvent.setup();
-    await screen.findByLabelText('执行位置');
-    await user.selectOptions(screen.getByLabelText('执行位置'), '1');
+    await user.click(await screen.findByRole('button', { name: '执行位置' }));
+    await user.selectOptions(screen.getByLabelText('设备'), 'local');
+    expect(screen.getByLabelText('项目')).toHaveProperty('disabled', true);
+    await user.selectOptions(screen.getByLabelText('Agent'), 'codex');
+    await user.selectOptions(screen.getByLabelText('项目'), 'project-1');
+    await user.click(screen.getByRole('button', { name: '确定' }));
     await user.click(screen.getByLabelText('工作目录：/repo'));
     await user.click(screen.getByRole('button', { name: '/repo/work' }));
     await user.click(screen.getByLabelText('模型与思考强度'));
@@ -156,7 +160,7 @@ describe('NewTaskPage', () => {
     cleanup();
     const fetchMock = setup(['work.execute'], false, false, null, true, true, false, [...targets.projects, other]);
     await screen.findByText('feature/work');
-    expect(screen.getByLabelText('执行位置')).toHaveProperty('value', '0');
+    expect(screen.getByLabelText('执行位置').textContent).toContain('本机 · Codex · repo');
     expect(screen.getByLabelText('工作目录：/repo/work')).toBeTruthy();
     await user.click(screen.getByLabelText('模型与思考强度'));
     expect(screen.getByLabelText('模型')).toHaveProperty('value', 'gpt-6-sol');
@@ -176,7 +180,12 @@ describe('NewTaskPage', () => {
     const fetchMock = setup(['work.execute'], false, false, null, true, true, false, [other]);
     await screen.findByText('上次选择的执行位置已不可用，请重新选择。');
     expect(fetchMock.mock.calls.some(([path]) => path === '/api/task-center/git')).toBe(false);
-    await userEvent.setup().selectOptions(screen.getByLabelText('执行位置'), '0');
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: '执行位置' }));
+    await user.selectOptions(screen.getByLabelText('设备'), 'other-device');
+    await user.selectOptions(screen.getByLabelText('Agent'), 'codex');
+    await user.selectOptions(screen.getByLabelText('项目'), 'project-1');
+    await user.click(screen.getByRole('button', { name: '确定' }));
     await screen.findByText('main');
     expect(screen.getByLabelText('工作目录：/repo')).toBeTruthy();
   });
@@ -192,7 +201,7 @@ describe('NewTaskPage', () => {
     const other = { ...targets.projects[0], deviceId: 'other-device', deviceName: '另一设备', gitBranches: true };
     const fetchMock = setup(['work.execute'], false, false, null, true, true, false, [...targets.projects, other]);
     await screen.findByText('main');
-    expect(screen.getByLabelText('执行位置')).toHaveProperty('value', '1');
+    expect(screen.getByLabelText('执行位置').textContent).toContain('另一设备 · Codex · repo');
     expect(screen.getByLabelText('工作目录：/repo')).toBeTruthy();
     const reads = fetchMock.mock.calls.filter(([path]) => path === '/api/task-center/git').map(([, init]) => JSON.parse(String(init?.body)));
     expect(reads).toEqual([expect.objectContaining({ action: 'list', projectId: 'project-1', deviceId: 'other-device', cwd: '' })]);
@@ -205,7 +214,7 @@ describe('NewTaskPage', () => {
     history.replaceState(null, '', '/?deviceId=missing-device');
     const fetchMock = setup();
     await screen.findByText('该设备暂未提供可执行项目，请先检查连接器。');
-    expect(screen.getByLabelText('执行位置')).toHaveProperty('value', '-1');
+    expect(screen.getByLabelText('执行位置').textContent).toContain('选择执行位置');
     expect(fetchMock.mock.calls.some(([path]) => path === '/api/task-center/git')).toBe(false);
     expect(screen.getByRole('button', { name: '创建并发送任务' })).toHaveProperty('disabled', true);
   });
@@ -220,7 +229,7 @@ describe('NewTaskPage', () => {
 
   it('does not show unrelated local errors while a remote target is selected', async () => {
     setup(['work.execute'], false, true, '未找到 Codex 可执行文件');
-    expect(await screen.findByRole('combobox', { name: '执行位置' })).toHaveProperty('textContent', 'Codex · 开发机');
+    expect((await screen.findByRole('button', { name: '执行位置' })).textContent).toContain('开发机 · Codex · repo');
     expect(screen.queryByText(/未找到 Codex 可执行文件/)).toBeNull();
   });
 
@@ -282,7 +291,7 @@ describe('NewTaskPage', () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([url, init]) => url === '/api/task-center/git' && JSON.parse(String(init?.body)).action === 'create')).toBe(true));
     const create = fetchMock.mock.calls.find(([url, init]) => url === '/api/task-center/git' && JSON.parse(String(init?.body)).action === 'create');
     expect(JSON.parse(String(create?.[1]?.body))).toMatchObject({ deviceId: 'remote', projectId: 'project-1', branch: 'feature/remote' });
-    expect(screen.getByLabelText('执行位置')).toHaveProperty('disabled', true);
+    expect(screen.getByLabelText('执行位置').getAttribute('aria-disabled')).toBe('true');
     fetchMock.completeGit(JSON.parse(String(create?.[1]?.body)).requestId);
     await waitFor(() => expect(screen.queryByText('正在切换分支…')).toBeNull(), { timeout: 4000 });
   });
@@ -290,7 +299,7 @@ describe('NewTaskPage', () => {
   it('creates once and executes with selected target, directory, model and effort', async () => {
     const fetchMock = setup();
     const user = userEvent.setup();
-    await screen.findByRole('option', { name: /Codex/ });
+    await screen.findByRole('button', { name: '执行位置' });
     await user.type(screen.getByLabelText('任务描述'), '修复登录');
     await user.click(screen.getByLabelText('工作目录：/repo'));
     await user.type(screen.getByLabelText('工作目录'), '/repo/work');
@@ -309,7 +318,7 @@ describe('NewTaskPage', () => {
   it('allows a reasoning effort with the default model', async () => {
     const fetchMock = setup();
     const user = userEvent.setup();
-    await screen.findByRole('option', { name: /Codex/ });
+    await screen.findByRole('button', { name: '执行位置' });
     await user.type(screen.getByLabelText('任务描述'), '检查默认模型');
     await user.click(screen.getByLabelText('模型与思考强度'));
     const slider = screen.getByRole('slider', { name: '思考强度' });
@@ -324,7 +333,7 @@ describe('NewTaskPage', () => {
   it('reports an execution failure without recreating the task', async () => {
     const fetchMock = setup(['work.execute'], true);
     const user = userEvent.setup();
-    await screen.findByRole('option', { name: /Codex/ });
+    await screen.findByRole('button', { name: '执行位置' });
     await user.type(screen.getByLabelText('任务描述'), '修复登录');
     await user.click(screen.getByRole('button', { name: '创建并发送任务' }));
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', '任务已创建，但 Agent 启动失败：Agent 未启动');
@@ -333,7 +342,7 @@ describe('NewTaskPage', () => {
 
   it('prefills from a source session without executing until submit', async () => {
     const fetchMock = setup();
-    await screen.findByRole('option', { name: /Codex/ });
+    await screen.findByRole('button', { name: '执行位置' });
     window.dispatchEvent(new CustomEvent('bugflow:create-task-from-session', { detail: { sessionId } }));
     expect(await screen.findByDisplayValue('来源会话')).toBeTruthy();
     expect(fetchMock.mock.calls.some(([path, init]) => init?.method === 'POST' && ['/api/task-center', '/api/task-center/execute'].includes(path))).toBe(false);

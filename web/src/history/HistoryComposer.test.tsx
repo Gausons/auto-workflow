@@ -11,6 +11,14 @@ const session = { id, sessionId: id, agent: 'codex', deviceId: 'local', title: '
 const projects = [{ id: 'project-1', deviceId: 'local', deviceName: '本机', name: 'Codex', agent: 'codex', cwd: '/repo', online: true, defaultModel: 'gpt-6-luna', models: [{ id: 'gpt-6-luna', name: 'GPT-6-Luna', defaultReasoningEffort: 'medium', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'medium', name: '中' }, { id: 'high', name: '高' }] }, { id: 'gpt-6-sol', name: 'GPT-6-Sol', defaultReasoningEffort: 'medium', reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'medium', name: '中' }, { id: 'high', name: '高' }] }] }];
 let nextSession = 0;
 
+async function selectRemoteTarget(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole('button', { name: '执行位置' }));
+  await user.selectOptions(screen.getByLabelText('设备'), 'remote-1');
+  await user.selectOptions(screen.getByLabelText('Agent'), 'codex');
+  await user.selectOptions(screen.getByLabelText('项目'), 'remote-project');
+  await user.click(screen.getByRole('button', { name: '确定' }));
+}
+
 function setup(status: unknown = { execution: null, executions: [] }, failSend = false, projects: unknown[] = [], selectedSession: Session = session, options: { canEdit?: boolean; failCreate?: boolean; pickDirectory?: () => Promise<Response> } = {}) {
   if (selectedSession === session) selectedSession = { ...session, id: (++nextSession).toString(16).padStart(64, '0') };
   const writes: Array<{ path: string; body: Record<string, unknown> }> = [];
@@ -152,7 +160,7 @@ describe('HistoryComposer', () => {
     const writes = setup(undefined, false, projects);
     const user = userEvent.setup();
     expect(screen.queryByLabelText('模型与思考强度')).toBeNull();
-    expect(screen.queryByRole('combobox', { name: '执行位置' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '执行位置' })).toBeNull();
     expect(screen.queryByLabelText('Git 分支')).toBeNull();
     expect(writes).toHaveLength(0);
     await user.click(screen.getByRole('button', { name: /带上下文新开会话/ }));
@@ -199,7 +207,7 @@ describe('HistoryComposer', () => {
     expect(screen.getByRole('textbox', { name: '发送消息' })).toHaveProperty('value', '保留草稿');
     expect(screen.getByLabelText('当前会话配置').textContent).toContain('gpt-6-sol · 高');
     expect(screen.getByTitle('/repo')).toBeTruthy();
-    expect(screen.queryByRole('combobox', { name: '执行位置' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '执行位置' })).toBeNull();
     fireEvent.keyDown(screen.getByRole('textbox', { name: '发送消息' }), { key: 'Enter', ctrlKey: true });
     await waitFor(() => expect(writes.find(item => item.path.endsWith('/continue'))?.body).toEqual({ message: '保留草稿', requestId: 'request-1' }));
     expect(writes.some(item => item.path.endsWith('/continue-as-new'))).toBe(false);
@@ -209,7 +217,7 @@ describe('HistoryComposer', () => {
     const writes = setup(undefined, false, projects);
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: /带上下文新开会话/ }));
-    await screen.findByRole('combobox', { name: '执行位置' });
+    await screen.findByRole('button', { name: '执行位置' });
     await user.type(screen.getByRole('textbox', { name: '新会话首条消息（可选）' }), '检查最新结果');
     fireEvent.keyDown(screen.getByRole('textbox', { name: '新会话首条消息（可选）' }), { key: 'Enter', metaKey: true });
     await waitFor(() => expect(writes.find(item => item.path.endsWith('/continue-as-new'))?.body).toMatchObject({ message: '检查最新结果', cwd: '/repo', requestId: 'request-1' }));
@@ -286,7 +294,7 @@ describe('HistoryComposer', () => {
     const writes = setup(undefined, false, [...projects, { ...projects[0], id: 'remote-project', deviceId: 'remote-1', deviceName: '远端开发机', cwd: '/remote/default' }]);
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: /带上下文新开会话/ }));
-    await user.selectOptions(await screen.findByRole('combobox', { name: '执行位置' }), '1');
+    await selectRemoteTarget(user);
     await user.click(screen.getByRole('button', { name: '创建会话' }));
     expect(await screen.findByText('跨设备交接请先在目标设备明确选择工作目录。')).toBeTruthy();
     expect(writes.some(item => item.path.endsWith('/continue-as-new'))).toBe(false);
@@ -300,7 +308,7 @@ describe('HistoryComposer', () => {
     const writes = setup(undefined, false, projects, session, { failCreate: true });
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: /带上下文新开会话/ }));
-    await screen.findByRole('combobox', { name: '执行位置' });
+    await screen.findByRole('button', { name: '执行位置' });
     await user.type(screen.getByRole('textbox', { name: '新会话首条消息（可选）' }), '继续修复');
     await user.click(screen.getByRole('button', { name: '创建并发送' }));
     expect(await screen.findByText(/创建结果暂不可用/)).toBeTruthy();
@@ -317,7 +325,7 @@ describe('HistoryComposer', () => {
     const fixture = switchableCreation(async () => Response.json({ message: '创建结果暂不可用' }, { status: 503 }));
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: /带上下文新开会话/ }));
-    await user.selectOptions(await screen.findByRole('combobox', { name: '执行位置' }), '1');
+    await selectRemoteTarget(user);
     await user.click(screen.getByLabelText('工作目录：/remote/default'));
     await user.type(screen.getByRole('textbox', { name: '工作目录' }), '/remote/chosen');
     await user.click(screen.getByLabelText('模型与思考强度'));
@@ -346,7 +354,7 @@ describe('HistoryComposer', () => {
     const fixture = switchableCreation(() => response);
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: /带上下文新开会话/ }));
-    await screen.findByRole('combobox', { name: '执行位置' });
+    await screen.findByRole('button', { name: '执行位置' });
     await user.type(screen.getByRole('textbox', { name: '新会话首条消息（可选）' }), '只创建一次');
     await user.click(screen.getByRole('button', { name: '创建并发送' }));
     await waitFor(() => expect(fixture.writes).toHaveLength(1));

@@ -1,0 +1,32 @@
+.picker {
+  max-width: 65%;
+}
+
+.picker summary[aria-disabled='true'] {
+  opacity: .5;
+  cursor: default;
+}
+
+.fields {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.fields button {
+  justify-self: end;
+}
+
+@media (max-width: 600px) {
+  .picker {
+    position: static;
+    max-width: 100%;
+  }
+
+  .panel {
+    left: 0;
+  }
+}
