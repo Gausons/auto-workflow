@@ -45,7 +45,7 @@ describe('DevicesPage', () => {
     expect(screen.queryByLabelText('一键部署命令')).toBeNull();
     await user.click(screen.getByRole('button', { name: '生成并复制部署命令' }));
     const command = (await screen.findByLabelText('一键部署命令') as HTMLTextAreaElement).value;
-    expect(command).toMatch(/^pnpm add -g agent-workbench-connector@latest --registry=https:\/\/registry\.npmjs\.org && agent-workbench-connector --connect [A-Za-z0-9_-]+ --service$/);
+    expect(command).toMatch(/^npm install --global --prefix "\$HOME\/\.workflow-data\/connector-install" --registry=https:\/\/registry\.npmjs\.org agent-workbench-connector@latest && "\$HOME\/\.workflow-data\/connector-install\/bin\/agent-workbench-connector" --connect [A-Za-z0-9_-]+ --service$/);
     const config = JSON.parse(Buffer.from(command.split(' ').at(-2)!, 'base64url').toString('utf8'));
     expect(config.url).toBe(location.origin);
     expect(config.deploymentToken).toBe('d'.repeat(43));

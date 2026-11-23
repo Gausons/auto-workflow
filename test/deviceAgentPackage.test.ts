@@ -7,10 +7,11 @@ import { once } from 'node:events';
 import { copyFile, mkdtemp, mkdir, readdir, readFile, realpath, rm, writeFile, stat } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import { deviceDeploymentCommand } from '../shared/deviceDeployment.js';
 import { connectorDirectory, connectorId, listConnectors, serviceProfilePath, stopConnector } from '../packages/device-agent/src/control.js';
 import { renewableDeployment } from '../packages/device-agent/src/connect.js';
 import { installDeviceService, stopDeviceService } from '../packages/device-agent/src/service.js';
@@ -18,7 +19,7 @@ import { installDeviceService, stopDeviceService } from '../packages/device-agen
 const exec = promisify(execFile);
 const root = fileURLToPath(new URL('../', import.meta.url));
 
-test('packed device agent installs and runs outside the repository without TypeScript or workspace packages', { timeout: 120000 }, async t => {
+test('packed device agent installs and runs outside the repository without TypeScript or workspace packages', { timeout: 180_000 }, async t => {
   const directory = await mkdtemp(path.join(tmpdir(), 'agent-workbench-connector-package-'));
   t.after(async () => {
     try { for (const connector of await listConnectors(directory)) await stopConnector(directory, connector.id); }
@@ -42,9 +43,13 @@ test('packed device agent installs and runs outside the repository without TypeS
   const { packageManager } = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')) as { packageManager: string };
   // Corepack must use the same pinned pnpm outside the repository as it does inside it.
   await writeFile(path.join(install, 'package.json'), JSON.stringify({ private: true, packageManager }));
-  // A fresh consumer has neither registry metadata nor tarballs cached. The SDK is
-  // a public runtime dependency; an offline install accidentally tests the host cache.
-  const installEnv = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, HOME: directory, CI: 'true' };
+  // Reuse the runner's package manager while isolating registry metadata and runtime tarballs.
+  const cacheRoot = process.env.XDG_CACHE_HOME ?? process.env.LOCALAPPDATA
+    ?? path.join(homedir(), process.platform === 'win32' ? 'AppData/Local' : '.cache');
+  const installEnv = {
+    PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, HOME: directory, CI: 'true',
+    COREPACK_HOME: process.env.COREPACK_HOME ?? path.join(cacheRoot, 'node', 'corepack')
+  };
   try {
     await exec('pnpm', [
       '--dir', install, 'add', '--ignore-scripts',
@@ -62,6 +67,18 @@ test('packed device agent installs and runs outside the repository without TypeS
   assert.ok(Object.values(manifest.dependencies).every(value => !value.startsWith('workspace:')));
   const cwd = path.join(directory, 'unrelated'); await mkdir(cwd);
   const baseEnv = { PATH: process.env.PATH, SYSTEMROOT: process.env.SYSTEMROOT, HOME: directory, USERPROFILE: directory };
+  await t.test('macOS service command installs into a stable path without a global bin directory on PATH', { skip: process.platform === 'win32' }, async () => {
+    const home = path.join(directory, 'home with spaces');
+    await mkdir(home);
+    const env = { ...baseEnv, HOME: home, npm_config_fetch_retries: '1', npm_config_fetch_timeout: '20000' };
+    const deploymentCommand = deviceDeploymentCommand({ url: 'https://work.example.com', deploymentToken: 'd'.repeat(43), expiresAt: 1 })
+      .replace('agent-workbench-connector@latest', () => '"$1"');
+    // The expired fixture proves the installed CLI ran without registering a real service.
+    await assert.rejects(exec('/bin/sh', ['-c', deploymentCommand, 'sh', archive], { cwd, env, timeout: 60_000 }), /临时令牌已过期/);
+    const installed = path.join(home, '.workflow-data/connector-install/bin/agent-workbench-connector');
+    assert.equal((await exec(installed, ['--version'], { cwd, env })).stdout.trim(), sourceManifest.version);
+    assert.deepEqual(await readdir(cwd), []);
+  });
   await t.test('installed executable exposes help/version and rejects invalid arguments', async () => {
     const help = (await exec(command, ['--help'], { cwd, env: baseEnv })).stdout;
     assert.match(help, /用法：agent-workbench-connector \[--env-file/);

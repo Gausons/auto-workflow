@@ -269,7 +269,7 @@ IDE_HISTORY_SCOPE=all
 
 ### 从网页连接开发机并远程控制
 
-在浏览器点击“设备与 Agent → 连接设备 → 生成并复制部署命令”，在开发机终端粘贴运行。页面默认选择“macOS 常驻”，命令通过 pnpm 全局安装连接器，再用 `--service` 接入。需在 macOS 桌面登录，并已配置 pnpm 全局安装。Linux、Windows PowerShell 或临时接入可选择“普通后台”，命令通过 Node.js 自带的 `npx` 运行。两种模式都使用一次性令牌，支持 Google 登录账号，需要 Node.js 22.16+ 及已安装登录的 Agent（Git 分支管理还需要 Git）。
+在浏览器点击“设备与 Agent → 连接设备 → 生成并复制部署命令”，在开发机终端粘贴运行。页面默认选择“macOS 常驻”，需登录 macOS 桌面。命令使用 Node.js 自带的 `npm` 将连接器安装到 `~/.workflow-data/connector-install/`，无需配置 pnpm 或修改 PATH。Linux、Windows PowerShell 或临时接入可选择“普通后台”，命令通过 Node.js 自带的 `npx` 运行。两种模式都使用一次性令牌，支持 Google 登录账号，需要 Node.js 22.16+ 及已安装登录的 Agent（Git 分支管理还需要 Git）。
 
 临时令牌最长有效 10 分钟、仅可兑换一次，绑定签发时的登录会话、账号和租户；重新生成会使该浏览器登录会话此前的命令失效。服务端只存摘要，兑换与消费在同一个数据库事务内完成。退出浏览器登录、登录会话过期或账号失去执行权限后，未兑换令牌失效。命令包含一次性接入凭据，请勿分享；不包含浏览器登录令牌或密码。跨设备使用时，先通过开发机可访问的工作台 HTTPS 地址打开网页再生成命令；HTTP 仅允许 localhost 回环调试。
 
@@ -302,7 +302,7 @@ agent-workbench-connector --env-file ./agent.env
 
 配置文件方式的 `agent-workbench-connector` 默认读取 `~/.bugflow/agent.env`（存在时），支持 `--env-file`、`--help`、`--version` 和仅同步模式的 `--once`；一键连接支持后台状态查看 `--status`、正常停止 `--stop <连接标识>` 与前台排查 `--foreground`。已有环境变量优先，不自动读取当前目录的 `.env`。默认设备状态位于 `~/.workflow-data/devices/<连接标识>/`，从不同目录启动不会改变设备身份。迁移已有连接器时，先正常停止旧进程，再将 `WORKBENCH_DEVICE_DIR` 指向旧状态目录的绝对路径以保留身份和执行日志；不要同时运行两个处理同一设备的进程。升级包不会删除设备状态。
 
-维护者运行 `pnpm agent:pack` 生成 `dist/device-agent/agent-workbench-connector-<版本>.tgz`；CI 也保存独立安装包供下载。安装包包含独立的连接器，不包含 `.env`、数据库和本地会话。npm 发布由 `agent-vX.Y.Z` 标签触发，完整 CI 通过后发布同一次构建的安装包，普通构建不会发布。配置见下文“连接器 npm 发布”，包说明见 [device-agent](packages/device-agent/README.md)。仓库开发仍统一使用 pnpm，页面的 npx 命令用于开发机运行发行包。
+维护者运行 `pnpm agent:pack` 生成 `dist/device-agent/agent-workbench-connector-<版本>.tgz`；CI 也保存独立安装包供下载。安装包包含独立的连接器，不包含 `.env`、数据库和本地会话。npm 发布由 `agent-vX.Y.Z` 标签触发，完整 CI 通过后发布同一次构建的安装包，普通构建不会发布。配置见下文“连接器 npm 发布”，包说明见 [device-agent](packages/device-agent/README.md)。仓库开发统一使用 pnpm，页面的 npm 和 npx 命令供开发机使用发行包。
 
 ### 从源码启动连接器（开发调试）
 

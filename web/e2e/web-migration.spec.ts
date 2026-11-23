@@ -863,7 +863,7 @@ test('device setup selects remote target and browser controls a remote original 
   await expect(page.getByRole('combobox', { name: '部署模式' })).toHaveValue('service');
   await page.getByRole('button', { name: '生成并复制部署命令' }).click();
   const deployment = await page.getByLabel('一键部署命令').inputValue();
-  expect(deployment).toMatch(/^pnpm add -g agent-workbench-connector@latest --registry=https:\/\/registry\.npmjs\.org && agent-workbench-connector --connect [A-Za-z0-9_-]+ --service$/);
+  expect(deployment).toMatch(/^npm install --global --prefix "\$HOME\/\.workflow-data\/connector-install" --registry=https:\/\/registry\.npmjs\.org agent-workbench-connector@latest && "\$HOME\/\.workflow-data\/connector-install\/bin\/agent-workbench-connector" --connect [A-Za-z0-9_-]+ --service$/);
   const temporary = JSON.parse(Buffer.from(deployment.split(' ').at(-2)!, 'base64url').toString('utf8'));
   expect(temporary.deploymentToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
   expect(temporary).not.toHaveProperty('username');

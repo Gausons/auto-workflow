@@ -47,7 +47,7 @@ export function DeviceConnectionGuide({ username = '' }: { username?: string }) 
       </select>
     </label>
     <p className="tc-meta">{mode === 'service'
-      ? '需 Node.js 22.16+、已配置全局安装的 pnpm 和已登录的 Agent。命令会全局安装连接器，启用登录后自动上线和设备授权续期。'
+      ? '需 Node.js 22.16+（含 npm）和已登录的 Agent。连接器安装在用户目录，启用登录后自动上线和设备授权续期。'
       : '需 Node.js 22.16+ 和已登录的 Agent。设备上线后自动转入后台，可关闭终端。'}</p>
     <button className="button primary" type="button" disabled={deployment.isPending} onClick={() => deployment.mutate()}>{deployment.isPending ? '正在生成临时令牌…' : deployment.data ? '重新生成部署命令' : '生成并复制部署命令'}</button>
     {deployment.isError && <p role="alert">生成失败：{deployment.error.message}。请重试；此前的命令可能已失效。</p>}

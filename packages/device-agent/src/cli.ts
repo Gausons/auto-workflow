@@ -8,6 +8,8 @@ import { runBackgroundWorker, runManagedConnector, startBackgroundConnector } fr
 import { listConnectors, stopConnector } from './control.js';
 import { checkServiceInstall, installDeviceService, listDeviceServices, runServiceConnector, stopDeviceService } from './service.js';
 
+const controlCommand = 'npx --yes --registry=https://registry.npmjs.org agent-workbench-connector@latest';
+
 async function main() {
   const { values } = parseArgs({ options: {
     help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' },
@@ -90,7 +92,7 @@ async function main() {
       const authorization = await renewableDeployment(values.connect);
       const service = await installDeviceService({ root: homedir(), entry, authorization, environment: process.env });
       console.log(`已启用 macOS 常驻连接，正在接入 ${deployment.url}。\n连接标识：${service.id}\n日志：${service.logFile}`);
-      console.log(`查看状态：agent-workbench-connector --status\n停止并移除：agent-workbench-connector --stop ${service.id}`);
+      console.log(`查看状态：${controlCommand} --status\n停止并移除：${controlCommand} --stop ${service.id}`);
       return;
     }
     console.log(`正在连接 ${deployment.url}，验证临时部署令牌…`);
@@ -104,8 +106,7 @@ async function main() {
       const info = await startBackgroundConnector(environment, fileURLToPath(import.meta.url));
       console.log(`设备已连接，连接器已转入后台（PID ${info.pid}），可以关闭此终端。`);
       console.log(`连接标识：${info.id}\n日志：${info.logFile}`);
-      const command = 'npx --yes --registry=https://registry.npmjs.org agent-workbench-connector@latest';
-      console.log(`查看状态：${command} --status\n停止连接：${command} --stop ${info.id}`);
+      console.log(`查看状态：${controlCommand} --status\n停止连接：${controlCommand} --stop ${info.id}`);
     }
     return;
   }

@@ -6,7 +6,7 @@
 
 ## 安装与启动
 
-推荐在工作台“设备与 Agent → 连接设备”点击“生成并复制部署命令”，在开发机终端粘贴运行。页面默认生成 macOS 常驻命令，使用 pnpm 全局安装连接器。Linux、Windows PowerShell 或临时接入可选择“普通后台”，使用 Node.js 自带的 `npx`。两种模式均兑换一次性临时令牌，Google 登录账号也适用。
+推荐在工作台“设备与 Agent → 连接设备”点击“生成并复制部署命令”，在开发机终端粘贴运行。页面默认生成 macOS 常驻命令，使用 Node.js 自带的 `npm` 将连接器安装到用户目录。Linux、Windows PowerShell 或临时接入可选择“普通后台”，使用 Node.js 自带的 `npx`。两种模式均兑换一次性临时令牌，Google 登录账号也适用。
 
 macOS 直接连接内网 HTTPS 工作台时，如果 Node.js 无法建立证书信任链，连接器会用钥匙串验证该连接的证书、有效期和访问地址。只要工作台 CA 已受钥匙串信任，普通后台和 macOS 常驻都可以直接运行页面命令，无需手动导出证书。此校验也用于 HTTPS API 和安全 WebSocket 重连，以及停止常驻服务时撤销授权。显式启用 Node.js 环境代理时，连接器沿用 Node.js 的代理和 CA 设置。
 
@@ -48,18 +48,18 @@ agent-workbench-connector --env-file ./agent.env
 
 ### macOS 常驻连接
 
-工作台应用迁移 010 后，设备页面可直接生成 macOS 常驻命令。先用 `--status` 检查原连接器，必要时用 `--stop <连接标识>` 停止它。登录目标 Mac 的桌面，确保已配置 pnpm 全局安装，并以普通用户粘贴运行页面生成的命令。
+工作台应用迁移 010 后，设备页面可直接生成 macOS 常驻命令。先用 `--status` 检查原连接器，必要时用 `--stop <连接标识>` 停止它。登录目标 Mac 的桌面，以普通用户运行页面生成的命令。安装目录为 `~/.workflow-data/connector-install/`，无需配置 pnpm 或修改 PATH。
 
 ```bash
-pnpm add -g agent-workbench-connector@latest --registry=https://registry.npmjs.org && agent-workbench-connector --connect '<页面生成的部署参数>' --service
-agent-workbench-connector --status
+npm install --global --prefix "$HOME/.workflow-data/connector-install" --registry=https://registry.npmjs.org agent-workbench-connector@latest && "$HOME/.workflow-data/connector-install/bin/agent-workbench-connector" --connect '<页面生成的部署参数>' --service
+"$HOME/.workflow-data/connector-install/bin/agent-workbench-connector" --status
 ```
 
 服务由当前用户的 launchd 管理。电脑重启后，登录 macOS 桌面即可自动上线。进程异常退出后会由系统重新拉起，继续使用原设备标识和执行记录。状态命令会显示是否已上线及日志路径。服务使用安装时的 Node 和连接器路径，移动安装位置或升级连接器前，请先停止常驻连接，升级后重新接入。
 
 常驻凭据保存在 `~/.workflow-data/connectors/<连接标识>.service.json`，权限为 `0600`。凭据只适用于设备连接，启动时和运行中每 12 小时检查续期，距上次续期满 30 天后过期。服务保留安装时的 `PATH`、设备名称、执行和摘要开关、`CODEX_WORKSPACE_DIR`、`CODEX_EXECUTABLE`、`ACP_ENABLED` 及历史目录配置。更改这些设置后可停止并重新接入。
 
-`agent-workbench-connector --stop <连接标识>` 停止常驻连接、移除登录启动项和本机凭据，并请求服务端撤销授权。若网络故障导致撤销未确认，命令会明确提示。授权失效后可用同一命令清理旧常驻配置，再生成新的部署命令。
+`npx --yes agent-workbench-connector@latest --stop <连接标识>` 停止常驻连接、移除登录启动项和本机凭据，并请求服务端撤销授权。若网络故障导致撤销未确认，命令会明确提示。授权失效后可用同一命令清理旧常驻配置，再生成新的部署命令。
 
 ## 状态与迁移
 

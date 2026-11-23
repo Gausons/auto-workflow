@@ -95,7 +95,7 @@ export async function checkServiceInstall(entry: string) {
     throw new Error('常驻连接目前仅支持已登录 macOS 的普通用户，请直接在本机终端运行');
   }
   if (entry.split(path.sep).includes('_npx') || !entry.endsWith('.mjs')) {
-    throw new Error('常驻连接需要固定安装路径，请先运行 pnpm add -g agent-workbench-connector，再使用已安装的命令接入');
+    throw new Error('常驻连接需要固定安装路径，请使用设备页面生成的 macOS 常驻部署命令');
   }
   try { await launchctl(['print', domain()]); }
   catch { throw new Error('无法访问 macOS 登录会话，请登录桌面后运行常驻接入命令'); }
