@@ -206,7 +206,7 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
       sendJson(res, 200, req.method === 'GET' ? codexExecution.directoryStatus({ requestId: url.searchParams.get('requestId') || undefined }, actor) : await codexExecution.pickDirectory(await readJson(req), actor)); return;
     }
     if (url.pathname === '/api/task-center/directory-action') { sendJson(res, 200, codexExecution.directoryAction(await readDeviceCommand(), requestIdentity.getStore()!.user)); return; }
-    if (url.pathname === '/api/task-center/codex') { sendJson(res, 200, await codexExecution.targets()); return; }
+    if (url.pathname === '/api/task-center/codex') { sendJson(res, 200, await codexExecution.targets({ visibleOnly: true })); return; }
     if (url.pathname === '/api/task-center/execute') { sendJson(res, 202, await codexExecution.execute(await readJson(req, 15_000_000), requestIdentity.getStore()!.user)); return; }
     if (url.pathname === '/api/task-center/execution-action') { sendJson(res, 200, await codexExecution.action(await readDeviceCommand(8_000_000), requestIdentity.getStore()!.user)); return; }
     if (url.pathname === '/api/task-center') {

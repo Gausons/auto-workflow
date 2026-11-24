@@ -1,0 +1,122 @@
+.trigger {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.trigger > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trigger > span:last-child {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.trigger:hover,
+.trigger[aria-expanded='true'] {
+  background: #eaeaea;
+}
+
+.trigger[aria-disabled='true'] {
+  opacity: .5;
+  cursor: default;
+}
+
+.panel {
+  position: fixed;
+  z-index: 72;
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid #e3e5df;
+  border-radius: 12px;
+  background: #fff;
+  color: var(--text);
+  box-shadow: 0 10px 32px #252b2424;
+}
+
+.column {
+  flex-shrink: 0;
+  padding: 5px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.column + .column {
+  border-inline-start: 1px solid #e9ebe7;
+}
+
+.heading, .empty {
+  margin: 0;
+  padding: 7px 9px 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.row, .back {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.back {
+  color: var(--muted);
+}
+
+.row:hover, .row[data-active='true'], .back:hover {
+  background: #f0f2ed;
+}
+
+.row[data-current='true'] {
+  color: #465b3b;
+  font-weight: 600;
+}
+
+.panel button:focus-visible, .trigger:focus-visible {
+  outline: 2px solid #3478eb;
+  outline-offset: -2px;
+}
+
+.itemText {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.itemText > span, .itemText > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.itemText > small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}

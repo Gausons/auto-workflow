@@ -164,7 +164,7 @@ describe('DevicesPage', () => {
     expect(screen.queryByText(/请在开发机运行下方连接器/)).toBeNull();
   });
 
-  it('cancels, removes and restores a card without removing the device from other views', async () => {
+  it('cancels, removes and restores a device card', async () => {
     const fetchMock = setup(['work.execute']);
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', { name: '删除 远端开发机 卡片' }));

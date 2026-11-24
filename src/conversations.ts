@@ -4,7 +4,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { agentDisplayName } from '../shared/agentLabels.js';
 import { taskContent } from '../shared/taskContent.js';
-import type { AgentProject, Execution, HistoryMessage, RemoteContextHandoff, Session, TaskCenterData } from '../shared/taskTypes.js';
+import type { AgentProject, Execution, HistoryFilterDevice, HistoryMessage, RemoteContextHandoff, Session, TaskCenterData } from '../shared/taskTypes.js';
 import { cleanContextEntries, contextPrompt, freezeContext, readContext, type ContextDelivery, type ContextEntry, type SessionContext } from './contextCompiler.js';
 import type { SummaryResult } from './contextModelSummary.js';
 import { normalizedContextPreview } from './contextPreview.js';
@@ -73,6 +73,19 @@ interface ConversationSource {
 
 const active = new Set(['queued', 'launching', 'running', 'waiting', 'unknown']);
 const now = () => new Date().toISOString();
+const workspaceCounts = (counts: Map<string, number>) => [...counts].map(([path, count]) => ({ path, count })).sort((a, b) => a.path.localeCompare(b.path));
+
+function historyDeviceFilters(sessions: readonly { deviceId: string; agent: string; workspaces?: string[] }[], devices: { id: string; name: string }[], labels: Map<string, string>): HistoryFilterDevice[] {
+  const groups = new Map(devices.map(device => [device.id, new Map<string, Map<string, number>>()]));
+  for (const session of sessions) {
+    const agents = groups.get(session.deviceId || 'local');
+    if (!agents) continue;
+    const counts = agents.get(session.agent) || new Map<string, number>();
+    agents.set(session.agent, counts);
+    for (const cwd of session.workspaces?.length ? session.workspaces : ['__unknown__']) counts.set(cwd, (counts.get(cwd) || 0) + 1);
+  }
+  return devices.map(device => ({ ...device, agents: [...groups.get(device.id)!].map(([id, counts]) => ({ id, label: labels.get(id) || agentDisplayName(id), workspaces: workspaceCounts(counts) })).sort((a, b) => a.label.localeCompare(b.label)) }));
+}
 const requestKey = (input: ConversationInput) => {
   if (typeof input?.requestId !== 'string' || !/^[a-f0-9-]{36}$/.test(input.requestId)) throw httpError(400, '发送标识无效');
   return input.requestId;
@@ -190,12 +203,14 @@ export function createConversations({ database, tenantId, history, delivery, exe
       if (agent && !providers.some(provider => provider.id === agent)) throw httpError(400, '不支持的 Agent');
       const deviceNames = new Map(data.devices.map(device => [device.id, device.name]));
       deviceNames.set('local', hostname());
+      const hidden = new Set(data.hiddenDeviceIds);
       const devices = [...new Set(sessions.map(session => session.deviceId || 'local'))]
+        .filter(id => !hidden.has(id))
         .map(id => ({ id, name: deviceNames.get(id) || id })).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
       const deviceSessions = deviceId ? sessions.filter(session => (session.deviceId || 'local') === deviceId) : sessions;
       const availableAgents = new Set(deviceSessions.map(session => session.agent));
-      const agents = providers.filter(provider => availableAgents.has(provider.id))
-        .map(({ id, label }) => ({ id, label: label && label !== id ? label : agentDisplayName(id) }));
+      const labels = new Map(providers.map(({ id, label }) => [id, label && label !== id ? label : agentDisplayName(id)]));
+      const agents = [...labels].filter(([id]) => availableAgents.has(id)).map(([id, label]) => ({ id, label }));
       const agentSessions = agent ? deviceSessions.filter(session => session.agent === agent) : deviceSessions;
       const counts = new Map<string, number>();
       for (const session of agentSessions) for (const cwd of session.workspaces?.length ? session.workspaces : ['__unknown__']) counts.set(cwd, (counts.get(cwd) || 0) + 1);
@@ -213,7 +228,9 @@ export function createConversations({ database, tenantId, history, delivery, exe
           return live && live.title === session.title && live.cwd === session.cwd && live.updatedAt === session.updatedAt;
         });
       }
-      return { ...(search ? { search: { mode: search.mode, warning: search.warning } } : {}), sessions: matches.slice(offset, offset + limit), total: matches.length, offset, limit, providers, devices, agents, scope: catalog.scope, workspace, workspaces: [...counts].map(([path, count]) => ({ path, count })).sort((a, b) => a.path.localeCompare(b.path)) };
+      return { ...(search ? { search: { mode: search.mode, warning: search.warning } } : {}),
+        ...(params.get('includeFilters') === '1' && { deviceFilters: historyDeviceFilters(sessions, devices, labels) }),
+        sessions: matches.slice(offset, offset + limit), total: matches.length, offset, limit, providers, devices, agents, scope: catalog.scope, workspace, workspaces: workspaceCounts(counts) };
     },
     remoteDetail(id: string, params = new URLSearchParams()) {
       const data = read();

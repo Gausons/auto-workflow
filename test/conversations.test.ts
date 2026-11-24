@@ -876,6 +876,13 @@ test('history facets and counts are scoped by device and agent before pagination
   assert.equal(allDevices.total, 3);
   const local = await f.service.historyList(new URLSearchParams({ deviceId: 'local' }));
   assert.deepEqual(local.sessions.map(session => session.id), [f.source]);
+  f.database.mutateTaskCenter('default', data => { data.hiddenDeviceIds = ['dev-b']; });
+  const withMenu = await f.service.historyList(new URLSearchParams({ includeFilters: '1', limit: '1' }));
+  assert.equal(withMenu.total, 5);
+  assert.equal(withMenu.devices.some(device => device.id === 'dev-b'), false);
+  assert.deepEqual(withMenu.deviceFilters?.find(device => device.id === 'dev-a')?.agents.find(agent => agent.id === 'deepseekharness')?.workspaces, scoped.workspaces);
+  assert.equal(withMenu.deviceFilters?.some(device => device.id === 'dev-b'), false);
+  assert.ok(f.service.remoteDetail('b1'));
   const foreign = createConversations({ ...f.options, tenantId: 'other', history: { catalog: async () => ({ sessions: [] }) } });
   assert.deepEqual((await foreign.historyList(new URLSearchParams({ deviceId: 'dev-a' }))).devices, []);
   await assert.rejects(f.service.historyList(new URLSearchParams({ deviceId: '../dev-a' })), { statusCode: 400 });

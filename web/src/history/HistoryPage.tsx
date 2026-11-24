@@ -1,4 +1,5 @@
 import { PageHeading } from '../components/PageHeading.js';
+import { CascadeMenu, type CascadeOption } from '../components/CascadeMenu.js';
 import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { apiRequest, hasSessionToken } from '../api/client.js';
@@ -7,23 +8,25 @@ import { HistoryComposer } from './HistoryComposer.js';
 import { InheritedContext } from './InheritedContext.js';
 import { HistoryTranscript } from './HistoryTranscript.js';
 import { canContinueHistory } from './historyCapabilities.js';
-import type { HistoryMessage, Session, TaskCenterData } from '../../../shared/taskTypes.js';
+import type { HistoryFilterDevice, HistoryMessage, Session, TaskCenterData } from '../../../shared/taskTypes.js';
 import { useTaskCenterUpdates } from '../tasks/taskCenterUpdates.js';
+import { agentDisplayName } from '../../../shared/agentLabels.js';
 import type { InheritedContextInfo } from '../../../shared/contextPreviewTypes.js';
 import styles from './HistoryPage.module.css';
 
 interface HistorySession extends Session { createdAt: string; messageCount: number }
 interface HistoryDetailResponse { session: HistorySession; messages: HistoryMessage[]; total: number; offset?: number; turnPage?: { total: number; count: number; before: number | null }; inherited?: InheritedContextInfo }
 interface HistoryProvider { id: string; label: string; status: string; skipped?: number }
-interface HistoryWorkspace { path: string; count: number }
 interface HistoryListResponse {
   search?: { mode: 'keyword' | 'hybrid'; warning?: string };
   offset: number; limit: number; total: number; scope: string; providers: HistoryProvider[];
-  devices: { id: string; name: string }[]; agents: { id: string; label: string }[];
-  workspaces: HistoryWorkspace[]; sessions: HistorySession[];
+  deviceFilters?: HistoryFilterDevice[];
+  sessions: HistorySession[];
 }
 interface HistoryFilters { offset: number; deviceId: string; agent: string; query: string; workspace: string }
-const defaultFilters = { deviceId: '', agent: '', workspace: '' };
+type HistorySelection = Pick<HistoryFilters, 'deviceId' | 'agent' | 'workspace'>;
+const defaultFilters: HistorySelection = { deviceId: '', agent: '', workspace: '' };
+const filterLevels = ['设备', 'Agent', '项目'];
 function historyPreference(value: unknown) {
   const record = preferenceRecord(value);
   return { deviceId: typeof record.deviceId === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(record.deviceId) ? record.deviceId : '', agent: typeof record.agent === 'string' && record.agent.length <= 100 ? record.agent : '', workspace: typeof record.workspace === 'string' && record.workspace.length <= 2000 ? record.workspace : '' };
@@ -35,6 +38,27 @@ const statusLabel = (value: unknown) => statusLabels[String(value)] || '运行�
 const time = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toLocaleString('zh-CN') : '时间未知';
 const directoryName = (value: string | undefined) => value?.split(/[\\/]/).filter(Boolean).at(-1) || value || '未知工作区';
 const projectName = (path: string) => path === '__unknown__' ? '未知项目' : directoryName(path);
+function historyOptions(devices: HistoryFilterDevice[]): CascadeOption<HistorySelection>[] {
+  return [{ id: '', label: '全部设备', value: defaultFilters }, ...devices.map(device => ({
+    id: device.id, label: device.name,
+    children: [{ id: '', label: '全部 Agent', value: { ...defaultFilters, deviceId: device.id } }, ...device.agents.map(agent => {
+      const scope = { deviceId: device.id, agent: agent.id };
+      const names = new Map<string, number>();
+      for (const { path } of agent.workspaces) {
+        const name = projectName(path);
+        names.set(name, (names.get(name) || 0) + 1);
+      }
+      return { id: agent.id, label: agent.label, children: [
+        { id: '', label: '全部项目', value: { ...scope, workspace: '' } },
+        ...agent.workspaces.map(({ path, count }) => {
+          const name = projectName(path);
+          return { id: path, label: name + ' (' + count + ')', detail: (names.get(name) || 0) > 1 ? path : undefined, value: { ...scope, workspace: path } };
+        })
+      ] };
+    })]
+  }))];
+}
+
 const currentRoute = () => ({ active: /^\/history(?:\/|$)/.test(location.pathname) || /^#history(?:\/|$)/.test(location.hash), id: /^\/history\/([a-f0-9]{64})$/.exec(location.pathname)?.[1] || /^#history\/([a-f0-9]{64})$/.exec(location.hash)?.[1] || null });
 
 function HistoryDetail({ id, canExecute }: { id: string; canExecute: boolean }) {
@@ -157,7 +181,7 @@ export function HistoryPage() {
   useTaskCenterUpdates(route.active, snapshot.data?.syncVersion);
   const list = useQuery({
     queryKey: ['history', 'list', filters],
-    queryFn: ({ signal }) => apiRequest<HistoryListResponse>(`/api/agent-sessions?${new URLSearchParams({ offset: String(filters.offset), limit: '30', deviceId: filters.deviceId, agent: filters.agent, q: filters.query, workspace: filters.workspace })}`, { signal }),
+    queryFn: ({ signal }) => apiRequest<HistoryListResponse>(`/api/agent-sessions?${new URLSearchParams({ offset: String(filters.offset), limit: '30', deviceId: filters.deviceId, agent: filters.agent, q: filters.query, workspace: filters.workspace, includeFilters: '1' })}`, { signal }),
     enabled: route.active && hasSessionToken(),
     placeholderData: keepPreviousData,
     refetchOnWindowFocus: false
@@ -168,6 +192,12 @@ export function HistoryPage() {
     enabled: route.active && hasSessionToken(),
     refetchOnWindowFocus: false
   });
+  const deviceHidden = Boolean(snapshot.data?.devices?.some(device => device.id === filters.deviceId && device.cardHidden));
+  useEffect(() => {
+    if (!deviceHidden) return;
+    setFilters(previous => ({ ...previous, ...defaultFilters, offset: 0 }));
+    setSelection(defaultFilters);
+  }, [deviceHidden]);
   if (!route.active) return null;
   const data = list.isPlaceholderData ? undefined : list.data;
   const changeFilters = (next: Partial<HistoryFilters>) => {
@@ -177,17 +207,14 @@ export function HistoryPage() {
     if (route.id) location.hash = 'history';
   };
   const sourceText = data && `${data.scope === 'all' ? '全部本地工作区' : '仅配置的工作目录'} · ${data.providers.map(provider => `${provider.label}：${sourceLabels[provider.status] || provider.status}${provider.skipped ? `（${provider.skipped} 项未能读取）` : ''}`).join(' · ')}`;
-  const deviceOptions = list.data?.devices || [];
-  const deviceNames = new Map(deviceOptions.map(device => [device.id, device.name]));
-  const canPickAgent = Boolean(filters.deviceId || filters.agent);
-  const canPickProject = Boolean((filters.deviceId && filters.agent) || filters.workspace);
-  const agentOptions = canPickAgent ? data?.agents || [] : [];
-  const workspaceOptions = canPickProject ? data?.workspaces || [] : [];
-  const projectNames = new Map<string, number>();
-  for (const workspace of workspaceOptions) {
-    const name = projectName(workspace.path);
-    projectNames.set(name, (projectNames.get(name) || 0) + 1);
-  }
+  const snapshotDevices = snapshot.data?.devices || [];
+  const hidden = new Set(snapshotDevices.filter(device => device.cardHidden).map(device => device.id));
+  const deviceOptions = (list.data?.deviceFilters || []).filter(device => !hidden.has(device.id));
+  const deviceNames = new Map([...snapshotDevices, ...deviceOptions].map(device => [device.id, device.name]));
+  const selectedDevice = deviceOptions.find(device => device.id === filters.deviceId);
+  const selectedAgent = selectedDevice?.agents.find(agent => agent.id === filters.agent);
+  const filterLabel = [filters.deviceId ? deviceNames.get(filters.deviceId) || filters.deviceId : '全部设备',
+    filters.agent && (selectedAgent?.label || agentDisplayName(filters.agent)), filters.workspace && projectName(filters.workspace)].filter(Boolean).join(' · ');
   return <>
     <PageHeading title="会话" description="Agent 历史记录" />
     <div className="history-layout">
@@ -202,26 +229,9 @@ export function HistoryPage() {
           else changeFilters({ query });
         }}>
           <label className="history-search">搜索会话<input value={draft} onChange={event => setDraft(event.target.value)} placeholder="搜索会话…" maxLength={200} /></label>
-          <div className={styles.filters}>
-            <label>设备<select value={filters.deviceId} onChange={event => changeFilters({ deviceId: event.target.value, agent: '', workspace: '' })}>
-              <option value="">全部设备</option>
-              {deviceOptions.map(device => <option key={device.id} value={device.id}>{device.name}</option>)}
-              {filters.deviceId && !deviceNames.has(filters.deviceId) && <option value={filters.deviceId}>{filters.deviceId}</option>}
-            </select></label>
-            <label>Agent<select value={filters.agent} disabled={!canPickAgent || (list.isFetching && !data)} onChange={event => changeFilters({ agent: event.target.value, workspace: '' })}>
-              <option value="">{canPickAgent ? '全部 Agent' : '先选择设备'}</option>
-              {agentOptions.map(agent => <option key={agent.id} value={agent.id}>{agent.label}</option>)}
-              {filters.agent && !agentOptions.some(agent => agent.id === filters.agent) && <option value={filters.agent}>{filters.agent}</option>}
-            </select></label>
-            <label>项目<select value={filters.workspace} disabled={!canPickProject || (list.isFetching && !data)} onChange={event => changeFilters({ workspace: event.target.value })}>
-              <option value="">{canPickProject ? '全部项目' : '先选择 Agent'}</option>
-              {workspaceOptions.map(workspace => {
-                const name = projectName(workspace.path);
-                return <option key={workspace.path} value={workspace.path} title={workspace.path}>{name} ({workspace.count}){(projectNames.get(name) || 0) > 1 ? ` · ${workspace.path}` : ''}</option>;
-              })}
-              {filters.workspace && !workspaceOptions.some(item => item.path === filters.workspace) && <option value={filters.workspace} title={filters.workspace}>{projectName(filters.workspace)}</option>}
-            </select></label>
-          </div>
+          <CascadeMenu options={historyOptions(deviceOptions)} levels={filterLevels} label={filterLabel}
+            buttonLabel="会话筛选" menuLabel="历史会话筛选" className={styles.filter}
+            selected={[filters.deviceId, filters.agent, filters.workspace]} onSelect={changeFilters} />
           <button className="button secondary" type="submit">刷新会话</button>
         </form>
         {data?.search?.warning && <p role="alert">{data.search.warning}</p>}

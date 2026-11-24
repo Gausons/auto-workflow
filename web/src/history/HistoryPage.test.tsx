@@ -7,7 +7,11 @@ import { HistoryPage } from './HistoryPage.js';
 
 const id = 'a'.repeat(64);
 const session = { id, sessionId: id, agent: 'codex', agentLabel: 'Codex', deviceId: 'local', title: '<script>不可信标题</script>', cwd: '/repo/work', status: 'ready', createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:01:00.000Z', messageCount: 1 };
-const list = { offset: 0, limit: 30, total: 1, scope: 'workspace', providers: [{ id: 'codex', label: 'Codex', status: 'available' }], devices: [{ id: 'local', name: '本机' }, { id: 'remote', name: '远端开发机' }], agents: [{ id: 'codex', label: 'Codex' }], workspaces: [{ path: '/repo/work', count: 1 }], sessions: [session] };
+const deviceFilters = [
+  { id: 'local', name: '本机', agents: [{ id: 'codex', label: 'Codex', workspaces: [{ path: '/repo/work', count: 1 }] }] },
+  { id: 'remote', name: '远端开发机', agents: [{ id: 'deepseekharness', label: 'DeepSeek Harness', workspaces: [{ path: '/a/work', count: 1 }, { path: '/b/work', count: 2 }] }] }
+];
+const list = { offset: 0, limit: 30, total: 1, scope: 'workspace', providers: [{ id: 'codex', label: 'Codex', status: 'available' }], deviceFilters, sessions: [session] };
 
 function renderHistory(route = '#history') {
   location.hash = route;
@@ -25,53 +29,46 @@ describe('HistoryPage', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderHistory();
     const user = userEvent.setup();
-    await screen.findByRole('option', { name: '本机' });
-    expect(screen.getByLabelText('Agent')).toHaveProperty('disabled', true);
-    expect(screen.getByLabelText('项目')).toHaveProperty('disabled', true);
-    await user.selectOptions(screen.getByLabelText('设备'), 'local');
-    await screen.findByRole('option', { name: 'Codex' });
-    await user.selectOptions(screen.getByLabelText('Agent'), 'codex');
-    await screen.findByRole('option', { name: 'work (1)' });
-    await user.selectOptions(screen.getByLabelText('项目'), '/repo/work');
+    await screen.findByRole('button', { name: /不可信标题/ });
+    await user.click(screen.getByRole('button', { name: '会话筛选' }));
+    expect(screen.queryByRole('group', { name: 'Agent' })).toBeNull();
+    await user.hover(screen.getByRole('button', { name: '本机' }));
+    await user.hover(screen.getByRole('button', { name: 'Codex' }));
+    await user.click(screen.getByRole('button', { name: 'work (1)' }));
     await user.type(screen.getByPlaceholderText('搜索会话…'), '临时搜索');
     await user.click(screen.getByRole('button', { name: '刷新会话' }));
     cleanup();
     fetchMock.mockClear();
     renderHistory();
     await screen.findByRole('button', { name: /不可信标题/ });
-    expect(screen.getByLabelText('设备')).toHaveProperty('value', 'local');
-    expect(screen.getByLabelText('Agent')).toHaveProperty('value', 'codex');
-    expect(screen.getByLabelText('项目')).toHaveProperty('value', '/repo/work');
+    expect(screen.getByRole('button', { name: '会话筛选' }).textContent).toContain('本机 · Codex · work');
     expect(screen.getByPlaceholderText('搜索会话…')).toHaveProperty('value', '');
     const path = fetchMock.mock.calls.find(([url]) => url.startsWith('/api/agent-sessions?'))?.[0];
-    expect(new URL(path!, 'http://test').searchParams).toEqual(new URLSearchParams({ offset: '0', limit: '30', deviceId: 'local', agent: 'codex', q: '', workspace: '/repo/work' }));
+    expect(new URL(path!, 'http://test').searchParams).toEqual(new URLSearchParams({ offset: '0', limit: '30', deviceId: 'local', agent: 'codex', q: '', workspace: '/repo/work', includeFilters: '1' }));
   });
 
   it('resets lower levels on device changes and distinguishes same-name projects', async () => {
     localStorage.setItem('bugflow.preference.["tenant-1","user-1","history-filters"]', JSON.stringify({ agent: 'codex', workspace: '/repo/work' }));
-    const fetchMock = vi.fn().mockImplementation((path: string) => {
-      if (!path.startsWith('/api/agent-sessions?')) return Promise.resolve(Response.json({ permissions: ['read'] }));
-      const query = new URL(path, 'http://test').searchParams;
-      const device = query.get('deviceId');
-      return Promise.resolve(Response.json(device === 'remote' ? { ...list, agents: [{ id: 'deepseekharness', label: 'DeepSeek Harness' }], sessions: [], workspaces: [{ path: '/a/work', count: 1 }, { path: '/b/work', count: 2 }] } : list));
-    });
+    const fetchMock = vi.fn().mockImplementation((path: string) => Promise.resolve(Response.json(path.startsWith('/api/agent-sessions?') ? list : { permissions: ['read'] })));
     vi.stubGlobal('fetch', fetchMock);
     renderHistory();
     const user = userEvent.setup();
-    await screen.findByRole('option', { name: '远端开发机' });
-    expect(screen.getByLabelText('设备')).toHaveProperty('value', '');
-    expect(screen.getByLabelText('项目')).toHaveProperty('value', '/repo/work');
-    await user.selectOptions(screen.getByLabelText('设备'), 'remote');
-    expect(screen.getByLabelText('Agent')).toHaveProperty('value', '');
-    expect(screen.getByLabelText('项目')).toHaveProperty('value', '');
-    await screen.findByRole('option', { name: 'DeepSeek Harness' });
-    expect(screen.queryByRole('option', { name: 'Codex' })).toBeNull();
-    await user.selectOptions(screen.getByLabelText('Agent'), 'deepseekharness');
-    await screen.findByRole('option', { name: 'work (2) · /b/work' });
-    await user.selectOptions(screen.getByLabelText('项目'), '/b/work');
+    await screen.findByRole('button', { name: /不可信标题/ });
+    const filter = screen.getByRole('button', { name: '会话筛选' });
+    expect(filter.textContent).toContain('全部设备 · Codex · work');
+    await user.click(filter);
+    await user.hover(screen.getByRole('button', { name: '本机' }));
+    expect(screen.getByRole('button', { name: 'Codex' })).toBeTruthy();
+    await user.hover(screen.getByRole('button', { name: '远端开发机' }));
+    expect(screen.queryByRole('button', { name: 'Codex' })).toBeNull();
+    await user.hover(screen.getByRole('button', { name: 'DeepSeek Harness' }));
+    await user.click(screen.getByRole('button', { name: 'work (2)，/b/work' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('deviceId=remote&agent=deepseekharness&q=&workspace=%2Fb%2Fwork'), expect.anything()));
-    await user.selectOptions(screen.getByLabelText('Agent'), '');
-    expect(screen.getByLabelText('项目')).toHaveProperty('value', '');
+    await user.click(filter);
+    await user.hover(screen.getByRole('button', { name: '远端开发机' }));
+    await user.click(screen.getByRole('button', { name: '全部 Agent' }));
+    expect(filter.textContent).toContain('远端开发机');
+    expect(filter.textContent).not.toContain('DeepSeek Harness');
   });
 
   it('shows a safe session list and opens the existing hash address', async () => {
@@ -140,9 +137,10 @@ describe('HistoryPage', () => {
     const user = userEvent.setup();
 
     await screen.findByRole('button', { name: /不可信标题/ });
-    await user.selectOptions(screen.getByLabelText('设备'), 'local');
-    await screen.findByRole('option', { name: 'Codex' });
-    await user.selectOptions(screen.getByLabelText('Agent'), 'codex');
+    await user.click(screen.getByRole('button', { name: '会话筛选' }));
+    await user.click(screen.getByRole('button', { name: '本机' }));
+    await user.click(screen.getByRole('button', { name: 'Codex' }));
+    await user.click(screen.getByRole('button', { name: '全部项目' }));
     await user.type(screen.getByPlaceholderText('搜索会话…'), '回归');
     await user.click(screen.getByRole('button', { name: '刷新会话' }));
 

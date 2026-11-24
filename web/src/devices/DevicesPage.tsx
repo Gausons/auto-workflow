@@ -56,7 +56,12 @@ export function DevicesPage() {
       await client.cancelQueries({ queryKey: ['task-center', 'snapshot'] });
       client.setQueryData<TaskCenterData>(['task-center', 'snapshot'], current => current && ({ ...current, devices: current.devices.map(device => device.id === deviceId ? { ...device, cardHidden: hidden } : device) }));
       setRemoving(null);
-      await client.invalidateQueries({ queryKey: ['task-center', 'snapshot'] });
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ['task-center', 'snapshot'] }),
+        client.invalidateQueries({ queryKey: ['task-center', 'targets'] }),
+        client.invalidateQueries({ queryKey: ['history', 'targets'] }),
+        client.invalidateQueries({ queryKey: ['history', 'list'] })
+      ]);
     }
   });
   const devices = (snapshot.data?.devices || []).filter(device => device.id !== 'local' || device.localExecutionEnabled !== false);
@@ -80,7 +85,7 @@ export function DevicesPage() {
           <h3 title={device.name}>{device.name}</h3>
           <p className={styles.meta}>{device.id === 'local' ? '本机设备' : `最近连接 ${time(device.lastSeen)}`}</p>
           <div className={styles.agents}>{device.agents.length ? device.agents.map(agent => <span key={agent}>{agentLabel(agent)}</span>) : <span>未发现 Agent</span>}</div>
-          {removing === device.id ? <div className={styles.confirmation}><p>删除此卡片？设备连接、历史会话和任务会保留。</p><div><button className={styles.textButton} type="button" disabled={visibility.isPending} onClick={() => { setRemoving(null); visibility.reset(); }}>取消</button><button className={styles.dangerButton} type="button" disabled={visibility.isPending} onClick={() => visibility.mutate({ deviceId: device.id, hidden: true })}>{visibility.isPending ? '正在删除…' : '确认删除'}</button></div></div> : <>
+          {removing === device.id ? <div className={styles.confirmation}><p>删除此卡片？设备会从筛选菜单隐藏，设备连接、历史会话和任务会保留。</p><div><button className={styles.textButton} type="button" disabled={visibility.isPending} onClick={() => { setRemoving(null); visibility.reset(); }}>取消</button><button className={styles.dangerButton} type="button" disabled={visibility.isPending} onClick={() => visibility.mutate({ deviceId: device.id, hidden: true })}>{visibility.isPending ? '正在删除…' : '确认删除'}</button></div></div> : <>
             <div className={styles.cardFooter}><span>{device.id === 'local' ? '本地执行' : device.codexProjects?.length ? `${device.codexProjects.length} 个执行项目` : '仅同步'}</span>{device.transport === 'connector' && !!device.codexProjects?.length && canExecute && <a className={styles.taskLink} href={`/tasks/new?deviceId=${encodeURIComponent(device.id)}`}>新建远端任务 <span aria-hidden="true">↗</span></a>}</div>
             <details className={styles.details}><summary>设备详情</summary>{device.id === 'local' ? <LocalDeviceDetails device={device} sessionCount={snapshot.data?.sessions.filter(session => session.deviceId === device.id && !session.missing).length || 0} canExecute={canExecute} /> : <>
               {device.capabilities?.resumeCodex && <p>支持 Codex 原会话续聊</p>}

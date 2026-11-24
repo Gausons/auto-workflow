@@ -18,6 +18,7 @@ function refreshDetails(client: QueryClient, delta: TaskCenterDelta, previous: T
   if (delta.reset) {
     void client.invalidateQueries({ queryKey: ['history'] });
     void client.invalidateQueries({ queryKey: ['task-center', 'session'] });
+    void client.invalidateQueries({ queryKey: ['task-center', 'targets'] });
     return;
   }
   const changedSessions = new Set(delta.changedIds.sessions || []);
@@ -35,6 +36,10 @@ function refreshDetails(client: QueryClient, delta: TaskCenterDelta, previous: T
     }
   }
   if (delta.changedIds.devices?.length) void client.invalidateQueries({ queryKey: ['history', 'targets'] });
+  if (delta.changes.devices?.upsert.some(device => Boolean(device.cardHidden) !== Boolean(previous.devices.find(item => item.id === device.id)?.cardHidden))) {
+    void client.invalidateQueries({ queryKey: ['task-center', 'targets'] });
+    if (!changedSessions.size) void client.invalidateQueries({ queryKey: ['history', 'list'] });
+  }
   if (delta.changes.executions) for (const execution of delta.changes.executions.upsert) {
     const id = execution.conversationId || execution.historySessionId;
     if (id) void client.invalidateQueries({ queryKey: ['history', 'continue', id] });

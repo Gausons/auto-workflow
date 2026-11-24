@@ -439,13 +439,15 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
       }
       if (job.deviceId === 'local') void Promise.resolve().then(() => runner.start!(job)).catch((error: unknown) => update({ ...(database.readTaskCenter(tenantId).executions.find((item) => item.id === job.id) || job), status: 'unknown', message: `启动结果待核对：${asError(error).message}`, updatedAt: timestamp() }));
     },
-    async targets() {
+    async targets({ visibleOnly = false } = {}) {
       let localError: string | null = null, projects: TargetProject[] = [];
       try { projects = await localProjects(true); }
       catch (error: unknown) { localProjectCache = { at: Date.now(), projects: [] }; localError = asError(error).message; }
       const data = database.readTaskCenter(tenantId), devices = data.devices;
       for (const d of devices) for (const p of d.codexProjects || []) projects.push({ ...p, deviceId: d.id, deviceName: d.name, online: Date.now() - Date.parse(d.lastSeen) < 90000, commonDirectories: [], gitBranches: d.capabilities?.gitBranches === true, taskAttachments: d.capabilities?.taskAttachments === true });
-      projects = projects.map((project) => ({ ...project, commonDirectories: frequentDirectories(data, project.deviceId, project.cwd) }));
+      const hidden = new Set(visibleOnly ? data.hiddenDeviceIds : []);
+      projects = projects.filter(project => !hidden.has(project.deviceId))
+        .map(project => ({ ...project, commonDirectories: frequentDirectories(data, project.deviceId, project.cwd) }));
       return { projects, localError, localExecutionEnabled: canExecuteLocally };
     },
     async git(input: GitInput) {

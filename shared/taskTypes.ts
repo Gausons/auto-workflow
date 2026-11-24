@@ -77,6 +77,12 @@ export interface DeviceHistorySource {
   skipped: number;
 }
 
+export interface HistoryFilterDevice {
+  id: string;
+  name: string;
+  agents: { id: string; label: string; workspaces: { path: string; count: number }[] }[];
+}
+
 export interface Device {
   cardHidden?: boolean;
   id: string;

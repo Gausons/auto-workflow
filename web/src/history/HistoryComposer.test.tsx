@@ -13,10 +13,9 @@ let nextSession = 0;
 
 async function selectRemoteTarget(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole('button', { name: '执行位置' }));
-  await user.selectOptions(screen.getByLabelText('设备'), 'remote-1');
-  await user.selectOptions(screen.getByLabelText('Agent'), 'codex');
-  await user.selectOptions(screen.getByLabelText('项目'), 'remote-project');
-  await user.click(screen.getByRole('button', { name: '确定' }));
+  await user.click(screen.getByRole('button', { name: '远端开发机' }));
+  await user.click(screen.getByRole('button', { name: 'Codex' }));
+  await user.click(screen.getByRole('button', { name: 'default' }));
 }
 
 function setup(status: unknown = { execution: null, executions: [] }, failSend = false, projects: unknown[] = [], selectedSession: Session = session, options: { canEdit?: boolean; failCreate?: boolean; pickDirectory?: () => Promise<Response> } = {}) {
