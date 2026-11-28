@@ -19,6 +19,7 @@ function refreshDetails(client: QueryClient, delta: TaskCenterDelta, previous: T
     void client.invalidateQueries({ queryKey: ['history'] });
     void client.invalidateQueries({ queryKey: ['task-center', 'session'] });
     void client.invalidateQueries({ queryKey: ['task-center', 'targets'] });
+    void client.invalidateQueries({ queryKey: ['group-chat-targets'] });
     return;
   }
   const changedSessions = new Set(delta.changedIds.sessions || []);
@@ -36,7 +37,12 @@ function refreshDetails(client: QueryClient, delta: TaskCenterDelta, previous: T
     }
   }
   if (delta.changedIds.devices?.length) void client.invalidateQueries({ queryKey: ['history', 'targets'] });
-  if (delta.changes.devices?.upsert.some(device => Boolean(device.cardHidden) !== Boolean(previous.devices.find(item => item.id === device.id)?.cardHidden))) {
+  const devicePatch = delta.changes.devices;
+  if (devicePatch && (devicePatch.removed.length || devicePatch.upsert.some(device => {
+    const old = previous.devices.find(item => item.id === device.id);
+    return !old || Boolean(device.cardHidden) !== Boolean(old.cardHidden);
+  }))) {
+    void client.invalidateQueries({ queryKey: ['group-chat-targets'] });
     void client.invalidateQueries({ queryKey: ['task-center', 'targets'] });
     if (!changedSessions.size) void client.invalidateQueries({ queryKey: ['history', 'list'] });
   }

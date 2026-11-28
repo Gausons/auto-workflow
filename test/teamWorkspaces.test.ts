@@ -4,8 +4,11 @@ import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
+import { WebSocket } from 'ws';
+import { realtimeProtocol } from '../shared/realtime.js';
+import type { TaskCenterData, AgentProject } from '../shared/taskTypes.js';
 import path from 'node:path';
-import { createApp, rawDatabase } from '../scripts/testing/database.js';
+import { createApp, openDatabase, rawDatabase } from '../scripts/testing/database.js';
 
 interface Member { id: string; username: string; role: string; enabled: number; updatedAt: string }
 interface Data { id: string; token: string; deploymentToken: string; user: Member; tenant: { id: string }; members: Member[]; invitations: { id: string }[]; workspaces: { id: string }[]; tasks: { id: string }[]; task: { id: string }; message: string }
@@ -113,7 +116,7 @@ test('version 9 upgrades existing personal identities without moving data and su
   const before = db.authenticateSession(session.token)!;
   db.close();
   const old = rawDatabase(key);
-  old.prepare('DROP TABLE workspace_invitations, workspace_memberships, team_workspaces').run();
+  old.prepare('DROP TABLE workspace_device_shares, workspace_invitations, workspace_memberships, team_workspaces').run();
   old.prepare('DELETE FROM schema_migrations WHERE version >= 9').run(); old.close();
   const upgraded = openDatabase(key);
   try {
@@ -129,4 +132,111 @@ test('version 9 upgrades existing personal identities without moving data and su
   } finally { upgraded.close(); }
   const reopened = openDatabase(key);
   try { const newSession = await reopened.loginPersonal('migration-owner', password); assert.equal(reopened.workspaces(reopened.authenticateSession(newSession.token)!).workspaces.length, 2); } finally { reopened.close(); }
+});
+
+test('members share personal connectors without enrolling again and team work uses the original connection', async t => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), 'workspace-devices-'));
+  const app = createApp({ rootDir, environment: { LOCAL_EXECUTION_ENABLED: 'false', ACP_ENABLED: 'false', CODEX_EXECUTABLE: '/nonexistent/fixture' } });
+  const db = openDatabase(rootDir);
+  t.after(async () => { await app.close(); db.close(); await rm(rootDir, { recursive: true, force: true }); });
+  app.server.listen(0, '127.0.0.1'); await once(app.server, 'listening');
+  const address = app.server.address(); assert.ok(address && typeof address === 'object');
+  const api = async (token: string, route: string, method = 'GET', body?: unknown) => fetch(`http://127.0.0.1:${address.port}${route}`, {
+    method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const checked = async <T>(token: string, route: string, method = 'GET', body?: unknown) => {
+    const res = await api(token, route, method, body);
+    const result = await res.text();
+    assert.ok(res.ok, `${route}: ${res.status} ${result}`);
+    return JSON.parse(result) as T;
+  };
+  const register = (name: string) => checked<Data>('', '/api/auth/register', 'POST', { username: name, password });
+  const owner = await register('devices-founder'), member = await register('devices-member'), outsider = await register('devices-outsider');
+  const { id: team } = await checked<Data>(owner.token, '/api/workspaces', 'POST', { name: '设备团队', requestId: randomUUID() });
+  const enter = (token: string) => checked<Data>(token, '/api/workspaces/switch', 'POST', { tenantId: team });
+  const founder = await enter(owner.token);
+  const invite = await checked<Data>(founder.token, '/api/workspaces/invitations', 'POST', { username: member.user.username, role: 'operator' });
+  await checked(member.token, `/api/workspaces/invitations/${invite.id}/accept`, 'POST');
+  const actor = await enter(member.token);
+  const issue = async (token: string) => {
+    const deployment = await checked<Data>(token, '/api/auth/device-deployment', 'POST', {});
+    return (await checked<Data>('', '/api/auth/device-deployment/exchange', 'POST', { deploymentToken: deployment.deploymentToken })).token;
+  };
+  const personalConnector = await issue(member.token), directConnector = await issue(actor.token);
+  const center = '/api/task-center', share = '/api/workspaces/devices', id = 'member-laptop';
+  const heartbeat = { action: 'heartbeat', deviceId: id, name: '研发电脑', agents: ['codex'], capabilities: { gitBranches: true },
+    codexProjects: [{ id: 'codex', name: '研发项目', cwd: '/fixture' }],
+    sessions: [{ nativeId: 'private', agent: 'codex', title: '个人历史', cwd: '/fixture' }] };
+  const set = (token: string, deviceId = id, method = 'POST') => api(token, share, method, { deviceId });
+  await checked(personalConnector, center, 'POST', heartbeat);
+  await checked(owner.token, center, 'POST', { ...heartbeat, deviceId: 'founder-device' });
+  assert.equal((await set('', id)).status, 401);
+  for (const token of [member.token, directConnector, personalConnector, outsider.token]) assert.equal((await set(token)).status, 403);
+  assert.equal((await set(actor.token, 'founder-device')).status, 404);
+  assert.equal((await set(actor.token, 'local')).status, 400);
+  assert.equal((await api(actor.token, share, 'POST', { deviceId: id, accountId: owner.user.id })).status, 400);
+  assert.deepEqual((await checked<{ devices: { id: string }[] }>(actor.token, share)).devices.map(d => d.id), [id]);
+  const concurrent = await Promise.all([set(actor.token), set(actor.token)]);
+  assert.deepEqual(concurrent.map(r => r.status), [200, 200]);
+  const teamState = await checked<TaskCenterData>(founder.token, center);
+  assert.equal(teamState.devices.filter(d => d.id === id).length, 1);
+  assert.equal(teamState.devices.find(d => d.id === id)?.owner, actor.user.id);
+  assert.equal(teamState.sessions.some(s => s.title === '个人历史'), false);
+  assert.equal((await api(directConnector, center, 'POST', heartbeat)).status, 409);
+  assert.equal((await checked<{ projects: AgentProject[] }>(founder.token, center + '/codex')).projects.find(p => p.deviceId === id)?.cwd, '/fixture');
+  await checked(personalConnector, center, 'POST', { ...heartbeat, name: '重连电脑', sessions: [] });
+  const delta = await checked<{ changes: { devices: { upsert: { id: string; name: string }[] } } }>(actor.token, center + '/changes?since=' + teamState.syncVersion);
+  assert.equal(delta.changes.devices.upsert.find(d => d.id === id)?.name, '重连电脑');
+  const task = await checked<{ taskId: string; revision: number }>(founder.token, center, 'POST', { action: 'create', title: '团队执行' });
+  const { executionId } = await checked<{ executionId: string }>(founder.token, center + '/execute', 'POST', { ...task, deviceId: id, projectId: 'codex' });
+  const stateUrl = center + '/device-state?deviceId=' + id;
+  assert.deepEqual((await checked<TaskCenterData>(personalConnector, stateUrl)).executions.map(j => j.id), [executionId]);
+  assert.ok(!(await checked<TaskCenterData>(member.token, center)).executions?.length);
+  const secondConnector = await issue(member.token);
+  await checked(secondConnector, center, 'POST', { ...heartbeat, deviceId: 'second-laptop', sessions: [] });
+  assert.equal((await api(secondConnector, center, 'POST', heartbeat)).status, 403);
+  assert.ok(!(await checked<TaskCenterData>(secondConnector, stateUrl)).executions.length);
+  const action = center + '/execution-action', claim = { action: 'claim', executionId };
+  assert.equal((await api(outsider.token, action, 'POST', claim)).status, 404);
+  assert.equal((await api(secondConnector, action, 'POST', claim)).status, 404);
+  const branch = await api(member.token, center + '/git', 'POST', { deviceId: id, projectId: 'codex', requestId: randomUUID(), action: 'switch', branch: 'topic' });
+  assert.equal(branch.status, 409, 'team execution prevents a conflicting branch change on the personal device');
+  assert.equal((await set(actor.token, id, 'DELETE')).status, 409);
+  const claims = await Promise.all([api(personalConnector, action, 'POST', claim), api(personalConnector, action, 'POST', claim)]);
+  assert.deepEqual(claims.map(r => r.status).sort(), [200, 409]);
+  const report = { action: 'report', executionId, report: { status: 'completed', output: '团队结果' } };
+  const socket = new WebSocket(`ws://127.0.0.1:${address.port}/api/realtime`, realtimeProtocol);
+  try {
+    await once(socket, 'open');
+    const next = (type: string) => new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timeout = setTimeout(() => { socket.off('message', receive); reject(new Error(`missing ${type}`)); }, 5000);
+      const receive = (raw: Buffer) => {
+        const event = JSON.parse(raw.toString()) as Record<string, unknown>;
+        if (event.type === type) { clearTimeout(timeout); socket.off('message', receive); resolve(event); }
+      };
+      socket.on('message', receive);
+    });
+    const ready = next('ready');
+    socket.send(JSON.stringify({ type: 'subscribe', token: personalConnector, channel: 'device-control', deviceId: id }));
+    await ready;
+    const ack = next('report-ack');
+    socket.send(JSON.stringify({ type: 'execution-report', id: '1', input: { executionId, report: report.report } }));
+    assert.equal((await ack).status, 200);
+  } finally { socket.terminate(); }
+  assert.equal((await checked<TaskCenterData>(founder.token, center)).executions[0].output, '团队结果');
+  assert.equal((await set(founder.token, id, 'DELETE')).status, 404);
+  await checked(actor.token, share, 'DELETE', { deviceId: id });
+  await checked(personalConnector, action, 'POST', report);
+  assert.equal((await api(personalConnector, action, 'POST', { ...report, report: { ...report.report, output: '已撤销' } })).status, 403);
+  assert.equal((await checked<TaskCenterData>(founder.token, center)).executions[0].output, '团队结果');
+  assert.ok(!(await checked<TaskCenterData>(personalConnector, stateUrl)).executions.length);
+  assert.ok((await checked<TaskCenterData>(member.token, center)).devices.some(d => d.id === id));
+  await checked(actor.token, share, 'POST', { deviceId: id });
+  const beforeDowngrade = db.readTaskCenterVersion(team);
+  db.updateUser(team, actor.user.id, { role: 'viewer', expectedUpdatedAt: db.getUser(team, actor.user.id)!.updatedAt }, founder.user);
+  assert.equal((await api(actor.token, share)).status, 403);
+  const revoked = await checked<{ changes: { devices: { removed: string[] } } }>(founder.token, center + '/changes?since=' + beforeDowngrade);
+  assert.deepEqual(revoked.changes.devices.removed, [id]);
+  assert.equal((await set(actor.token)).status, 403);
+  assert.equal((await checked<TaskCenterData>(founder.token, center)).devices.some(d => d.id === id), false);
 });

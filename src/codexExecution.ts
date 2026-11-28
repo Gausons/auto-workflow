@@ -12,10 +12,10 @@ import { httpError } from './rbac.js';
 import { insideRemoteDirectory, selectedRemoteDirectory } from './remoteDirectory.js';
 import { localExecutionEnabled } from './localExecution.js';
 import { remoteContinuationProject } from './remoteSession.js';
-import { assertNoRemoteGitMutation } from './remoteGit.js';
+import { assertNoRemoteGitMutation, type DeviceActivity } from './remoteGit.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { AgentModel, AgentProject, Execution, ExecutionStatus, InteractionRequest, Task, TaskCenterData, TaskStatus } from '../shared/taskTypes.js';
+import type { AgentModel, AgentProject, Device, Execution, ExecutionStatus, InteractionRequest, Task, TaskCenterData, TaskStatus } from '../shared/taskTypes.js';
 
 type ErrorLike = Error & { code?: string | number; stderr?: string };
 type ExecutionRecord = Execution & {
@@ -51,6 +51,7 @@ interface CodexTurn { id: string; status: string; items?: CodexTurnItem[] }
 interface CodexThread { id: string; path?: string; status?: { type?: string }; turns: CodexTurn[] }
 interface InteractionInput { decision?: string; answers?: Record<string, string> }
 interface TaskCenterDatabase {
+  otherDeviceActivity?(tenantId: string, device: Device): DeviceActivity[];
   readTaskCenter(tenantId: string): TaskCenterData;
   mutateTaskCenter<T>(tenantId: string, update: (data: TaskCenterData) => T): T;
 }
@@ -66,7 +67,7 @@ interface HistoryService {
   detail(id: string, query: URLSearchParams): Promise<{ session: import('../shared/taskTypes.js').Session }>;
   resolveSource(id: string): Promise<unknown>;
 }
-interface Actor { id?: string }
+interface Actor { id?: string; sharedDeviceId?: string }
 type TargetProject = AgentProject & { deviceId: string; deviceName: string; online: boolean; commonDirectories: string[] };
 interface GitInput { deviceId?: string; projectId?: string; cwd?: string; action?: string; branch?: unknown }
 interface DirectoryInput { deviceId?: string; projectId?: string; requestId?: string; action?: string; cwd?: string; cancelled?: boolean; message?: unknown }
@@ -518,7 +519,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
       return database.mutateTaskCenter(tenantId, (data) => {
         const request = data.directoryRequests?.find((item) => item.id === input.requestId), device = data.devices.find((item) => item.id === request?.deviceId);
         if (!request) throw httpError(404, '目录选择请求不存在');
-        if (!device || device.owner !== actor.id) throw httpError(403, '只有目标机器连接器可以处理目录选择');
+        if (!device || device.owner !== actor.id || (device.sharedFromPersonal && actor.sharedDeviceId !== device.id)) throw httpError(403, '只有目标机器连接器可以处理目录选择');
         if (input.action === 'claim') {
           if (request.status !== 'pending') throw httpError(409, '目录选择请求已被处理');
           request.status = 'selecting'; request.updatedAt = timestamp(); return { request: structuredClone(request) };
@@ -560,6 +561,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
         const task = data.tasks.find((item) => item.id === input.taskId);
         if (!task) throw httpError(404, '任务不存在');
         if (task.collaborationId) throw httpError(409, '请进入协作空间，选择对应分工启动执行');
+        if (deviceId !== 'local' && !data.devices.some(device => device.id === deviceId && device.codexProjects?.some(p => p.id === project.id && p.cwd === project.cwd))) throw httpError(409, '设备或执行项目已变更，请重新选择');
         const selection = deviceId === 'local' ? undefined : selectedRemoteDirectory(data.directoryRequests, deviceId, actor.id, cwd);
         if (deviceId !== 'local' && !insideRemoteDirectory(project.cwd, cwd) && !selection) throw httpError(403, '请先在目标设备使用“选择目录”授权此工作目录');
         if (task.revision !== input.revision) throw httpError(409, '任务已更新，请刷新后执行');
@@ -634,9 +636,14 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
     async action(input: ActionInput, actor: Actor = {}) {
       const job = database.readTaskCenter(tenantId).executions?.find((item) => item.id === input.executionId);
       if (!job) throw httpError(404, '执行不存在');
+      const sharedReceipt = input.action === 'report' && actor.sharedDeviceId === job.deviceId && job.sharedDeviceMemberId === actor.id
+        ? createHash('sha256').update(JSON.stringify([input.report, input.controlAck, input.controlError])).digest('hex') : undefined;
+      // A connector resends saved receipts after restarting. A committed receipt
+      // needs only an acknowledgement, including after the grant was withdrawn.
+      if (sharedReceipt && sharedReceipt === job.sharedDeviceReportDigest) return { executionId: job.id };
       if (input.action === 'attachments') {
         const device = database.readTaskCenter(tenantId).devices.find(item => item.id === job.deviceId);
-        if (job.deviceId === 'local' || !actor.id || device?.owner !== actor.id) throw httpError(403, '只有目标设备的连接器账号可以读取附件');
+        if (job.deviceId === 'local' || !actor.id || device?.owner !== actor.id || (device.sharedFromPersonal && actor.sharedDeviceId !== device.id)) throw httpError(403, '只有目标设备的连接器账号可以读取附件');
         if (job.status !== 'launching') throw httpError(409, '请先领取执行，再读取附件');
         const files = await Promise.all((job.attachments || []).map(async file => {
           const bytes = await readFile(file.path);
@@ -660,11 +667,13 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
           return database.mutateTaskCenter(tenantId, (data) => {
             const saved = data.executions.find((item) => item.id === job.id)!;
             const device = data.devices.find((item) => item.id === saved.deviceId);
-            if (!device || !actor?.id || device.owner !== actor.id) throw httpError(403, '只有该设备的连接器账号可以领取和回报执行');
+            if (!device || !actor.id || device.owner !== actor.id || (device.sharedFromPersonal && actor.sharedDeviceId !== device.id)) throw httpError(403, '只有该设备的连接器账号可以领取和回报执行');
             if (input.action === 'claim') {
               if (saved.status !== 'queued') throw httpError(409, '执行已被领取，不会重复执行');
               if (saved.collaborationId && !device.capabilities?.collaborationSessions) throw httpError(422, '请升级并重启目标设备连接器后领取协作分工');
               assertNoRemoteGitMutation(data, saved.deviceId);
+              for (const activity of database.otherDeviceActivity?.(tenantId, device) || []) assertNoRemoteGitMutation(activity, saved.deviceId);
+              if (device.sharedFromPersonal) saved.sharedDeviceMemberId = actor.id;
               recordExecution(data, { ...saved, status: 'launching', message: '目标设备已领取，准备启动 Agent', updatedAt: timestamp() });
               return { job: structuredClone(saved) };
             }
@@ -734,6 +743,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
               patch.contextBrief = brief;
             }
             if (JSON.stringify(report.request || null).length > 64000) throw httpError(400, '交互请求过大');
+            if (sharedReceipt) saved.sharedDeviceReportDigest = sharedReceipt;
             recordExecution(data, { ...saved, ...patch, status: reportStatus, request: report.request as InteractionRequest || null, desktopOpened: Boolean(report.desktopOpened), updatedAt: timestamp() });
             if (saved.control?.id === input.controlAck) { saved.control = null; saved.controlError = input.controlError ? String(input.controlError).slice(0, 2000) : null; }
             return { executionId: saved.id };

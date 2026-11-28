@@ -41,6 +41,7 @@ export function permissionForRoute(method: string | undefined, pathname: string)
   if ((pathname === '/api/workspaces/chats' || /^\/api\/workspaces\/chats\/[a-f0-9-]{36}\/(messages|stop)$/.test(pathname)) && method === 'POST') return 'work.execute';
   if (pathname === '/api/workspaces' && ['GET', 'POST'].includes(method || '')) return 'read';
   if (pathname === '/api/workspaces/switch' && method === 'POST') return 'read';
+  if (pathname === '/api/workspaces/devices' && ['GET', 'POST', 'DELETE'].includes(method || '')) return 'work.execute';
   if (pathname === '/api/workspaces/members' && method === 'GET') return 'read';
   if (pathname === '/api/workspaces/invitations' && method === 'POST') return 'members.manage';
   if (/^\/api\/workspaces\/invitations\/[a-zA-Z0-9-]+\/accept$/.test(pathname) && method === 'POST') return 'read';

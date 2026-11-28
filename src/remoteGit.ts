@@ -1,15 +1,18 @@
-import type { GitBranchState, GitRequest, TaskCenterData } from '../shared/taskTypes.js';
+import { randomUUID } from 'node:crypto';
+import type { Device, GitBranchState, GitRequest, TaskCenterData } from '../shared/taskTypes.js';
 import { httpError } from './rbac.js';
 import { insideRemoteDirectory, selectedRemoteDirectory } from './remoteDirectory.js';
 
+export type DeviceActivity = Pick<TaskCenterData, 'gitRequests' | 'executions'>;
 interface Database {
+  otherDeviceActivity?(tenantId: string, device: Device): DeviceActivity[];
   readTaskCenter(tenantId: string): TaskCenterData;
   mutateTaskCenter<T>(tenantId: string, update: (data: TaskCenterData) => T): T;
 }
-type Actor = { id?: string };
+type Actor = { id?: string; sharedDeviceId?: string };
 export interface RemoteGitInput { requestId?: string; deviceId?: string; projectId?: string; cwd?: string; action?: string; branch?: unknown }
 const live = (request: GitRequest) => ['pending', 'running'].includes(request.status);
-export function assertNoRemoteGitMutation(data: TaskCenterData, deviceId: string) {
+export function assertNoRemoteGitMutation(data: DeviceActivity, deviceId: string) {
   for (const r of data.gitRequests || []) expire(r);
   if (data.gitRequests?.some(r => r.deviceId === deviceId && r.action !== 'list' && live(r))) throw httpError(409, '目标设备正在处理分支操作，请稍后执行任务');
 }
@@ -47,11 +50,13 @@ export function createRemoteGit(database: Database, tenantId: string) {
         if (!insideRemoteDirectory(project.cwd, cwd) && !selectedRemoteDirectory(data.directoryRequests, device.id, actor.id, cwd)) throw httpError(403, '请先在目标设备使用“选择目录”授权此工作目录');
         for (const r of data.gitRequests || []) expire(r);
         if (input.action !== 'list') {
-          assertNoRemoteGitMutation(data, device.id);
-          if (data.executions?.some(j => j.deviceId === device.id && (['queued', 'launching', 'running', 'waiting', 'unknown'].includes(j.status) || j.releaseStatus === 'releasing'))) throw httpError(409, '目标设备有任务正在执行或结果待核对，请结束后再切换分支');
+          for (const activity of [data, ...(database.otherDeviceActivity?.(tenantId, device) || [])]) {
+            assertNoRemoteGitMutation(activity, device.id);
+            if (activity.executions?.some(j => j.deviceId === device.id && (['queued', 'launching', 'running', 'waiting', 'unknown'].includes(j.status) || j.releaseStatus === 'releasing'))) throw httpError(409, '目标设备有任务正在执行或结果待核对，请结束后再切换分支');
+          }
         }
         const now = new Date().toISOString();
-        const request: GitRequest = { id: input.requestId!, requestedBy: actor.id!, deviceId: device.id, projectId: project.id, cwd, action: input.action as GitRequest['action'], branch: input.action === 'list' ? undefined : input.branch as string, status: 'pending', createdAt: now, updatedAt: now };
+        const request: GitRequest = { id: input.requestId!, ...(device.sharedFromPersonal ? { workerId: randomUUID() } : {}), requestedBy: actor.id!, deviceId: device.id, projectId: project.id, cwd, action: input.action as GitRequest['action'], branch: input.action === 'list' ? undefined : input.branch as string, status: 'pending', createdAt: now, updatedAt: now };
         // Read requests may be frequent; retain mutation receipts for idempotency.
         data.gitRequests = (data.gitRequests || []).filter(r => r.action !== 'list' || live(r) || Date.now() - Date.parse(r.updatedAt) < 300_000);
         data.gitRequests.push(request);
@@ -68,14 +73,16 @@ export function createRemoteGit(database: Database, tenantId: string) {
     },
     action(input: { requestId?: string; action?: string; status?: string; result?: unknown; message?: string }, actor: Actor) {
       return database.mutateTaskCenter(tenantId, data => {
-        const r = data.gitRequests?.find(r => r.id === input.requestId);
+        const r = data.gitRequests?.find(r => (r.workerId || r.id) === input.requestId);
         if (!r) throw httpError(404, '分支请求不存在');
-        if (!actor.id || data.devices.find(d => d.id === r.deviceId)?.owner !== actor.id) throw httpError(403, '只有目标设备连接器账号可以处理分支请求');
+        const device = data.devices.find(d => d.id === r.deviceId);
+        if (!actor.id || device?.owner !== actor.id || (device.sharedFromPersonal && actor.sharedDeviceId !== device.id)) throw httpError(403, '只有目标设备连接器账号可以处理分支请求');
         expire(r);
         if (input.action === 'claim') {
           if (r.status !== 'pending') throw httpError(409, '分支请求已被领取或过期');
-          if (r.action !== 'list' && data.executions?.some(j => j.deviceId === r.deviceId && (['launching', 'running', 'waiting', 'unknown'].includes(j.status) || j.releaseStatus === 'releasing'))) throw httpError(409, '目标设备有任务正在执行');
-          r.status = 'running'; r.updatedAt = new Date().toISOString(); return structuredClone(r);
+          if (r.action !== 'list' && [data, ...(database.otherDeviceActivity?.(tenantId, device) || [])].some(activity =>
+            activity.executions?.some(j => j.deviceId === r.deviceId && (['launching', 'running', 'waiting', 'unknown'].includes(j.status) || j.releaseStatus === 'releasing')))) throw httpError(409, '目标设备有任务正在执行');
+          r.status = 'running'; r.updatedAt = new Date().toISOString(); return { ...r, id: r.workerId || r.id };
         }
         if (input.action === 'verify') {
           if (r.status !== 'running') throw httpError(409, '分支请求已过期，未执行操作');

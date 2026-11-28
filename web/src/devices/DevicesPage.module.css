@@ -49,3 +49,6 @@
 .page button:focus-visible, .page a:focus-visible, .page summary:focus-visible { outline: 2px solid #7c9269; outline-offset: 3px; }
 @media (max-width: 860px) { .content { padding: 20px 18px; } }
 @media (max-width: 480px) { .devices { grid-template-columns: minmax(0, 1fr); } .guide { padding: 16px; } }
+
+.personalDevices { list-style: none; margin: 12px 0 0; padding: 0; }
+.personalDevices li { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 0; border-top: 1px solid #e3e7df; font-size: 13px; overflow-wrap: anywhere; }

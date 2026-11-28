@@ -204,6 +204,15 @@ export function createAuthHandler(database: Database, { environment = {}, fetchI
       if (endpoint === '/api/workspaces/switch' && req.method === 'POST') {
         sendJson(res, 200, sessionResponse(database.switchWorkspace(workspacePrincipal, await readAuthJson(req)))); return true;
       }
+      if (endpoint === '/api/workspaces/devices' && ['GET', 'POST', 'DELETE'].includes(req.method || '')) {
+        requirePermission(principal, 'work.execute');
+        if (req.method === 'GET') { sendJson(res, 200, database.workspaceDevices.list(principal)); return true; }
+        const input = await readAuthJson(req);
+        const current = database.authenticateSession(token);
+        if (!current) throw httpError(401, '登录会话已失效');
+        sendJson(res, 200, database.workspaceDevices.setShared(current, input, req.method === 'POST'));
+        return true;
+      }
       if (endpoint === '/api/workspaces/members' && req.method === 'GET') {
         sendJson(res, 200, database.workspaceMembers(workspacePrincipal)); return true;
       }

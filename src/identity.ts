@@ -52,7 +52,7 @@ async function verifyPassword(password: unknown, encoded: unknown) {
   return timingSafeEqual(key, Buffer.from(expected, 'hex')) && candidate === encoded;
 }
 
-export function createIdentityStore(db: Connection, transaction: Transaction) {
+export function createIdentityStore(db: Connection, transaction: Transaction, revokeDeviceShares: (userId: string) => void) {
   const getUser = (tenantId: string, id: string) => db.prepare(`SELECT ${PUBLIC_COLUMNS} FROM organization_users WHERE tenant_id = ? AND id = ?`).get(tenantId, id) as unknown as PublicUser | undefined;
   const listUsers = (tenantId: string) => db.prepare(`SELECT ${PUBLIC_COLUMNS} FROM organization_users WHERE tenant_id = ? ORDER BY created_at, id`).all(tenantId) as unknown as PublicUser[];
   const hasUsers = (tenantId: string) => Boolean(db.prepare('SELECT 1 FROM organization_users WHERE tenant_id = ? LIMIT 1').get(tenantId));
@@ -139,6 +139,7 @@ export function createIdentityStore(db: Connection, transaction: Transaction) {
       }
       db.prepare('UPDATE organization_users SET role = ?, enabled = ?, display_name = ?, updated_at = ? WHERE tenant_id = ? AND id = ?')
         .run(role, enabled, name, new Date(Math.max(Date.now(), Date.parse(target.updatedAt) + 1)).toISOString(), tenantId, id);
+      if (target.enabled && permissionsFor(target.role).includes('work.execute') && (!enabled || !permissionsFor(role).includes('work.execute'))) revokeDeviceShares(id);
       if (!enabled) revokeUserSessions(tenantId, id);
       else if (!permissionsFor(role).includes('work.execute')) {
         db.prepare('DELETE FROM user_sessions WHERE tenant_id = ? AND user_id = ? AND token_hash IN (SELECT token_hash FROM device_connector_sessions WHERE renewable)').run(tenantId, id);
@@ -244,9 +245,10 @@ export function createIdentityStore(db: Connection, transaction: Transaction) {
     if (membership && !membership.enabled) return null;
     const tenant = db.prepare('SELECT id, name FROM tenants WHERE id = ?').get(row.tenant_id) as unknown as { id: string; name: string } | undefined;
     if (!tenant) return null;
-    const scope = db.prepare('SELECT 1 FROM device_connector_sessions WHERE token_hash = ?').get(digest(token)) ? 'connector' : 'browser';
+    const connector = db.prepare('SELECT device_id FROM device_connector_sessions WHERE token_hash = ?').get(digest(token));
+    const scope = connector ? 'connector' : 'browser';
     if (scope === 'connector' && !permissionsFor(user.role).includes('work.execute')) return null;
-    return { tenant, user: { ...user, isWorkspaceMember: Boolean(membership) }, expiresAt: row.expires_at, scope };
+    return { tenant, user: { ...user, isWorkspaceMember: Boolean(membership) }, expiresAt: row.expires_at, scope, connectorDeviceId: connector ? String(connector.device_id || '') : undefined };
   }
   function issueDeviceDeployment(token: unknown) {
     return transaction(() => {

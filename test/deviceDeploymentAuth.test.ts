@@ -230,7 +230,7 @@ test('migration 10 leaves existing device sessions on their original expiry', as
   db.close();
   const raw = rawDatabase(key);
   raw.prepare('ALTER TABLE device_connector_sessions DROP COLUMN renewable').run();
-  raw.prepare('DELETE FROM schema_migrations WHERE version = 10').run();
+  raw.prepare('DELETE FROM schema_migrations WHERE version >= 10').run();
   raw.close();
   const upgraded = openDatabase(key);
   try {

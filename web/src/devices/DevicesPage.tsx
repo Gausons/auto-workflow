@@ -4,6 +4,7 @@ import { PageHeading } from '../components/PageHeading.js';
 import { apiRequest, hasSessionToken } from '../api/client.js';
 import { useTaskCenterUpdates } from '../tasks/taskCenterUpdates.js';
 import type { AgentProject, Device, DeviceHistorySource, TaskCenterData } from '../../../shared/taskTypes.js';
+import { PersonalDevicePicker } from './PersonalDevicePicker.js';
 import { DeviceConnectionGuide } from './DeviceConnectionGuide.js';
 import styles from './DevicesPage.module.css';
 
@@ -33,6 +34,7 @@ function LocalDeviceDetails({ device, sessionCount, canExecute }: { device: Devi
 
 export function DevicesPage() {
   const client = useQueryClient();
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
   const snapshot = useQuery({
@@ -44,10 +46,11 @@ export function DevicesPage() {
   useTaskCenterUpdates(true, snapshot.data?.syncVersion);
   const identity = useQuery({
     queryKey: ['task-center', 'identity'],
-    queryFn: ({ signal }) => apiRequest<{ permissions: string[]; user?: { id: string; username: string } }>('/api/bootstrap', { signal }),
+    queryFn: ({ signal }) => apiRequest<{ permissions: string[]; user?: { id: string; username: string; isWorkspaceMember?: boolean } }>('/api/bootstrap', { signal }),
     enabled: hasSessionToken()
   });
   const canExecute = identity.data?.permissions.includes('work.execute') === true;
+  const canShare = canExecute && identity.data?.user?.isWorkspaceMember === true;
   const canManage = (device: Device) => canExecute && (device.id === 'local' || !!device.owner && device.owner === identity.data?.user?.id);
   const visibility = useMutation({
     mutationFn: ({ deviceId, hidden }: { deviceId: string; hidden: boolean }) => apiRequest('/api/task-center', { method: 'POST', body: JSON.stringify({ action: hidden ? 'remove-device-card' : 'restore-device-card', deviceId }) }),
@@ -71,13 +74,15 @@ export function DevicesPage() {
   return <div className={styles.page}>
     <PageHeading title="设备与 Agent" description="你的开发设备，随时连接">
       <button className="button secondary" type="button" disabled={snapshot.isFetching} onClick={() => { void snapshot.refetch(); void client.invalidateQueries({ queryKey: ['task-center', 'targets'] }); }}>刷新</button>
-      {canExecute && <button className="button" type="button" aria-expanded={guideOpen} aria-controls="device-connection-guide" onClick={() => setGuideOpen(open => !open)}>{guideOpen ? '收起连接指南' : '连接设备'}</button>}
+      {canShare && <button className="button" type="button" aria-expanded={pickerOpen} aria-controls="personal-device-picker" onClick={() => { setGuideOpen(false); setPickerOpen(open => !open); }}>{pickerOpen ? '收起个人设备' : '添加我的设备'}</button>}
+      {canExecute && <button className="button" type="button" aria-expanded={guideOpen} aria-controls="device-connection-guide" onClick={() => { setPickerOpen(false); setGuideOpen(open => !open); }}>{guideOpen ? '收起连接指南' : '连接设备'}</button>}
     </PageHeading>
     <div className={styles.content}>
+      {pickerOpen && canShare && <PersonalDevicePicker />}
       {guideOpen && canExecute && <section id="device-connection-guide" className={styles.guide}><DeviceConnectionGuide username={identity.data?.user?.username} /></section>}
       {visibility.isError && <p className={styles.notice} role="alert">操作失败：{errorMessage(visibility.error)}</p>}
       {snapshot.isPending ? <p role="status">正在加载设备…</p> : snapshot.isError ? <p role="alert">加载失败：{errorMessage(snapshot.error)} <button className="button secondary" type="button" onClick={() => void snapshot.refetch()}>重试</button></p> : <>
-        <div className={styles.summary}><h2>我的设备 <span>{visible.length}</span></h2><p><i className={styles.dot} data-online="true" />{online} 在线<span className={styles.separator}>/</span>{visible.length - online} 离线</p></div>
+        <div className={styles.summary}><h2>{identity.data?.user?.isWorkspaceMember ? '团队设备' : '我的设备'} <span>{visible.length}</span></h2><p><i className={styles.dot} data-online="true" />{online} 在线<span className={styles.separator}>/</span>{visible.length - online} 离线</p></div>
         {visible.length ? <section className={styles.devices} aria-label="设备列表">{visible.map(device => <article className={styles.card} key={device.id} aria-label={device.name}>
           <div className={styles.cardHeader}><span className={styles.deviceIcon}><DeviceIcon /></span><span className={styles.status} data-online={!!device.online}><i className={styles.dot} data-online={!!device.online} />{device.online ? '在线' : '离线'}</span>
             {canManage(device) && <button className={styles.deleteButton} type="button" aria-label={`删除 ${device.name} 卡片`} title="删除卡片" disabled={visibility.isPending} onClick={() => { visibility.reset(); setRemoving(device.id); }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7m4-7v7" /></svg></button>}
@@ -93,7 +98,7 @@ export function DevicesPage() {
               {!device.online && <p>设备离线，已提交的任务会等待重新连接；执行结果未知时请先核对。</p>}
             </>}</details>
           </>}
-        </article>)}</section> : <div className={styles.empty}><span className={styles.emptyIcon}><DeviceIcon /></span><h3>还没有设备卡片</h3><p>{canExecute ? '连接你的开发机，在这里查看设备状态与可用 Agent。' : '设备接入后，将在这里显示在线状态。'}</p>{canExecute && <button className="button secondary" type="button" onClick={() => setGuideOpen(true)}>连接第一台设备</button>}</div>}
+        </article>)}</section> : <div className={styles.empty}><span className={styles.emptyIcon}><DeviceIcon /></span><h3>还没有设备卡片</h3><p>{canExecute ? '连接你的开发机，在这里查看设备状态与可用 Agent。' : '设备接入后，将在这里显示在线状态。'}</p>{canExecute && <button className="button secondary" type="button" onClick={() => canShare ? setPickerOpen(true) : setGuideOpen(true)}>{canShare ? '从个人空间添加' : '连接第一台设备'}</button>}</div>}
         {!!hidden.length && <details className={styles.removed}><summary>已删除的卡片 · {hidden.length}</summary>{hidden.map(device => <div key={device.id}><span>{device.name}</span><button className={styles.textButton} type="button" disabled={visibility.isPending} onClick={() => visibility.mutate({ deviceId: device.id, hidden: false })}>恢复 {device.name}</button></div>)}</details>}
       </>}
     </div>

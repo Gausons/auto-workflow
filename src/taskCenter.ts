@@ -13,6 +13,7 @@ const statuses: TaskStatus[] = ['waiting', 'error', 'running', 'ready', 'review'
 const contextKeys: Array<keyof TaskContext> = ['goal', 'constraints', 'decisions', 'next', 'files'];
 type InputRecord = Record<string, unknown>;
 interface TaskCenterDatabase {
+  workspaceDevices?: { reserved(team: string, deviceId: string): boolean };
   readTaskCenter(tenantId: string): TaskCenterData;
   readTaskCenterChanges?(tenantId: string, since: number): { data: TaskCenterData; reset: boolean; changes: TaskCenterChangeIds };
   mutateTaskCenter<T>(tenantId: string, update: (data: TaskCenterData) => T): T;
@@ -100,7 +101,7 @@ export function createTaskCenter({ database, tenantId, history, environment = {}
         return { ...task, ...(corrected ? { status: 'error' as const } : {}), content: taskContent(task) };
       })) };
   }
-  async function command(rawInput: unknown, actor: Actor) {
+  async function command(rawInput: unknown, actor: Actor, registered?: (deviceId: string) => void) {
     if (!isRecord(rawInput)) throw httpError(400, '请求必须是对象');
     const input = rawInput as TaskCommand;
     if (input.context !== undefined && (!input.context || typeof input.context !== 'object' || Array.isArray(input.context))) throw httpError(400, '上下文格式无效');
@@ -211,6 +212,7 @@ export function createTaskCenter({ database, tenantId, history, environment = {}
           const id = required(input.deviceId, 80);
           if (!/^[a-zA-Z0-9_-]+$/.test(id) || id === 'local') throw httpError(400, '设备标识无效');
           let device = data.devices.find(d => d.id === id);
+          if (device?.sharedFromPersonal || (!device && database.workspaceDevices?.reserved(tenantId, id))) throw httpError(409, '此设备通过个人空间连接');
           if (device && device.owner !== actor.id) throw httpError(403, '设备属于其他账号');
           if (!Array.isArray(input.agents) || input.agents.length > 20) throw httpError(400, 'Agent 列表无效');
           const devicePatch: Device = { id, owner: actor.id, name: required(input.name, 120), agents: input.agents.map(agent => required(agent, 80)), lastSeen: now(), transport: 'connector' };
@@ -252,6 +254,7 @@ export function createTaskCenter({ database, tenantId, history, environment = {}
             if (remoteHistory && old >= 0) summary.syncedImageCount = data.sessions[old].syncedImageCount;
             if (old < 0) data.sessions.push(summary); else data.sessions[old] = summary;
           }
+          registered?.(id);
           return { deviceId: id };
         }
         case 'handoff': {

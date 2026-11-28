@@ -53,7 +53,7 @@ export function createApp({ rootDir = projectDir, environment = loadEnvironment(
   function runtimeFor(tenant: Tenant) {
     if (!runtimes.has(tenant.id)) {
       validateWorkspace(tenant, workspaceFor(tenant));
-      runtimes.set(tenant.id, createTenantRuntime({ database, tenant, environment: tenantEnv(tenant), rootDir, validateWorkspace: workspace => validateWorkspace(tenant, workspace) }));
+      runtimes.set(tenant.id, createTenantRuntime({ database, tenant, environment: tenantEnv(tenant), rootDir, deviceServicesFor: id => runtimeFor(database.getTenant(id)!).deviceServices, validateWorkspace: workspace => validateWorkspace(tenant, workspace) }));
     }
     return runtimes.get(tenant.id)!;
   }

@@ -87,6 +87,7 @@ export interface HistoryFilterDevice {
 }
 
 export interface Device {
+  sharedFromPersonal?: boolean;
   cardHidden?: boolean;
   id: string;
   name: string;
@@ -191,6 +192,8 @@ export interface ContextCoverage {
 }
 
 export interface Execution {
+  sharedDeviceMemberId?: string;
+  sharedDeviceReportDigest?: string;
   id: string;
   collaborationId?: string;
   /** A confirmed first-run failure before a native collaboration session existed. */
@@ -309,6 +312,7 @@ export interface TaskCenterData {
 
 export interface GitBranchState { repository: boolean; current: string; changes: number; branches: string[] }
 export interface GitRequest {
+  workerId?: string;
   id: string; deviceId: string; projectId: string; cwd: string; requestedBy: string;
   action: 'list' | 'switch' | 'create'; branch?: string;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'unknown';

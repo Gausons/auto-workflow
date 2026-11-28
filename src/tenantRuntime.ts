@@ -3,6 +3,7 @@ import { bugSearchDocuments, taskSearchDocuments } from './searchDocuments.js';
 import { readJson, readBytes } from './http/body.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createTaskCenterStream, taskCenterSince } from './taskCenterStream.js';
+import { sharedWorkRoute, type DeviceWorkKind } from './sharedDeviceWork.js';
 import { createDeviceControl } from './deviceControl.js';
 import path from 'node:path';
 import { taskContent } from '../shared/taskContent.js';
@@ -29,7 +30,13 @@ import type { Environment, IssueAttachment, WorkIssue } from './issueSources/typ
 
 type Database = ReturnType<typeof import('./database.js').openDatabase>;
 type JsonObject = Record<string, unknown>;
-interface Principal { user: { id: string; role: string }; tenant: Tenant; expiresAt?: unknown; scope?: string }
+interface Principal { user: { id: string; role: string }; tenant: Tenant; expiresAt?: unknown; scope?: string; connectorDeviceId?: string }
+interface DeviceServices {
+  execution: Pick<ReturnType<typeof createCodexExecution>, 'action' | 'directoryAction'>;
+  git: Pick<ReturnType<typeof createRemoteGit>, 'action'>;
+  conversations: Pick<ReturnType<typeof createConversations>, 'transfer' | 'transferObject' | 'inherited'>;
+  taskCenter: Pick<ReturnType<typeof createTaskCenter>, 'command'>;
+}
 interface AssignmentPerson { name: string; employeeId: string; responsibility: string }
 interface AssignmentRecommendation {
   status: string; source?: string; reason?: string; error?: string; model?: string; assigneeId?: string;
@@ -75,8 +82,8 @@ const independentWrites = new Set([
   '/api/task-center/git-action'
 ]);
 
-export function createTenantRuntime({ database, tenant, environment, rootDir, validateWorkspace = () => {} }: {
-  database: Database; tenant: Tenant; environment: Environment; rootDir: string; validateWorkspace?: (workspace: unknown) => void;
+export function createTenantRuntime({ database, tenant, environment, rootDir, deviceServicesFor, validateWorkspace = () => {} }: {
+  database: Database; tenant: Tenant; environment: Environment; rootDir: string; deviceServicesFor?: (id: string) => DeviceServices; validateWorkspace?: (workspace: unknown) => void;
 }) {
   const requestIdentity = new AsyncLocalStorage<Principal>();
   const mode = issueSourceId(environment);
@@ -146,6 +153,13 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     database.writeSettings(tenant.id, { assignmentPeople: normalizeAssignmentPeople(state.assignmentPeople, { fallback: [] }) });
   }
 
+  function workFor(kind: DeviceWorkKind, id: unknown, actor: { id: string }, deviceId?: string, bound = requestIdentity.getStore()?.connectorDeviceId) {
+    const route = bound === '' || (deviceId && bound && deviceId !== bound) ? undefined
+      : sharedWorkRoute(database, tenant.id, actor.id, kind, id, deviceId ?? bound);
+    if (!route) return { services: deviceServices, actor, tenantId: tenant.id };
+    if (!deviceServicesFor) throw httpError(503, '团队设备服务暂不可用');
+    return { services: deviceServicesFor(route.tenantId), actor: { id: route.memberId, sharedDeviceId: route.deviceId }, tenantId: route.tenantId };
+  }
   async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL) {
     const readDeviceCommand = async (limit?: number) => {
       const body = await readJson(req, limit);
@@ -183,7 +197,7 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
       sendJson(res, 200, chat[2] === 'messages' ? groupChats.send(chat[1], input, actor) : await groupChats.stop(chat[1], input, actor)); return;
     }
     if (url.pathname === '/api/task-center/device-state' && req.method === 'GET') {
-      sendJson(res, 200, deviceControl.snapshot(url.searchParams, requestIdentity.getStore()!.user.id)); return;
+      sendJson(res, 200, deviceControl.snapshot(url.searchParams, requestIdentity.getStore()!.user.id, requestIdentity.getStore()?.connectorDeviceId)); return;
     }
     if (url.pathname === '/api/task-center/device-updates' && req.method === 'GET') {
       await deviceControl.serve(req, res, url.searchParams, requestIdentity.getStore()!.user.id); return;
@@ -198,7 +212,10 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     if (newConversation && req.method === 'POST') { sendJson(res, 202, await conversations.create(newConversation[1], await readJson(req), requestIdentity.getStore()!.user)); return; }
     if (url.pathname === '/api/conversations' && req.method === 'GET') { sendJson(res, 200, { sessions: conversations.list() }); return; }
     const inherited = /^\/api\/conversations\/([a-f0-9]{64})\/inherited$/.exec(url.pathname);
-    if (inherited && req.method === 'GET') { sendJson(res, 200, conversations.inherited(inherited[1], url.searchParams)); return; }
+    if (inherited && req.method === 'GET') {
+      const target = workFor('sourceContext', inherited[1], requestIdentity.getStore()!.user);
+      sendJson(res, 200, target.services.conversations.inherited(inherited[1], url.searchParams)); return;
+    }
     const contextPreview = /^\/api\/conversations\/([a-f0-9]{64})\/context-preview$/.exec(url.pathname);
     if (contextPreview && req.method === 'GET') { sendJson(res, 200, conversations.contextPreview(contextPreview[1], url.searchParams)); return; }
     const transferObject = contextTransferObjectPath.exec(url.pathname);
@@ -206,9 +223,11 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
       const executionId = url.searchParams.get('executionId') || '';
       if (!/^[a-f0-9-]{36}$/.test(executionId)) throw Object.assign(new Error('执行标识无效'), { statusCode: 400 });
       const action = req.method === 'POST' ? 'upload' : 'read';
-      const result = conversations.transferObject(transferObject[1], executionId, action, requestIdentity.getStore()!.user,
+      const bytes = action === 'upload' ? await readBytes(req, 12 * 1024 * 1024) : undefined;
+      const target = workFor(action === 'upload' ? 'transferSource' : 'transferTarget', executionId, requestIdentity.getStore()!.user, url.searchParams.get('deviceId') || '');
+      const result = target.services.conversations.transferObject(transferObject[1], executionId, action, target.actor,
         { deviceId: url.searchParams.get('deviceId'), digest: transferObject[2], mimeType: url.searchParams.get('mimeType') || '',
-          ...(action === 'upload' ? { data: await readBytes(req, 12 * 1024 * 1024) } : {}) });
+          ...(bytes ? { data: bytes } : {}) });
       if (action === 'read' && 'bytes' in result) {
         res.writeHead(200, { 'Content-Type': result.mimeType, 'Content-Length': result.bytes.byteLength, 'Cache-Control': 'no-store' });
         res.end(Buffer.from(result.bytes));
@@ -219,7 +238,8 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     if (transfer && ['GET', 'POST'].includes(req.method || '')) {
       const body = req.method === 'POST' ? await readJson(req, 85_000_000) : { executionId: url.searchParams.get('executionId'), deviceId: url.searchParams.get('deviceId'), readyOnly: url.searchParams.get('readyOnly'), format: url.searchParams.get('format') };
       if (typeof body.executionId !== 'string' || !/^[a-f0-9-]{36}$/.test(body.executionId)) throw Object.assign(new Error('执行标识无效'), { statusCode: 400 });
-      sendJson(res, 200, conversations.transfer(transfer[1], body.executionId, req.method === 'POST' ? 'upload' : 'read', requestIdentity.getStore()!.user, body)); return;
+      const target = workFor(req.method === 'POST' ? 'transferSource' : 'transferTarget', body.executionId, requestIdentity.getStore()!.user, String(body.deviceId || ''));
+      sendJson(res, 200, target.services.conversations.transfer(transfer[1], body.executionId, req.method === 'POST' ? 'upload' : 'read', target.actor, body)); return;
     }
     if (url.pathname === '/api/task-center/git') {
       const actor = requestIdentity.getStore()!.user;
@@ -227,21 +247,37 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
       const input = await readJson(req);
       sendJson(res, 200, input.deviceId && input.deviceId !== 'local' ? remoteGit.submit(input, actor) : await codexExecution.git(input)); return;
     }
-    if (url.pathname === '/api/task-center/git-action' && req.method === 'POST') { sendJson(res, 200, remoteGit.action(await readDeviceCommand(), requestIdentity.getStore()!.user)); return; }
+    if (url.pathname === '/api/task-center/git-action' && req.method === 'POST') {
+      const input = await readDeviceCommand(), target = workFor('git', input.requestId, requestIdentity.getStore()!.user);
+      sendJson(res, 200, target.services.git.action(input, target.actor)); return;
+    }
     if (url.pathname === '/api/task-center/directory-picker') {
       const actor = requestIdentity.getStore()!.user;
       sendJson(res, 200, req.method === 'GET' ? codexExecution.directoryStatus({ requestId: url.searchParams.get('requestId') || undefined }, actor) : await codexExecution.pickDirectory(await readJson(req), actor)); return;
     }
-    if (url.pathname === '/api/task-center/directory-action') { sendJson(res, 200, codexExecution.directoryAction(await readDeviceCommand(), requestIdentity.getStore()!.user)); return; }
+    if (url.pathname === '/api/task-center/directory-action') {
+      const input = await readDeviceCommand(), target = workFor('directory', input.requestId, requestIdentity.getStore()!.user);
+      sendJson(res, 200, target.services.execution.directoryAction(input, target.actor)); return;
+    }
     if (url.pathname === '/api/task-center/codex') { sendJson(res, 200, await codexExecution.targets({ visibleOnly: true })); return; }
     if (url.pathname === '/api/task-center/execute') { sendJson(res, 202, await codexExecution.execute(await readJson(req, 15_000_000), requestIdentity.getStore()!.user)); return; }
-    if (url.pathname === '/api/task-center/execution-action') { sendJson(res, 200, await codexExecution.action(await readDeviceCommand(8_000_000), requestIdentity.getStore()!.user)); return; }
+    if (url.pathname === '/api/task-center/execution-action') {
+      const input = await readDeviceCommand(8_000_000), actor = requestIdentity.getStore()!.user;
+      const target = connectorActionAllowed(url.pathname, input.action) ? workFor(input.action === 'report' ? 'report' : 'execution', input.executionId, actor) : { services: deviceServices, actor };
+      sendJson(res, 200, await target.services.execution.action(input, target.actor)); return;
+    }
     if (url.pathname === '/api/task-center') {
       const principal = requestIdentity.getStore()!;
       if (req.method === 'GET' && principal.scope === 'connector') {
-        sendJson(res, 200, deviceControl.syncSnapshot(principal.user.id)); return;
+        sendJson(res, 200, deviceControl.syncSnapshot(principal.user.id, principal.connectorDeviceId)); return;
       }
-      sendJson(res, 200, req.method === 'GET' ? await taskCenter.snapshot() : await taskCenter.command(await readDeviceCommand(), principal.user)); return;
+      if (req.method === 'GET') { sendJson(res, 200, await taskCenter.snapshot()); return; }
+      const input = await readDeviceCommand();
+      const target = input.action === 'ack' && input.status === 'received' ? workFor('handoff', input.handoffId, principal.user) : { services: deviceServices, actor: principal.user };
+      if (input.action === 'heartbeat' && principal.connectorDeviceId && principal.connectorDeviceId !== input.deviceId) throw httpError(403, '连接器凭据属于其他设备');
+      const bind = input.action === 'heartbeat' && principal.connectorDeviceId === ''
+        ? (id: string) => database.bindConnectorDevice((req.headers.authorization || '').slice(7), id) : undefined;
+      sendJson(res, 200, await target.services.taskCenter.command(input, target.actor, bind)); return;
     }
     if (req.method === 'POST' && url.pathname === '/api/task-center/history-images') {
       sendJson(res, 200, historyImages.upload(await readJson(req, 17_000_000), requestIdentity.getStore()!.user)); return;
@@ -733,6 +769,7 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
   const conversations = createConversations({ database, tenantId: tenant.id, history: agentHistory, delivery: sessionDelivery, execution: codexExecution, environment,
     summarize, vectorSearch,
     contextRoot: path.join(rootDir, '.workflow-data', 'context', createHash('sha256').update(tenant.id).digest('hex')) });
+  const deviceServices: DeviceServices = { execution: codexExecution, git: remoteGit, conversations, taskCenter };
   const groupChats = createGroupChats({ database, tenantId: tenant.id, execution: codexExecution });
   const collaborations = createCollaborations({ database, tenantId: tenant.id, execution: codexExecution });
   let groupChatPending: Promise<void> | undefined;
@@ -745,22 +782,24 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
   const conversationTimer = setInterval(() => { void conversations.preparePending().catch(() => {}); }, 1500);
   conversationTimer.unref();
   return {
+    deviceServices,
     workspace: () => state.config.codexWorkspaceDir,
-    subscribeRealtime(input: RealtimeSubscription, userId: string, send: (event: RealtimeEvent) => void, onError: (error: unknown) => void) {
+    subscribeRealtime(input: RealtimeSubscription, userId: string, send: (event: RealtimeEvent) => void, onError: (error: unknown) => void, boundDevice?: string) {
       if (input.channel === 'task-center') return taskCenterStream.subscribe(input.since, update => send({ type: 'task-center', ...update }));
-      return deviceControl.subscribe(new URLSearchParams({ deviceId: input.deviceId }), userId, version => send({ type: 'device-control', version }), onError);
+      return deviceControl.subscribe(new URLSearchParams({ deviceId: input.deviceId }), userId, version => send({ type: 'device-control', version }), onError, boundDevice);
     },
     async reportRealtime(deviceId: string, input: ExecutionFeedback, principal: Principal) {
       let status = 200;
+      const target = workFor('report', input.executionId, principal.user, deviceId, principal.connectorDeviceId);
       try {
-        const job = database.readTaskCenter(tenant.id).executions?.find(item => item.id === input.executionId);
+        const job = database.readTaskCenter(target.tenantId).executions?.find(item => item.id === input.executionId);
         if (!job || job.deviceId !== deviceId) throw httpError(403, '执行不属于此设备');
-        await codexExecution.action({ ...input, action: 'report', report: input.report as Parameters<typeof codexExecution.action>[0]['report'] }, principal.user);
+        await target.services.execution.action({ ...input, action: 'report', report: input.report as Parameters<typeof codexExecution.action>[0]['report'] }, target.actor);
       } catch (error) {
         status = error instanceof Error && 'statusCode' in error && typeof error.statusCode === 'number' ? error.statusCode : 500;
         throw error;
       } finally {
-        database.audit(tenant.id, principal.user, 'api.request', '/api/task-center/execution-action', { method: 'WEBSOCKET', status });
+        database.audit(target.tenantId, target.actor, 'api.request', '/api/task-center/execution-action', { method: 'WEBSOCKET', status });
       }
     },
     closeStreams: () => { taskCenterStream.close(); deviceControl.close(); modelConnectionProbe?.abort(); },

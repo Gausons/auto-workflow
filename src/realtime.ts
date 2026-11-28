@@ -89,7 +89,7 @@ export function createRealtime(server: Server, database: Database, runtimeFor: (
             }
             listener = runtimeFor(principal.tenant).subscribeRealtime(subscription, principal.user.id, (event: RealtimeEvent) => {
               try { authorize(); send(event); } catch (error) { fail(error); }
-            }, fail);
+            }, fail, principal.connectorDeviceId);
             clearTimeout(authTimeout); send({ type: 'ready', channel: subscription.channel }); return;
           }
           const actor = authorize();

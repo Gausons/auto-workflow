@@ -5,10 +5,11 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { normalizeIssueState } from './issueStore.js';
+import { createWorkspaceDevices } from './workspaceDevices.js';
 import { createIdentityStore } from './identity.js';
 import type { IssueState } from './issueStore.js';
 import type { WorkIssue } from './issueSources/types.js';
-import type { Execution, HistoryMessage, RemoteHistory, Session, TaskCenterData } from '../shared/taskTypes.js';
+import type { Device, Execution, HistoryMessage, RemoteHistory, Session, TaskCenterData } from '../shared/taskTypes.js';
 import type { SessionImage, SessionImageInfo, SessionImageList } from '../shared/historyImageTypes.js';
 import { httpError } from './rbac.js';
 import { FULL_HISTORY_BYTES, validateRemoteHistory } from './remoteHistory.js';
@@ -46,7 +47,23 @@ export function openDatabase(environment: Record<string, string | undefined>) {
   const db: Connection = openPostgres(postgresConfig(environment));
   const taskCenterListeners = new Map<string, Set<(version: number, changes: TaskCenterChangeIds) => void>>();
   let pendingHistoryIds: Set<string> | null = null;
-  const readTaskCenter = (tenantId: string) => parseTaskCenter((db.prepare('SELECT payload FROM task_centers WHERE tenant_id = ?').get(tenantId) as { payload?: string } | undefined)?.payload);
+  const readStoredCenter = (tenantId: string) => parseTaskCenter((db.prepare('SELECT payload FROM task_centers WHERE tenant_id = ?').get(tenantId) as { payload?: string } | undefined)?.payload);
+
+  function readDevices(tenantId: string): Device[] {
+    const data = readStoredCenter(tenantId);
+    return data.devices.map(device => ({ ...device, cardHidden: data.hiddenDeviceIds?.includes(device.id) || false }));
+  }
+  const identity = createIdentityStore(db, transaction, userId => {
+    // Runs inside the role/disable transaction. Streams also reconcile these
+    // version changes from PostgreSQL when membership is updated by another server.
+    for (const [team, devices] of workspaceDevices.revokeForUser(userId)) saveChange(team, readStoredCenter(team), { devices });
+  });
+  const workspaceDevices = createWorkspaceDevices(db, readDevices, mutateTaskCenter, identity.audit);
+  function readTaskCenter(tenantId: string) {
+    const data = readStoredCenter(tenantId);
+    data.devices.push(...workspaceDevices.devices(tenantId));
+    return data;
+  }
 
   function transaction<T>(fn: () => T): T {
     db.exec('BEGIN');
@@ -137,10 +154,43 @@ export function openDatabase(environment: Record<string, string | undefined>) {
     });
     return { skipped: false, users: snapshots.size };
   }
+  function saveChange(tenantId: string, data: TaskCenterData, changes: TaskCenterChangeIds) {
+    const version = data.syncVersion = (data.syncVersion || 0) + 1;
+    db.prepare('INSERT INTO task_centers VALUES (?, ?) ON CONFLICT(tenant_id) DO UPDATE SET payload = excluded.payload')
+      .run(tenantId, JSON.stringify({ ...data, devices: data.devices.filter(device => !device.sharedFromPersonal) }));
+    db.prepare('INSERT INTO task_center_changes (tenant_id, version, changes) VALUES (?, ?, ?::jsonb)').run(tenantId, version, JSON.stringify(changes));
+    db.prepare('DELETE FROM task_center_changes WHERE tenant_id = ? AND version <= ?').run(tenantId, version - taskCenterChangeRetention);
+    return { tenantId, version, changes };
+  }
+  function mutateTaskCenter<T>(tenantId: string, update: (data: TaskCenterData) => T): T {
+    const { result, events } = transaction(() => {
+      const data = readTaskCenter(tenantId), before = taskCenterState(data), historyIds = new Set<string>();
+      pendingHistoryIds = historyIds;
+      let result: T;
+      try { result = update(data); } finally { pendingHistoryIds = null; }
+      const changes = changedTaskCenterIds(before, data, historyIds);
+      const events = [saveChange(tenantId, data, changes)];
+      // Publish device metadata and the team delta in the heartbeat transaction.
+      const teams = new Map<string, string[]>();
+      for (const id of changes.devices || []) {
+        const device = data.devices.find(d => d.id === id);
+        if (!device?.owner || device.sharedFromPersonal) continue;
+        for (const share of workspaceDevices.destinations(tenantId, device.owner, id)) {
+          workspaceDevices.updateMetadata(share, device);
+          const ids = teams.get(share.tenantId) || [];
+          ids.push(id); teams.set(share.tenantId, ids);
+        }
+      }
+      for (const [team, devices] of teams) events.push(saveChange(team, readStoredCenter(team), { devices }));
+      return { result, events };
+    });
+    for (const event of events) for (const listener of taskCenterListeners.get(event.tenantId) || []) listener(event.version, event.changes);
+    return result;
+  }
   return {
     searchVectors: createSearchVectorStore(db, transaction),
     ping: () => { db.prepare('SELECT 1 FROM tenants LIMIT 1').get(); },
-    ...createIdentityStore(db, transaction),
+    ...identity,
     readSessionContext: (tenantId: string, id: string): SessionContext | null => {
       const row = db.prepare('SELECT payload FROM session_contexts WHERE tenant_id = ? AND id = ?').get(tenantId, id);
       return row ? JSON.parse(String(row.payload)) as SessionContext : null;
@@ -380,21 +430,18 @@ export function openDatabase(environment: Record<string, string | undefined>) {
       }
       return { data, version, reset: false, changes };
     }),
-    mutateTaskCenter: <T>(tenantId: string, update: (data: TaskCenterData) => T): T => {
-      const committed = transaction(() => {
-        const data = readTaskCenter(tenantId), before = taskCenterState(data), historyIds = new Set<string>();
-        pendingHistoryIds = historyIds;
-        let result: T;
-        try { result = update(data); } finally { pendingHistoryIds = null; }
-        data.syncVersion = (data.syncVersion || 0) + 1;
-        const changes = changedTaskCenterIds(before, data, historyIds);
-        db.prepare('INSERT INTO task_centers VALUES (?, ?) ON CONFLICT(tenant_id) DO UPDATE SET payload = excluded.payload').run(tenantId, JSON.stringify(data));
-        db.prepare('INSERT INTO task_center_changes (tenant_id, version, changes) VALUES (?, ?, ?::jsonb)').run(tenantId, data.syncVersion, JSON.stringify(changes));
-        db.prepare('DELETE FROM task_center_changes WHERE tenant_id = ? AND version <= ?').run(tenantId, data.syncVersion - taskCenterChangeRetention);
-        return { result, version: data.syncVersion, changes };
+    mutateTaskCenter, workspaceDevices,
+    bindConnectorDevice(token: string, deviceId: string) {
+      const key = hashToken(token);
+      db.prepare('UPDATE device_connector_sessions SET device_id = ? WHERE token_hash = ? AND device_id IS NULL').run(deviceId, key);
+      if (db.prepare('SELECT device_id FROM device_connector_sessions WHERE token_hash = ?').get(key)?.device_id !== deviceId) throw httpError(403, '连接器凭据属于其他设备');
+    },
+    otherDeviceActivity(tenantId: string, device: Device) {
+      return workspaceDevices.otherSpaces(tenantId, device).map(id => {
+        const data = readStoredCenter(id);
+        return { executions: (data.executions || []).filter(job => job.deviceId === device.id),
+          gitRequests: (data.gitRequests || []).filter(r => r.deviceId === device.id) };
       });
-      for (const listener of taskCenterListeners.get(tenantId) || []) listener(committed.version, committed.changes);
-      return committed.result;
     },
     subscribeTaskCenter: (tenantId: string, listener: (version: number, changes: TaskCenterChangeIds) => void) => {
       let listeners = taskCenterListeners.get(tenantId);

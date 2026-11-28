@@ -12,9 +12,30 @@ test('team members create a multi-agent discussion, see ordered replies, and sto
   const switched = await request.post('/api/workspaces/switch', { headers: { Authorization: `Bearer ${account.token}` }, data: { tenantId: teamId } });
   const { token } = await switched.json() as { token: string };
   const headers = { Authorization: `Bearer ${token}` };
-  const heartbeat = await request.post('/api/task-center', { headers, data: { action: 'heartbeat', deviceId: 'chat-fixture', name: '测试研发设备', agents: ['codex', 'claude'], sessions: [], codexProjects: ['codex', 'claude'].map(agent => ({ id: agent, name: `${agent} 项目`, agent, protocol: 'acp', cwd: '/fixture/repo' })) } });
-  expect(heartbeat.ok()).toBeTruthy();
-  await page.goto('/space'); await page.evaluate(value => sessionStorage.setItem('bugflow.sessionToken', value), token); await page.reload();
+  const deviceHeaders = { Authorization: `Bearer ${account.token}` };
+  const devices = [
+    { deviceId: 'chat-fixture', name: '测试研发设备', agent: 'codex' },
+    { deviceId: 'review-fixture', name: '测试评审设备', agent: 'claude' }
+  ];
+  for (const { deviceId, name, agent } of devices) {
+    const heartbeat = await request.post('/api/task-center', { headers: deviceHeaders, data: {
+      action: 'heartbeat', deviceId, name, agents: [agent], sessions: [],
+      codexProjects: [{ id: agent, name: `${agent} 项目`, agent, protocol: 'acp', cwd: '/fixture/repo' }]
+    } });
+    expect(heartbeat.ok()).toBeTruthy();
+  }
+  const existingDevice = { action: 'heartbeat', deviceId: 'existing-team-device', name: '已连接的设备', agents: [], sessions: [] };
+  for (const auth of [deviceHeaders, headers]) {
+    expect((await request.post('/api/task-center', { headers: auth, data: existingDevice })).ok()).toBeTruthy();
+  }
+  await page.goto('/devices'); await page.evaluate(value => sessionStorage.setItem('bugflow.sessionToken', value), token); await page.reload();
+  await page.getByRole('button', { name: '添加我的设备', exact: true }).click();
+  await expect(page.getByRole('listitem').filter({ hasText: existingDevice.name })).toContainText('已直接连接到团队');
+  for (const { name } of devices) {
+    await page.getByRole('button', { name: `添加 ${name}`, exact: true }).click();
+    await expect(page.getByRole('article', { name })).toBeVisible();
+  }
+  await page.getByRole('link', { name: '协作空间', exact: true }).click();
   await page.getByRole('button', { name: '群组聊天室', exact: true }).click();
   await page.getByRole('button', { name: '＋ 新建聊天室' }).click();
   await page.getByLabel('聊天室名称').fill('发布方案评审');
@@ -25,11 +46,11 @@ test('team members create a multi-agent discussion, see ordered replies, and sto
   const directoryResponse = page.waitForResponse(response => response.url().endsWith('/api/task-center/directory-picker') && response.request().method() === 'POST');
   await participants.nth(0).getByRole('button', { name: '选择目录', exact: true }).click();
   const { requestId: directoryRequestId } = await (await directoryResponse).json() as { requestId: string };
-  expect((await request.post('/api/task-center/directory-action', { headers, data: { action: 'claim', requestId: directoryRequestId } })).ok()).toBeTruthy();
-  expect((await request.post('/api/task-center/directory-action', { headers, data: { action: 'report', requestId: directoryRequestId, cwd: '/fixture/selected-project' } })).ok()).toBeTruthy();
+  expect((await request.post('/api/task-center/directory-action', { headers: deviceHeaders, data: { action: 'claim', requestId: directoryRequestId } })).ok()).toBeTruthy();
+  expect((await request.post('/api/task-center/directory-action', { headers: deviceHeaders, data: { action: 'report', requestId: directoryRequestId, cwd: '/fixture/selected-project' } })).ok()).toBeTruthy();
   await expect(participants.nth(0).getByLabel('工作目录')).toHaveValue('/fixture/selected-project');
   await participants.nth(1).getByLabel('显示名称').fill('安全评审员');
-  await participants.nth(1).getByLabel('执行目标').selectOption(JSON.stringify(['chat-fixture', 'claude']));
+  await participants.nth(1).getByLabel('执行目标').selectOption(JSON.stringify(['review-fixture', 'claude']));
   await participants.nth(1).getByLabel('工作目录').fill('/fixture/repo/review');
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 1100 });
@@ -48,14 +69,15 @@ test('team members create a multi-agent discussion, see ordered replies, and sto
   for (const [index, output] of ['建议先灰度发布并准备回滚方案。', '同意灰度，发布前补充权限隔离检查。'].entries()) {
     let executionId = '';
     await expect.poll(async () => { executionId = (await detail()).messages[index + 1].executionId || ''; return Boolean(executionId); }).toBe(true);
-    const claimed = await request.post('/api/task-center/execution-action', { headers, data: { action: 'claim', executionId } });
+    const claimed = await request.post('/api/task-center/execution-action', { headers: deviceHeaders, data: { action: 'claim', executionId } });
     expect(claimed.ok()).toBeTruthy();
     const job = (await claimed.json() as { job: Execution }).job;
+    expect(job.deviceId).toBe(devices[index].deviceId);
     expect(job.agent).toBe(index ? 'claude' : 'codex');
     expect(job.cwd).toBe(index ? '/fixture/repo/review' : '/fixture/selected-project');
     if (!index) expect(job.directoryRequestId).toBe(directoryRequestId);
     if (index) expect(job.prompt).toContain('建议先灰度发布并准备回滚方案。');
-    const reported = await request.post('/api/task-center/execution-action', { headers, data: { action: 'report', executionId, report: { status: 'completed', output, message: '测试 Agent 回复完成', sessionId: `group-chat-fixture-${index}` } } });
+    const reported = await request.post('/api/task-center/execution-action', { headers: deviceHeaders, data: { action: 'report', executionId, report: { status: 'completed', output, message: '测试 Agent 回复完成', sessionId: `group-chat-fixture-${index}` } } });
     expect(reported.ok()).toBeTruthy();
     await expect(page.getByText(output, { exact: true })).toBeVisible();
   }
