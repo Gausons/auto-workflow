@@ -4,6 +4,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { agentDisplayName } from '../shared/agentLabels.js';
 import { taskContent } from '../shared/taskContent.js';
+import { isCollaborationRunUnresolved } from '../shared/collaborationTypes.js';
 import type { AgentProject, Execution, HistoryFilterDevice, HistoryMessage, RemoteContextHandoff, Session, TaskCenterData } from '../shared/taskTypes.js';
 import { cleanContextEntries, contextPrompt, freezeContext, readContext, type ContextDelivery, type ContextEntry, type SessionContext } from './contextCompiler.js';
 import type { SummaryResult } from './contextModelSummary.js';
@@ -446,20 +447,24 @@ export function createConversations({ database, tenantId, history, delivery, exe
           if (duplicate.createFingerprint !== fingerprint) throw httpError(409, '发送标识已用于另一请求');
           return { sessionId: duplicate.id, taskId: duplicate.taskId, duplicate: true };
         }
-        let task = data.tasks.find(candidate => candidate.sessionIds.some(sessionId => origin.aliases.includes(sessionId)));
+        const aliases = new Set([...origin.aliases, ...data.sessions.filter(session => sameNativeSession(session, origin.session)).map(session => session.id)]);
+        const assignment = data.tasks.find(candidate => candidate.collaborationId && candidate.sessionIds.some(sessionId => aliases.has(sessionId)));
+        let task = assignment || data.tasks.find(candidate => candidate.sessionIds.some(sessionId => origin.aliases.includes(sessionId)));
         if (task) {
           const taskId = task.id;
           if (data.executions.some(job => job.taskId === taskId && job.status === 'unknown')) throw httpError(409, '来源执行结果待核对，请先核对原会话');
         }
         const waiting = task && (busy(data, task.id) || sourceRevisions.get(task.id) !== task.revision);
-        if (!task) {
-          task = { id: randomUUID(), title: origin.session.title, content: origin.session.title, status: 'ready', revision: 1, contextVersion: 1, sessionIds: [id], events: [], createdAt: now(), updatedAt: now() };
-          data.tasks.push(task);
-        } else {
+        if (assignment && (waiting || data.executions.some(job => job.taskId === assignment.id && isCollaborationRunUnresolved(job)))) throw httpError(409, '请等待原分工执行结束并核对结果后，再带上下文新开会话');
+        if (task) {
           const taskId = task.id;
           snapshot = freezeContext([{ role: 'reference', text: String(clean({ text: `任务状态：${task.status}；任务版本：${task.revision}；上下文版本：${task.contextVersion}\n${taskContent(task)}` })?.text || ''), source: `task:${taskId}` }, ...snapshot.entries.filter(entry => entry.source !== `task:${taskId}`)], snapshot.sources, snapshot.partial);
         }
-        if (!task) throw httpError(409, '会话关联任务不存在');
+        if (!task || assignment) {
+          task = { id: randomUUID(), title: origin.session.title, content: origin.session.title, status: 'ready', revision: 1, contextVersion: 1,
+            sessionIds: assignment ? [] : [id], ...(assignment ? { parentTaskId: assignment.id } : {}), events: [], createdAt: now(), updatedAt: now() };
+          data.tasks.push(task);
+        }
         database.saveSessionContext(tenantId, snapshot);
         const sessionId = createHash('sha256').update(randomUUID()).digest('hex');
         data.sessions.push({ id: sessionId, source: 'conversation', managed: true, taskId: task.id, sourceSessionId: id, contextSourceTitle: origin.session.title, contextSourceDeviceId, contextId: snapshot.id, createRequestId: requestId, createFingerprint: fingerprint,

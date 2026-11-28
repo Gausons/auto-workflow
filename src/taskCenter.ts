@@ -3,6 +3,7 @@ import { taskContent, taskTitle } from '../shared/taskContent.js';
 import { hostname } from 'node:os';
 import { localExecutionEnabled } from './localExecution.js';
 import { executionSession, nativeSessionKey, sameNativeSession, sessionExecutionResult, executionResult } from './sessionIdentity.js';
+import { findCollaboration, requireFinishedCollaborationRuns } from './collaborationValidation.js';
 import { httpError } from './rbac.js';
 import { validateRemoteHistory, remoteHistorySummary } from './remoteHistory.js';
 import { sortTasks, taskCenterDelta, type TaskCenterChangeIds } from '../shared/taskCenterSync.js';
@@ -90,7 +91,9 @@ export function createTaskCenter({ database, tenantId, history, environment = {}
       return { ...s, historyId: imported?.historyId || imported?.id };
     })].map(s => sessionExecutionResult(s, data));
     const executions = (data.executions || []).map(executionResult);
-    return { ...data, devices: [local.device, ...data.devices].map(d => ({ ...d, online: online(d), cardHidden: data.hiddenDeviceIds?.includes(d.id) || false })),
+    // Directed handoff documents and request metadata are served by the team collaboration API.
+    const { collaborations: _collaborations, ...publicData } = data;
+    return { ...publicData, devices: [local.device, ...data.devices].map(d => ({ ...d, online: online(d), cardHidden: data.hiddenDeviceIds?.includes(d.id) || false })),
       executions, sessions: sessions.map(remoteHistorySummary), tasks: sortTasks(data.tasks.map(task => {
         const latest = executions.filter(job => job.taskId === task.id).at(-1);
         const corrected = latest?.status === 'failed' && data.executions?.find(job => job.id === latest.id)?.status === 'completed' && task.status === 'review';
@@ -145,7 +148,27 @@ export function createTaskCenter({ database, tenantId, history, environment = {}
           if (data.executions?.some(j => j.taskId === task.id && ['queued', 'launching', 'running', 'waiting', 'unknown'].includes(j.status))) throw httpError(409, 'Agent 正在执行或结果待核对，请先处理执行记录');
           const previousContent = taskContent(task);
           const content = input.content !== undefined ? required(input.content, 64000) : undefined;
-          task.title = content !== undefined ? taskTitle(content) : required(input.title ?? task.title, 120);
+          if (task.collaborationId) {
+            const collaboration = findCollaboration(data, task.collaborationId);
+            if (input.status === 'completed') requireFinishedCollaborationRuns(data, collaboration, task.id);
+            if (input.context !== undefined || (input.title !== undefined && input.title !== task.title)) throw httpError(400, '请通过任务正文更新协作目标或分工职责');
+            const contentChanged = content !== undefined && content !== previousContent;
+            if (contentChanged) {
+              if (collaboration.parentTaskId === task.id) {
+                collaboration.goal = required(content, 8000);
+              } else {
+                const part = collaboration.participants.find(item => item.taskId === task.id);
+                if (!part) throw httpError(409, '分工任务的归属无法核对');
+                part.responsibility = required(content, 2000);
+              }
+            }
+            if (contentChanged || (input.status === 'completed') !== (task.status === 'completed')) {
+              collaboration.revision++;
+              collaboration.updatedAt = now();
+            }
+          } else {
+            task.title = content !== undefined ? taskTitle(content) : required(input.title ?? task.title, 120);
+          }
           if (!statuses.includes(input.status as TaskStatus)) throw httpError(400, '任务状态无效');
           if (data.handoffs.some(h => h.taskId === task.id && h.mode === 'continue' && ['pending', 'received'].includes(h.status))) throw httpError(409, '请先完成或取消当前交接，再修改任务');
           if (content !== undefined) {
@@ -192,7 +215,11 @@ export function createTaskCenter({ database, tenantId, history, environment = {}
           if (!Array.isArray(input.agents) || input.agents.length > 20) throw httpError(400, 'Agent 列表无效');
           const devicePatch: Device = { id, owner: actor.id, name: required(input.name, 120), agents: input.agents.map(agent => required(agent, 80)), lastSeen: now(), transport: 'connector' };
           if (!device) { device = devicePatch; data.devices.push(device); } else Object.assign(device, devicePatch);
-          device.capabilities = { resumeCodex: inputRecord(input.capabilities).resumeCodex === true, gitBranches: inputRecord(input.capabilities).gitBranches === true, taskAttachments: inputRecord(input.capabilities).taskAttachments === true };
+          const capabilities = inputRecord(input.capabilities);
+          device.capabilities = {
+            resumeCodex: capabilities.resumeCodex === true, gitBranches: capabilities.gitBranches === true,
+            taskAttachments: capabilities.taskAttachments === true, collaborationSessions: capabilities.collaborationSessions === true
+          };
           if (input.codexProjects !== undefined) {
             if (!Array.isArray(input.codexProjects) || input.codexProjects.length > 100) throw httpError(400, 'Codex 项目列表无效');
             device.codexProjects = input.codexProjects.map(value => { const p = inputRecord(value); return ({
@@ -229,6 +256,7 @@ export function createTaskCenter({ database, tenantId, history, environment = {}
         }
         case 'handoff': {
           const task = taskFor(); editable(task);
+          if (task.collaborationId) throw httpError(409, '请进入协作空间，通过交接文档向其他分工传递信息');
           if (!['continue', 'branch', 'reference'].includes(input.mode || '')) throw httpError(400, '交接方式无效');
           const mode = input.mode as HandoffMode;
           const device = find(allDevices, input.deviceId), agent = required(input.agent, 80);

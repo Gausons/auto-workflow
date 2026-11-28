@@ -90,6 +90,7 @@ const timestamp = () => new Date().toISOString();
 const writerConflictMessage = '原会话被另一个 Codex 连接占用，消息尚未发送。客户端即使已结束本轮也可能继续持有连接；请在客户端继续，或由占用端释放连接后重试。';
 const active = new Set(['queued', 'launching', 'running', 'waiting', 'unknown']);
 const inside = (root: string, target: string) => target === root || target.startsWith(root + path.sep);
+const gitRoot = async (cwd: string) => (await promisify(execFile)('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], { timeout: 10000 })).stdout.trim();
 export async function openCodexThread(threadId: string) {
   if (!/^[a-f0-9-]{36}$/.test(threadId)) throw new Error('Codex 会话标识无效');
   const url = `codex://threads/${threadId}`;
@@ -399,6 +400,8 @@ function frequentDirectories(data: TaskCenterData, deviceId: string, fallback = 
 export function createCodexExecution({ database, tenantId, workspace, history, attachmentRoot, environment = {}, runnerFactory, directoryPicker = pickNativeDirectory }: CreateCodexExecutionOptions) {
   let closing = false;
   let localProjectCache: { at: number; projects: TargetProject[] } = { at: 0, projects: [] };
+  const localBranchChanges = new Map<string, ReturnType<typeof switchGitBranch>>();
+  const localControls = new Set<string>();
   const update = (job: RunnerJob) => {
     if (!closing) database.mutateTaskCenter(tenantId, (data) => recordExecution(data, job));
   };
@@ -431,20 +434,40 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
     localProjectCache = { at: Date.now(), projects };
     return projects;
   };
+  async function startLocal(job: RunnerJob) {
+    if (localBranchChanges.size) {
+      const repo = await gitRoot(job.cwd).catch(() => '');
+      await localBranchChanges.get(repo)?.catch(() => {});
+      if (closing) return;
+      const saved = database.readTaskCenter(tenantId).executions.find(item => item.id === job.id);
+      if (saved?.status !== 'queued' && saved?.status !== 'launching') return;
+    }
+    if (!closing) await runner.start!(job);
+  }
   return {
     launch(job: RunnerJob) {
       if (job.deviceId === 'local' && !canExecuteLocally) {
         const current = database.readTaskCenter(tenantId).executions.find(item => item.id === job.id) || job;
         update({ ...current, status: current.status === 'queued' ? 'failed' : 'unknown', message: '此设备仅运行工作台，未启动 Agent；已有执行结果请在原设备核对', updatedAt: timestamp() }); return;
       }
-      if (job.deviceId === 'local') void Promise.resolve().then(() => runner.start!(job)).catch((error: unknown) => update({ ...(database.readTaskCenter(tenantId).executions.find((item) => item.id === job.id) || job), status: 'unknown', message: `启动结果待核对：${asError(error).message}`, updatedAt: timestamp() }));
+      if (job.deviceId === 'local' && job.collaborationId) {
+        const claimed = database.mutateTaskCenter(tenantId, data => {
+          const saved = data.executions.find(item => item.id === job.id);
+          if (!saved || saved.status !== 'queued') return;
+          recordExecution(data, { ...saved, status: 'launching', message: '工作台正在启动分工 Agent', updatedAt: timestamp() });
+          return structuredClone(saved);
+        });
+        if (!claimed) return;
+        job = claimed;
+      }
+      if (job.deviceId === 'local') void Promise.resolve().then(() => startLocal(job)).catch((error: unknown) => update({ ...(database.readTaskCenter(tenantId).executions.find((item) => item.id === job.id) || job), status: 'unknown', message: `启动结果待核对：${asError(error).message}`, updatedAt: timestamp() }));
     },
     async targets({ visibleOnly = false } = {}) {
       let localError: string | null = null, projects: TargetProject[] = [];
       try { projects = await localProjects(true); }
       catch (error: unknown) { localProjectCache = { at: Date.now(), projects: [] }; localError = asError(error).message; }
       const data = database.readTaskCenter(tenantId), devices = data.devices;
-      for (const d of devices) for (const p of d.codexProjects || []) projects.push({ ...p, deviceId: d.id, deviceName: d.name, online: Date.now() - Date.parse(d.lastSeen) < 90000, commonDirectories: [], gitBranches: d.capabilities?.gitBranches === true, taskAttachments: d.capabilities?.taskAttachments === true });
+      for (const d of devices) for (const p of d.codexProjects || []) projects.push({ ...p, deviceId: d.id, deviceName: d.name, online: Date.now() - Date.parse(d.lastSeen) < 90000, commonDirectories: [], gitBranches: d.capabilities?.gitBranches === true, taskAttachments: d.capabilities?.taskAttachments === true, collaborationSessions: d.capabilities?.collaborationSessions === true });
       const hidden = new Set(visibleOnly ? data.hiddenDeviceIds : []);
       projects = projects.filter(project => !hidden.has(project.deviceId))
         .map(project => ({ ...project, commonDirectories: frequentDirectories(data, project.deviceId, project.cwd) }));
@@ -459,11 +482,16 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
       try { cwd = await realpath(input.cwd?.trim() || project.cwd); } catch { throw httpError(400, '工作目录不存在'); }
       if (input.action === 'list') return gitBranches(cwd);
       if (!['switch', 'create'].includes(input.action || '')) throw httpError(400, '分支操作无效');
-      const repo = await promisify(execFile)('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], { timeout: 10000 }).then(r => r.stdout.trim());
-      const activeJobs = (database.readTaskCenter(tenantId).executions || []).filter(job => job.deviceId === 'local' && (active.has(job.status) || job.releaseStatus === 'releasing'));
-      const activeRepos = await Promise.all(activeJobs.map(job => promisify(execFile)('git', ['-C', job.cwd, 'rev-parse', '--show-toplevel'], { timeout: 10000 }).then(r => r.stdout.trim()).catch(() => '')));
-      if (activeRepos.includes(repo)) throw httpError(409, '此仓库有任务正在执行，请结束后再切换分支');
-      return switchGitBranch(cwd, input.branch, input.action === 'create');
+      const repo = await gitRoot(cwd);
+      if (localBranchChanges.has(repo)) throw httpError(409, '此仓库正在处理分支操作，请稍后重试');
+      const change = (async () => {
+        const activeJobs = database.readTaskCenter(tenantId).executions.filter(job => job.deviceId === 'local' && (active.has(job.status) || job.releaseStatus === 'releasing'));
+        const activeRepos = await Promise.all(activeJobs.map(job => gitRoot(job.cwd).catch(() => '')));
+        if (activeRepos.includes(repo)) throw httpError(409, '此仓库有任务正在执行，请结束后再切换分支');
+        return switchGitBranch(cwd, input.branch, input.action === 'create');
+      })();
+      localBranchChanges.set(repo, change);
+      try { return await change; } finally { localBranchChanges.delete(repo); }
     },
     async pickDirectory(input: DirectoryInput, actor: Actor = {}) {
       const deviceId = String(input?.deviceId || 'local');
@@ -530,6 +558,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
       try { job = database.mutateTaskCenter(tenantId, (data) => {
         const task = data.tasks.find((item) => item.id === input.taskId);
         if (!task) throw httpError(404, '任务不存在');
+        if (task.collaborationId) throw httpError(409, '请进入协作空间，选择对应分工启动执行');
         const selection = deviceId === 'local' ? undefined : selectedRemoteDirectory(data.directoryRequests, deviceId, actor.id, cwd);
         if (deviceId !== 'local' && !insideRemoteDirectory(project.cwd, cwd) && !selection) throw httpError(403, '请先在目标设备使用“选择目录”授权此工作目录');
         if (task.revision !== input.revision) throw httpError(409, '任务已更新，请刷新后执行');
@@ -546,7 +575,8 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
         return structuredClone(job);
       });
       } catch (error) { if (saved.directory) await rm(saved.directory, { recursive: true, force: true }); throw error; }
-      if (job.deviceId === 'local') void runner.start!(job); return { executionId: job.id };
+      this.launch(job);
+      return { executionId: job.id };
     },
     async continueHistory(id: string, input: ContinueInput) {
       if (typeof input?.message !== 'string' || !input.message.trim() || input.message.length > 12000) throw httpError(400, '请输入 1–12000 字符的消息');
@@ -574,6 +604,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
         if (remote && (!remoteProject || currentRemote?.nativeId !== nativeSessionId || currentRemote.cwd !== session.cwd)) throw httpError(409, '目标连接器未启用原会话续聊，或会话工作目录不在可执行项目中，请刷新设备后重试');
         if (data.executions?.some((item) => item.deviceId === deviceId && (active.has(item.status) || item.releaseStatus === 'releasing') && [item.resumeThreadId, item.threadId, item.sessionId].includes(nativeSessionId))) throw httpError(409, '该会话已有执行或结果待核对，请先处理当前执行');
         const aliases = [id, ...data.sessions.filter((item) => item.deviceId === deviceId && item.agent === 'codex' && item.nativeId === nativeSessionId).map((item) => item.id)];
+        if (data.tasks.some(task => task.collaborationId && task.sessionIds.some(sessionId => aliases.includes(sessionId)))) throw httpError(409, '请进入协作空间，通过对应分工继续原会话');
         let task = data.tasks.find((item) => item.sessionIds.some((sessionId) => aliases.includes(sessionId)));
         const existingTaskId = task?.id;
         if (existingTaskId && (data.executions?.some((item) => item.taskId === existingTaskId && (active.has(item.status) || item.releaseStatus === 'releasing')) || data.handoffs.some((item) => item.taskId === existingTaskId && item.mode === 'continue' && ['pending', 'received'].includes(item.status)))) throw httpError(409, '任务已有执行或交接，请先处理');
@@ -617,7 +648,9 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
         database.mutateTaskCenter(tenantId, (data) => {
           const saved = data.executions.find((item) => item.id === job.id)!;
           if (saved.status !== 'queued') throw httpError(409, '任务已被领取，请刷新后停止执行');
-          recordExecution(data, { ...saved, status: 'interrupted', message: '已取消等待执行', updatedAt: timestamp() });
+          const beforeFirstClaim = saved.collaborationId && !saved.resumeThreadId && !saved.resumeSessionId;
+          recordExecution(data, { ...saved, ...(beforeFirstClaim ? { collaborationSessionNotCreated: true } : {}),
+            status: 'interrupted', message: '已取消等待执行', updatedAt: timestamp() });
         });
         return { executionId: job.id };
       }
@@ -626,9 +659,10 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
           return database.mutateTaskCenter(tenantId, (data) => {
             const saved = data.executions.find((item) => item.id === job.id)!;
             const device = data.devices.find((item) => item.id === saved.deviceId);
-            if (!actor || device?.owner !== actor.id) throw httpError(403, '只有该设备的连接器账号可以领取和回报执行');
+            if (!device || !actor?.id || device.owner !== actor.id) throw httpError(403, '只有该设备的连接器账号可以领取和回报执行');
             if (input.action === 'claim') {
               if (saved.status !== 'queued') throw httpError(409, '执行已被领取，不会重复执行');
+              if (saved.collaborationId && !device.capabilities?.collaborationSessions) throw httpError(422, '请升级并重启目标设备连接器后领取协作分工');
               assertNoRemoteGitMutation(data, saved.deviceId);
               recordExecution(data, { ...saved, status: 'launching', message: '目标设备已领取，准备启动 Agent', updatedAt: timestamp() });
               return { job: structuredClone(saved) };
@@ -640,6 +674,9 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
             if (report.threadId && !/^[a-f0-9-]{36}$/.test(report.threadId)) throw httpError(400, 'Codex 会话标识无效');
             if (report.sessionId !== undefined && report.sessionId !== null && (typeof report.sessionId !== 'string' || !report.sessionId || report.sessionId.length > 250)) throw httpError(400, 'ACP 会话标识无效');
             if (saved.resumeThreadId && report.threadId && saved.resumeThreadId !== report.threadId) throw httpError(409, '不能替换待恢复的 Codex 会话');
+            if (saved.resumeSessionId && report.sessionId && saved.resumeSessionId !== report.sessionId) throw httpError(409, '不能替换待恢复的 ACP 会话');
+            if ((saved.resumeSessionId || saved.resumeThreadId) &&
+                ((report.protocol !== undefined && report.protocol !== saved.protocol) || (report.agent !== undefined && report.agent !== saved.agent))) throw httpError(409, '不能替换待恢复会话的 Agent 或协议');
             if (saved.threadId && report.threadId !== undefined && saved.threadId !== report.threadId) throw httpError(409, '不能替换已绑定的 Codex 会话');
             if (saved.sessionId && report.sessionId !== undefined && saved.sessionId !== report.sessionId) throw httpError(409, '不能替换已绑定的 ACP 会话');
             // Compare effective results so a lost acknowledgement from an old
@@ -650,6 +687,16 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
             const terminalStatus = previousError ? 'failed' : saved.status;
             if (['completed', 'failed', 'interrupted'].includes(terminalStatus) && (incomingError ? 'failed' : reportStatus) !== terminalStatus) throw httpError(409, '执行已经结束');
             const patch: Partial<ExecutionRecord> & Record<string, unknown> = {};
+            if (report.collaborationSessionNotCreated !== undefined) {
+              if (report.collaborationSessionNotCreated !== true || !saved.collaborationId || !['launching', 'failed', 'interrupted'].includes(saved.status) ||
+                  !['failed', 'interrupted'].includes(reportStatus) || saved.resumeSessionId || saved.resumeThreadId ||
+                  saved.sessionId || saved.threadId || report.sessionId || report.threadId) throw httpError(409, '执行状态与原生会话创建回执不一致');
+              patch.collaborationSessionNotCreated = true;
+            }
+            if (report.releaseStatus !== undefined) {
+              if (!['releasing', 'released', 'failed'].includes(report.releaseStatus)) throw httpError(400, '连接释放状态无效');
+              patch.releaseStatus = report.releaseStatus;
+            }
             if (report.contextEvidenceError !== undefined) {
               if (!saved.conversationId || typeof report.contextEvidenceError !== 'string' || !report.contextEvidenceError.trim() || report.contextEvidenceError.length > 2000) throw httpError(400, '执行记录同步错误无效');
               patch.contextEvidenceError = report.contextEvidenceError;
@@ -701,10 +748,14 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
         });
       }
       requireLocalExecution();
-      if (input.action === 'stop') await runner.stop!(job.id);
-      else if (input.action === 'respond') await runner.respond!(job.id, input);
-      else if (input.action === 'reconcile') await runner.reconcile!(job);
-      else throw httpError(400, '操作无效');
+      if (localControls.has(job.id)) throw httpError(409, '此执行正在处理上一条操作，请稍后重试');
+      localControls.add(job.id);
+      try {
+        if (input.action === 'stop') await runner.stop!(job.id);
+        else if (input.action === 'respond') await runner.respond!(job.id, input);
+        else if (input.action === 'reconcile') await runner.reconcile!(job);
+        else throw httpError(400, '操作无效');
+      } finally { localControls.delete(job.id); }
       return { executionId: job.id };
     },
     close() { closing = true; runner.close(); }

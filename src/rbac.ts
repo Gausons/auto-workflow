@@ -22,7 +22,21 @@ export function permissionForRealtimeChannel(channel: unknown): string | null {
   return null;
 }
 
+export function collaborationRoute(method: string | undefined, pathname: string) {
+  if (pathname === '/api/workspaces/collaborations') {
+    if (method === 'GET') return { action: 'list' } as const;
+    if (method === 'POST') return { action: 'create' } as const;
+  }
+  const match = /^\/api\/workspaces\/collaborations\/([a-f0-9-]{36})(?:\/(documents|runs))?$/.exec(pathname);
+  if (!match) return;
+  const id = match[1];
+  if (method === 'GET' && !match[2]) return { action: 'detail', id } as const;
+  if (method === 'POST' && match[2] === 'documents') return { action: 'publish', id } as const;
+  if (method === 'POST' && match[2] === 'runs') return { action: 'run', id } as const;
+}
+
 export function permissionForRoute(method: string | undefined, pathname: string): string | null {
+  if (collaborationRoute(method, pathname)) return method === 'GET' ? 'read' : 'work.execute';
   if ((pathname === '/api/workspaces/chats' || /^\/api\/workspaces\/chats\/[a-f0-9-]{36}$/.test(pathname)) && method === 'GET') return 'read';
   if ((pathname === '/api/workspaces/chats' || /^\/api\/workspaces\/chats\/[a-f0-9-]{36}\/(messages|stop)$/.test(pathname)) && method === 'POST') return 'work.execute';
   if (pathname === '/api/workspaces' && ['GET', 'POST'].includes(method || '')) return 'read';

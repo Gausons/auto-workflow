@@ -191,3 +191,28 @@ it('consumes completions in the viewed group room and still reports new completi
   expect(await screen.findByText('任务本轮执行完成')).toBeTruthy();
   client.clear();
 });
+
+it('consumes the open collaboration’s task and run completions, still reports other work and later turns', async () => {
+  const client = new QueryClient();
+  const snapshot = (finished: boolean, nextRun?: 'running' | 'completed') => data({
+    tasks: [{ ...task(finished ? 'completed' : 'running'), collaborationId: 'current' }],
+    executions: [
+      job(finished ? 'completed' : 'running', { id: 'current-session', taskId: 'other-part', collaborationId: 'current', conversationId: 'session' }),
+      job(finished ? 'completed' : 'running', { id: 'other-run', taskId: 'unrelated-task', collaborationId: 'unrelated', title: '另一协作任务' }),
+      ...(nextRun ? [job(nextRun, { id: 'later', collaborationId: 'current' })] : []),
+    ],
+  });
+  client.setQueryData(key, snapshot(false));
+  const view = (id?: string) => <QueryClientProvider client={client}><CompletionNotifications activeCollaborationId={id} onOpen={() => {}} /></QueryClientProvider>;
+  const mounted = render(view('current'));
+  await act(async () => client.setQueryData(key, snapshot(true)));
+  expect(await screen.findByText('另一协作任务')).toBeTruthy();
+  expect(screen.queryByText('任务已完成')).toBeNull();
+  expect(screen.queryByText('会话本轮已完成')).toBeNull();
+  mounted.rerender(view());
+  await act(async () => client.setQueryData(key, snapshot(true, 'running')));
+  expect(screen.queryByText('修复登录')).toBeNull();
+  await act(async () => client.setQueryData(key, snapshot(true, 'completed')));
+  expect(await screen.findByText('修复登录')).toBeTruthy();
+  client.clear();
+});

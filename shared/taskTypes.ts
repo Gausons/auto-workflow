@@ -1,4 +1,5 @@
 import type { GroupChatRoom } from './groupChatTypes.js';
+import type { CollaborationRecord } from './collaborationTypes.js';
 import type { PreparedContextBrief } from './contextBriefTypes.js';
 
 export type TaskStatus = 'waiting' | 'error' | 'running' | 'ready' | 'review' | 'completed';
@@ -33,6 +34,7 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
   parentTaskId?: string;
+  collaborationId?: string;
   source?: { type: 'defect'; id: string; code: string };
 }
 
@@ -67,6 +69,7 @@ export interface AgentProject {
   commonDirectories?: string[];
   gitBranches?: boolean;
   taskAttachments?: boolean;
+  collaborationSessions?: boolean;
 }
 
 export interface DeviceHistorySource {
@@ -95,7 +98,7 @@ export interface Device {
   historySources?: DeviceHistorySource[];
   localExecutionEnabled?: boolean;
   codexProjects?: AgentProject[];
-  capabilities?: { resumeCodex?: boolean; gitBranches?: boolean; taskAttachments?: boolean };
+  capabilities?: { resumeCodex?: boolean; gitBranches?: boolean; taskAttachments?: boolean; collaborationSessions?: boolean };
 }
 
 export interface Session {
@@ -189,6 +192,9 @@ export interface ContextCoverage {
 
 export interface Execution {
   id: string;
+  collaborationId?: string;
+  /** A confirmed first-run failure before a native collaboration session existed. */
+  collaborationSessionNotCreated?: true;
   requestId?: string;
   historySessionId?: string;
   conversationId?: string;
@@ -287,6 +293,7 @@ export interface DirectoryRequest {
 }
 
 export interface TaskCenterData {
+  collaborations?: CollaborationRecord[];
   groupChatRooms?: GroupChatRoom[];
   hiddenDeviceIds?: string[];
   /** Monotonic tenant-local version used to reconcile realtime invalidations. */

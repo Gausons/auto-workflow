@@ -19,7 +19,7 @@ type ErrorLike = Error & { code?: string };
 interface RunnerJob {
   id: string; status?: string; agent?: string; agentLabel?: string; protocol?: string; projectId?: string;
   title?: string; cwd?: string; prompt?: string; resumeSessionId?: string; sessionId?: string | null;
-  model?: string | null; reasoningEffort?: string | null; conversationId?: string; output?: string;
+  model?: string | null; reasoningEffort?: string | null; conversationId?: string; collaborationId?: string; output?: string;
   contextEvents?: unknown[]; request?: unknown; desktopOpened?: boolean; desktopMessage?: string; updatedAt?: string;
   promptImages?: PromptImageReference[]; contextMarkdownPath?: string;
   [key: string]: unknown;
@@ -362,7 +362,9 @@ export class AcpTaskRunner {
       const cause = asError(error);
       if (!authenticationRequired(cause)) return false;
       const rejected = cause instanceof acp.RequestError && cause.code === -32000 && !observedActivity && !job.output && !job.contextEvents?.length;
-      this.publish(job, { status: rejected ? 'failed' : 'unknown', request: null, message: `${agentAuthenticationMessage('Authentication required', agent)}${rejected ? 'Agent 已明确拒绝请求。' : '执行结果仍需在原 Agent 会话中核对。'}` });
+      const beforeFirstSession = rejected && job.collaborationId && !job.sessionId && !job.resumeSessionId && !promptDispatched;
+      this.publish(job, { status: rejected ? 'failed' : 'unknown', request: null, ...(beforeFirstSession ? { collaborationSessionNotCreated: true } : {}),
+        message: `${agentAuthenticationMessage('Authentication required', agent)}${rejected ? 'Agent 已明确拒绝请求。' : '执行结果仍需在原 Agent 会话中核对。'}` });
       return true;
     };
     connection.on('update', ({ update }: acp.SessionNotification) => {
@@ -388,6 +390,7 @@ export class AcpTaskRunner {
         ? connection === retained && !connection.closed ? { sessionId: job.resumeSessionId } : await connection.loadSession(job.resumeSessionId, job.cwd)
         : await connection.newSession(job.cwd);
       creatingSession = false;
+      if (job.collaborationId) this.publish(job, { sessionId: session.sessionId });
       await connection.configure(session, job.model, job.reasoningEffort);
       this.publish(job, { sessionId: session.sessionId, status: 'running', message: `${job.agentLabel || job.agent} 正在通过 ACP 执行` });
       if (!job.resumeSessionId && job.agent === 'codex' && /^[a-f0-9-]{36}$/.test(session.sessionId)) {
@@ -414,7 +417,7 @@ export class AcpTaskRunner {
         return job;
       }
       this.connections.delete(job.id); connection.close();
-      if (job.conversationId && (creatingSession || promptDispatched)) {
+      if ((job.conversationId || job.collaborationId) && (creatingSession || promptDispatched)) {
         this.publish(job, { status: 'unknown', request: null, message: error.message });
         return job;
       }
@@ -485,7 +488,7 @@ export class AcpPreferredRunner {
     return protocol === 'acp' ? this.primary : this.fallback;
   }
   async start(job: RunnerJob) {
-    if (this.synchronizeModels && job.protocol === 'acp') {
+    if (this.synchronizeModels && job.protocol === 'acp' && !job.resumeSessionId) {
       const selectedModel = job.model || this.synchronizedDefaultModel;
       if (selectedModel && this.primaryModelIds.size && !this.primaryModelIds.has(selectedModel)) {
         const legacyJob = { ...job, model: selectedModel, protocol: 'legacy', projectId: undefined };

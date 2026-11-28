@@ -40,6 +40,14 @@ describe('TaskPage', () => {
     expect(screen.queryByText('本轮已完成')).toBeNull();
   });
 
+  it('opens the collaboration from an assigned task and keeps the fixed execution target', async () => {
+    setup(['work.execute'], { ...snapshot, tasks: [{ ...task, collaborationId: 'shared-work' }] });
+    const link = await screen.findByRole('link', { name: '查看协作任务' });
+    expect(link.getAttribute('href')).toBe('/space?collaboration=shared-work');
+    expect(screen.queryByRole('button', { name: '继续任务' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '转交 / 分支' })).toBeNull();
+  });
+
   it('updates with the current revision and never retries a conflict', async () => {
     const fetchMock = setup(['work.execute'], snapshot, 409);
     const user = userEvent.setup();

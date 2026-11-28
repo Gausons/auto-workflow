@@ -16,8 +16,10 @@ import type { AgentProject, ContextCoverage, ExecutionControl, PromptImageRefere
 interface RemoteJob {
   id: string; status?: string; deviceId?: string; projectId?: string; cwd?: string; agent?: string;
   sessionId?: string | null; threadId?: string | null; output?: string;
-  historySessionId?: string; resumeThreadId?: string; resumeSessionId?: string;
+  historySessionId?: string; resumeThreadId?: string; resumeSessionId?: string; collaborationId?: string;
+  collaborationSessionNotCreated?: true;
   protocol?: 'acp' | 'legacy';
+  releaseStatus?: 'releasing' | 'released' | 'failed';
   request?: unknown; message?: string; control?: ExecutionControl | null; controlAck?: string; controlError?: string | null;
   conversationId?: string; contextDigest?: string; remoteContext?: RemoteContextHandoff; userMessage?: string;
   contextSourceDeviceId?: string;
@@ -54,6 +56,8 @@ interface WorkerOptions {
 type ErrorLike = Error & { code?: string };
 const asError = (value: unknown): ErrorLike => value instanceof Error ? value as ErrorLike : new Error(String(value));
 const isRemoteJob = (value: unknown): value is RemoteJob => Boolean(value && typeof value === 'object' && 'id' in value && typeof value.id === 'string');
+const withoutNativeSession = (job: RemoteJob) => job.collaborationId && !job.sessionId && !job.threadId && !job.resumeSessionId && !job.resumeThreadId
+  ? { collaborationSessionNotCreated: true as const } : {};
 
 // Journals the last known native thread before reconnecting. Uncertain launches
 // are reported for review rather than retried and possibly duplicated.
@@ -273,7 +277,7 @@ export class RemoteCodexWorker {
       this.controls.set(job.id, job.control.id);
       try {
         if (job.control.action === 'stop' && current.status === 'launching' && !this.invoked.has(job.id)) {
-          this.update({ ...current, status: 'interrupted', request: null, message: '已取消执行准备，未向 Agent 发送指令' });
+          this.update({ ...current, ...withoutNativeSession(current), status: 'interrupted', request: null, message: '已取消执行准备，未向 Agent 发送指令' });
         } else if (job.control.action === 'stop') await this.runner.stop(job.id);
         else if (job.control.action === 'respond') await this.runner.respond(job.id, job.control);
         else if (job.control.action === 'reconcile') await this.runner.reconcile(current);
@@ -361,7 +365,7 @@ export class RemoteCodexWorker {
         }
         catch (caught: unknown) {
           if (this.saved.get(job.id)?.status === 'interrupted' || this.signal?.aborted) continue;
-          this.update({ ...claimed, status: 'failed', request: null, message: `远端执行准备失败：${asError(caught).message}` });
+          this.update({ ...claimed, ...withoutNativeSession(claimed), status: 'failed', request: null, message: `远端执行准备失败：${asError(caught).message}` });
           continue;
         }
         if (this.saved.get(job.id)?.status === 'interrupted' || this.signal?.aborted) continue;

@@ -9,7 +9,7 @@ import { taskContent } from '../shared/taskContent.js';
 import { assignmentModelError, assignmentResponseText, requestAssignmentModel } from './assignmentModelConnection.js';
 import { assignmentConnectionFor, assignmentConnectionKey, assignmentModelDeployment, assignmentModelProbe, loadAssignmentModelSettings, publicAssignmentModelSettings, storedAssignmentModelSettings, updateAssignmentModelSettings } from './assignmentModelSettings.js';
 import { createHash } from 'node:crypto';
-import { connectorActionAllowed, httpError, publicIdentity } from './rbac.js';
+import { collaborationRoute, connectorActionAllowed, httpError, publicIdentity } from './rbac.js';
 import type { ExecutionFeedback, RealtimeEvent, RealtimeSubscription } from '../shared/realtime.js';
 import { createSessionDelivery } from './sessionDelivery/index.ts';
 import { createAgentHistory } from './agentHistory/index.js';
@@ -18,6 +18,7 @@ import { createCodexExecution } from './codexExecution.js';
 import { createRemoteGit } from './remoteGit.js';
 import { createHistoryImages } from './historyImages.js';
 import { createGroupChats } from './groupChats.js';
+import { createCollaborations } from './collaborations.js';
 import { createConversations } from './conversations.js';
 import { createContextModelSummarizer } from './contextModelSummary.js';
 import { applyAssignmentBusinessRules, buildAssignmentJsonSchema, buildAssignmentSystemPrompt, buildAssignmentUserPayload, isAssignmentCandidate, normalizeAssignmentPeople, normalizeAssignmentRecommendation } from './assignmentEngine.js';
@@ -58,6 +59,20 @@ interface BatchResultItem { bugId: string; bugCode: string; ok: boolean; assigne
 interface BatchSummary { ok: boolean; source: string; total: number; success: number; failed: number; results: BatchResultItem[] }
 const asError = (error: unknown) => error instanceof Error ? error : new Error(String(error));
 const modelConnectionPath = '/api/config/model-connection';
+const newConversationPath = /^\/api\/sessions\/([a-f0-9]{64})\/continue-as-new$/;
+const continuationPath = /^\/api\/agent-sessions\/([a-f0-9]{64})\/continue$/;
+const contextTransferPath = /^\/api\/conversations\/([a-f0-9]{64})\/transfer$/;
+const contextTransferObjectPath = /^\/api\/conversations\/([a-f0-9]{64})\/transfer\/objects\/([a-f0-9]{64})$/;
+const independentWrites = new Set([
+  modelConnectionPath,
+  '/api/task-center',
+  '/api/task-center/execute',
+  '/api/task-center/execution-action',
+  '/api/task-center/directory-picker',
+  '/api/task-center/directory-action',
+  '/api/task-center/git',
+  '/api/task-center/git-action'
+]);
 
 export function createTenantRuntime({ database, tenant, environment, rootDir, validateWorkspace = () => {} }: {
   database: Database; tenant: Tenant; environment: Environment; rootDir: string; validateWorkspace?: (workspace: unknown) => void;
@@ -147,6 +162,17 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
       const unchanged = new Set(before.filter(doc => current.get(doc.id) === doc.text).map(doc => doc.id));
       sendJson(res, 200, { ...result, ids: scope === 'bugs' && context !== state.storageUserKey ? [] : result.ids.filter(id => unchanged.has(id)) }); return;
     }
+    const collaboration = collaborationRoute(req.method, url.pathname);
+    if (collaboration) {
+      const actor = requestIdentity.getStore()!.user;
+      switch (collaboration.action) {
+        case 'list': sendJson(res, 200, collaborations.list()); return;
+        case 'detail': sendJson(res, 200, collaborations.detail(collaboration.id)); return;
+        case 'create': sendJson(res, 201, await collaborations.create(await readJson(req), actor)); return;
+        case 'publish': sendJson(res, 201, collaborations.publish(collaboration.id, await readJson(req), actor)); return;
+        case 'run': sendJson(res, 202, await collaborations.run(collaboration.id, await readJson(req), actor)); return;
+      }
+    }
     if (url.pathname === '/api/workspaces/chats' && req.method === 'GET') { sendJson(res, 200, groupChats.list()); return; }
     if (url.pathname === '/api/workspaces/chats' && req.method === 'POST') { sendJson(res, 201, await groupChats.create(await readJson(req), requestIdentity.getStore()!.user)); return; }
     const chat = /^\/api\/workspaces\/chats\/([a-f0-9-]{36})(?:\/(messages|stop))?$/.exec(url.pathname);
@@ -167,14 +193,14 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     if (url.pathname === '/api/task-center/updates' && req.method === 'GET') {
       await taskCenterStream.serve(req, res, url.searchParams); return;
     }
-    const newConversation = /^\/api\/sessions\/([a-f0-9]{64})\/continue-as-new$/.exec(url.pathname);
+    const newConversation = newConversationPath.exec(url.pathname);
     if (newConversation && req.method === 'POST') { sendJson(res, 202, await conversations.create(newConversation[1], await readJson(req), requestIdentity.getStore()!.user)); return; }
     if (url.pathname === '/api/conversations' && req.method === 'GET') { sendJson(res, 200, { sessions: conversations.list() }); return; }
     const inherited = /^\/api\/conversations\/([a-f0-9]{64})\/inherited$/.exec(url.pathname);
     if (inherited && req.method === 'GET') { sendJson(res, 200, conversations.inherited(inherited[1], url.searchParams)); return; }
     const contextPreview = /^\/api\/conversations\/([a-f0-9]{64})\/context-preview$/.exec(url.pathname);
     if (contextPreview && req.method === 'GET') { sendJson(res, 200, conversations.contextPreview(contextPreview[1], url.searchParams)); return; }
-    const transferObject = /^\/api\/conversations\/([a-f0-9]{64})\/transfer\/objects\/([a-f0-9]{64})$/.exec(url.pathname);
+    const transferObject = contextTransferObjectPath.exec(url.pathname);
     if (transferObject && ['GET', 'POST'].includes(req.method || '')) {
       const executionId = url.searchParams.get('executionId') || '';
       if (!/^[a-f0-9-]{36}$/.test(executionId)) throw Object.assign(new Error('执行标识无效'), { statusCode: 400 });
@@ -188,7 +214,7 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
       } else sendJson(res, 200, result);
       return;
     }
-    const transfer = /^\/api\/conversations\/([a-f0-9]{64})\/transfer$/.exec(url.pathname);
+    const transfer = contextTransferPath.exec(url.pathname);
     if (transfer && ['GET', 'POST'].includes(req.method || '')) {
       const body = req.method === 'POST' ? await readJson(req, 85_000_000) : { executionId: url.searchParams.get('executionId'), deviceId: url.searchParams.get('deviceId'), readyOnly: url.searchParams.get('readyOnly'), format: url.searchParams.get('format') };
       if (typeof body.executionId !== 'string' || !/^[a-f0-9-]{36}$/.test(body.executionId)) throw Object.assign(new Error('执行标识无效'), { statusCode: 400 });
@@ -210,7 +236,11 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
     if (url.pathname === '/api/task-center/execute') { sendJson(res, 202, await codexExecution.execute(await readJson(req, 15_000_000), requestIdentity.getStore()!.user)); return; }
     if (url.pathname === '/api/task-center/execution-action') { sendJson(res, 200, await codexExecution.action(await readDeviceCommand(8_000_000), requestIdentity.getStore()!.user)); return; }
     if (url.pathname === '/api/task-center') {
-      sendJson(res, 200, req.method === 'GET' ? await taskCenter.snapshot() : await taskCenter.command(await readDeviceCommand(), requestIdentity.getStore()!.user)); return;
+      const principal = requestIdentity.getStore()!;
+      if (req.method === 'GET' && principal.scope === 'connector') {
+        sendJson(res, 200, deviceControl.syncSnapshot(principal.user.id)); return;
+      }
+      sendJson(res, 200, req.method === 'GET' ? await taskCenter.snapshot() : await taskCenter.command(await readDeviceCommand(), principal.user)); return;
     }
     if (req.method === 'POST' && url.pathname === '/api/task-center/history-images') {
       sendJson(res, 200, historyImages.upload(await readJson(req, 17_000_000), requestIdentity.getStore()!.user)); return;
@@ -225,7 +255,7 @@ export function createTenantRuntime({ database, tenant, environment, rootDir, va
       const result = delivery[2] === 'records' ? await sessionDelivery.record(delivery[1], url.searchParams) : delivery[2] === 'events' ? await sessionDelivery.events(delivery[1], url.searchParams) : await sessionDelivery.detail(delivery[1], url.searchParams);
       sendJson(res, 200, result); return;
     }
-    const continuation = /^\/api\/agent-sessions\/([a-f0-9]{64})\/continue$/.exec(url.pathname);
+    const continuation = continuationPath.exec(url.pathname);
     if (continuation && req.method === 'POST') { sendJson(res, 202, conversations.has(continuation[1]) ? await conversations.send(continuation[1], await readJson(req)) : await codexExecution.continueHistory(continuation[1], await readJson(req))); return; }
     if (continuation && req.method === 'GET') { sendJson(res, 200, conversations.has(continuation[1]) ? conversations.status(continuation[1]) : await codexExecution.historyExecution(continuation[1])); return; }
     if (req.method === 'GET' && url.pathname === '/api/agent-sessions') { sendJson(res, 200, await conversations.historyList(url.searchParams)); return; }
@@ -703,6 +733,7 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
     summarize, vectorSearch,
     contextRoot: path.join(rootDir, '.workflow-data', 'context', createHash('sha256').update(tenant.id).digest('hex')) });
   const groupChats = createGroupChats({ database, tenantId: tenant.id, execution: codexExecution });
+  const collaborations = createCollaborations({ database, tenantId: tenant.id, execution: codexExecution });
   let groupChatPending: Promise<void> | undefined;
   const groupChatTimer = setInterval(() => {
     if (mutationPending) return;
@@ -719,24 +750,24 @@ async function ensureBugAttachmentsLoaded(bug: RuntimeIssue) {
       return deviceControl.subscribe(new URLSearchParams({ deviceId: input.deviceId }), userId, version => send({ type: 'device-control', version }), onError);
     },
     async reportRealtime(deviceId: string, input: ExecutionFeedback, principal: Principal) {
-      let locked = false, status = 200;
+      let status = 200;
       try {
         const job = database.readTaskCenter(tenant.id).executions?.find(item => item.id === input.executionId);
         if (!job || job.deviceId !== deviceId) throw httpError(403, '执行不属于此设备');
-        if (mutationPending) throw httpError(409, '当前账号正在处理其他请求，请稍后重试');
-        mutationPending = true; locked = true;
         await codexExecution.action({ ...input, action: 'report', report: input.report as Parameters<typeof codexExecution.action>[0]['report'] }, principal.user);
       } catch (error) {
         status = error instanceof Error && 'statusCode' in error && typeof error.statusCode === 'number' ? error.statusCode : 500;
         throw error;
       } finally {
-        if (locked) mutationPending = false;
         database.audit(tenant.id, principal.user, 'api.request', '/api/task-center/execution-action', { method: 'WEBSOCKET', status });
       }
     },
     closeStreams: () => { taskCenterStream.close(); deviceControl.close(); modelConnectionProbe?.abort(); },
     async handleApi(req: IncomingMessage, res: ServerResponse, url: URL, principal: Principal) {
-      const mutation = req.method !== 'GET' && url.pathname !== modelConnectionPath;
+      const { pathname } = url;
+      const independent = req.method === 'POST' && (independentWrites.has(pathname) || newConversationPath.test(pathname) ||
+        continuationPath.test(pathname) || contextTransferPath.test(pathname) || contextTransferObjectPath.test(pathname));
+      const mutation = req.method !== 'GET' && !independent;
       if (mutation && mutationPending) { sendJson(res, 409, { error: 'tenant_busy', message: '当前账号正在处理其他请求，请稍后重试' }); req.resume(); return; }
       if (mutation) mutationPending = true;
       try { await requestIdentity.run(principal, () => handleApi(req, res, url)); }

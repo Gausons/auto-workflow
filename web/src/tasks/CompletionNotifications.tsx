@@ -8,16 +8,20 @@ import styles from './CompletionNotifications.module.css';
 
 const denied = (error: unknown) => error instanceof ApiError && [401, 403].includes(error.status);
 const snapshotKey = ['task-center', 'snapshot'] as const;
-export function CompletionNotifications({ activeSessionId, onOpen }: { activeSessionId?: string; onOpen(notice: CompletionNotice): void }) {
+export function CompletionNotifications({ activeSessionId, activeCollaborationId, onOpen }: { activeSessionId?: string; activeCollaborationId?: string; onOpen(notice: CompletionNotice): void }) {
   const client = useQueryClient();
   const activeSession = useRef(activeSessionId);
+  const activeCollaboration = useRef(activeCollaborationId);
   const activeRoom = useRef('');
   useLayoutEffect(() => {
     const viewing = (event: Event) => { activeRoom.current = (event as CustomEvent<{ roomId?: string }>).detail?.roomId || ''; };
     window.addEventListener('bugflow:active-group-chat', viewing);
     return () => window.removeEventListener('bugflow:active-group-chat', viewing);
   }, []);
-  useLayoutEffect(() => { activeSession.current = activeSessionId; }, [activeSessionId]);
+  useLayoutEffect(() => {
+    activeSession.current = activeSessionId;
+    activeCollaboration.current = activeCollaborationId;
+  }, [activeSessionId, activeCollaborationId]);
   const [notices, setNotices] = useState<CompletionNotice[]>([]);
   const snapshot = useQuery({ queryKey: snapshotKey, queryFn: ({ signal }) => apiRequest<TaskCenterData>('/api/task-center', { signal }), staleTime: Infinity });
   useTaskCenterUpdates(!denied(snapshot.error), snapshot.data?.syncVersion);
@@ -30,6 +34,7 @@ export function CompletionNotifications({ activeSessionId, onOpen }: { activeSes
       const data = query.data;
       // Always consume completions so ones already seen in the session do not replay after navigation.
       const additions = observe(data).filter(notice => {
+        if (notice.collaborationId && notice.collaborationId === activeCollaboration.current) return false;
         const room = data.groupChatRooms?.find(item => item.id === activeRoom.current);
         if (notice.taskId && room?.messages.some(message => message.taskId === notice.taskId)) return false;
         const id = activeSession.current;

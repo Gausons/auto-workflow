@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, realpath, rm, readFile, writeFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
@@ -102,6 +103,52 @@ test('git operations reuse the recently discovered local target', async t => {
   assert.equal((await service.git({ action: 'list', deviceId: 'local', projectId: 'project' })).repository, true);
   assert.equal(discoveries, 1, 'branch reads should not restart Agent project discovery');
   await assert.rejects(service.git({ action: 'list', deviceId: 'local', projectId: 'unknown' }), /请选择本地执行目标/);
+});
+
+test('local Git changes delay starts only in the affected repository', { skip: process.platform === 'win32' }, async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'codex-git-isolation-'));
+  const first = path.join(root, 'first'), second = path.join(root, 'second');
+  await Promise.all([mkdir(first), mkdir(second)]);
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const git = (cwd: string, ...args: string[]) => promisify(execFile)('git', ['-C', cwd, ...args]);
+  for (const repo of [first, second]) {
+    await git(repo, 'init', '-b', 'main');
+    await git(repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-m', 'initial');
+  }
+  const hook = path.join(first, '.git', 'hooks', 'post-checkout');
+  await writeFile(hook, '#!/bin/sh\n: > .git/checkout-started\nwhile [ ! -f .git/checkout-release ]; do sleep 0.05; done\n', { mode: 0o700 });
+  const db = openDatabase(); db.createTenant({ id: 'default', token: 'x'.repeat(32) });
+  const center = createTaskCenter({ database: db, tenantId: 'default', history: { catalog: async () => ({ providers: [], sessions: [] }) } });
+  const started: ExecutionJob[] = [];
+  const service = createCodexExecution({ database: db, tenantId: 'default', workspace: () => root, runnerFactory: notify => ({
+    projects: async () => [{ id: 'first', cwd: first }, { id: 'second', cwd: second }],
+    start: candidate => { started.push(candidate); notify({ ...candidate, status: 'running' }); }, close() {}
+  }) });
+  t.after(() => { service.close(); db.close(); });
+  const change = service.git({ action: 'create', projectId: 'first', branch: 'new-first' });
+  try {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (await access(path.join(first, '.git', 'checkout-started')).then(() => true, () => false)) break;
+      await delay(25);
+    }
+    await access(path.join(first, '.git', 'checkout-started'));
+    await assert.rejects(service.git({ action: 'switch', projectId: 'first', branch: 'main' }), { statusCode: 409 });
+    assert.equal((await service.git({ action: 'create', projectId: 'second', branch: 'new-second' })).current, 'new-second');
+    const submit = async (projectId: string) => {
+      const task = await center.command({ action: 'create', title: '任务 ' + projectId }, {});
+      return service.execute({ taskId: task.taskId, revision: task.revision, projectId });
+    };
+    const waiting = await submit('first');
+    const independent = await submit('second');
+    for (let attempt = 0; attempt < 100 && !started.length; attempt++) await delay(25);
+    assert.deepEqual(started.map(item => item.id), [independent.executionId]);
+    assert.equal(db.readTaskCenter('default').executions.find(item => item.id === waiting.executionId)?.status, 'queued');
+    await service.action({ action: 'stop', executionId: waiting.executionId });
+  } finally {
+    await writeFile(path.join(first, '.git', 'checkout-release'), '');
+    assert.equal((await change).current, 'new-first');
+  }
+  assert.equal(started.length, 1);
 });
 
 test('creates durable project thread, starts a real turn and opens desktop without overriding permissions/model', async () => {

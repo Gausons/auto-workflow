@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { PromptImageReference } from '../shared/taskTypes.js';
 import type { PreparedContextBrief } from '../shared/contextBriefTypes.js';
@@ -8,6 +8,7 @@ import { cleanUserContext } from './agentHistory/adapters.js';
 import { SourceRegistry, freezeSnapshot } from '@auto-workflow/context-engine';
 import { sessionDeliverySource, type SessionDelivery } from '@auto-workflow/context-adapters/session-delivery';
 import { renderContextMarkdown } from './contextMarkdown.js';
+import { writeImmutableContextFile } from './contextFiles.js';
 import type { SummaryResult } from './contextModelSummary.js';
 import { httpError } from './rbac.js';
 
@@ -138,12 +139,7 @@ async function materializeImages(entries: ContextEntry[], root: string) {
       if (totalBytes + bytes.length > maxTotalImageBytes) return { type: 'image_reference', unavailable: true, reason: '图片总量超过继承大小限制' };
       await mkdir(assetRoot, { recursive: true, mode: 0o700 });
       const file = path.join(assetRoot, `${sha256}.${imageTypes.get(payload.mimeType)}`);
-      try { await writeFile(file, bytes, { flag: 'wx', mode: 0o600 }); }
-      catch (error: unknown) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        const existing = await readFile(file);
-        if (createHash('sha256').update(existing).digest('hex') !== sha256) throw new Error('历史图片存储校验失败');
-      }
+      await writeImmutableContextFile(file, bytes, '历史图片存储校验失败');
       image = { id: `image-${nextId++}`, path: file, mimeType: payload.mimeType, sha256, size: bytes.length };
       images.set(sha256, image); totalBytes += bytes.length;
     }

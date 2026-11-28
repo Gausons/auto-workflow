@@ -6,7 +6,26 @@ import { once } from 'node:events';
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import { deviceConnectorDefaults, deviceStateDirectory, resolveDeviceStateDirectory } from '../scripts/device-sync.js';
-import { runDeviceConnector } from '../src/deviceConnector.js';
+import { runDeviceConnector, syncDeviceOnce } from '../src/deviceConnector.js';
+
+test('device heartbeats advertise collaboration support only when execution is enabled', async t => {
+  const outputDir = await mkdtemp(path.join(tmpdir(), 'device-capabilities-'));
+  t.after(() => rm(outputDir, { force: true, recursive: true }));
+  for (const enabled of [true, false]) {
+    const heartbeats: unknown[] = [];
+    await syncDeviceOnce({
+      request: async (method, body) => {
+        if (method === 'POST') heartbeats.push(body);
+        return { handoffs: [], sessions: [] };
+      },
+      history: { catalog: async () => ({ providers: [], sessions: [] }) },
+      deviceId: 'fixture', name: '测试设备', outputDir, resumeCodex: enabled
+    });
+    assert.equal(heartbeats.length, 1);
+    const { capabilities } = heartbeats[0] as { capabilities: { collaborationSessions: boolean } };
+    assert.equal(capabilities.collaborationSessions, enabled);
+  }
+});
 
 test('device connector defaults to the user home with execution and excerpts enabled', () => {
   assert.deepEqual(deviceConnectorDefaults({}), {

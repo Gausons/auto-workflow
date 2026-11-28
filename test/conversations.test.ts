@@ -51,6 +51,38 @@ async function fixture(t: TestContext) {
   return { root, file, database, history, delivery, source, execution, options, service, launched, finish };
 }
 
+test('a collaboration session continues through its assignment, while an explicit contextual fork gets a separate task', async t => {
+  const f = await fixture(t);
+  const center = createTaskCenter({ database: f.database, tenantId: 'default', history: f.history });
+  const { taskId } = await center.command({ action: 'create', title: '接口分工', sessionId: f.source }, { id: 'member' });
+  assert.ok(taskId);
+  const collaborationId = randomUUID(), sourceRun = randomUUID();
+  f.database.mutateTaskCenter('default', data => {
+    const task = data.tasks.find(item => item.id === taskId)!;
+    task.collaborationId = collaborationId;
+    data.executions.push({
+      id: sourceRun, taskId, contextVersion: 1, deviceId: 'local', cwd: f.root, title: task.title, prompt: '执行分工',
+      status: 'running', createdAt: task.createdAt, updatedAt: task.updatedAt
+    });
+  });
+  const branch = { requestId: randomUUID(), targetAgent: 'claude' };
+  await assert.rejects(f.service.create(f.source, branch), /原分工执行/);
+  f.database.mutateTaskCenter('default', data => { data.executions.find(job => job.id === sourceRun)!.status = 'completed'; });
+  await assert.rejects(f.execution.continueHistory(f.source, { requestId: randomUUID(), message: '继续' }), /进入协作空间/);
+  const fork = await f.service.create(f.source, branch);
+  assert.notEqual(fork.taskId, taskId);
+  assert.deepEqual(await f.service.create(f.source, branch), fork);
+  const data = f.database.readTaskCenter('default');
+  const assignment = data.tasks.find(task => task.id === taskId)!;
+  const ordinary = data.tasks.find(task => task.id === fork.taskId)!;
+  assert.deepEqual(assignment.sessionIds, [f.source]);
+  assert.equal(ordinary.parentTaskId, taskId);
+  assert.equal(ordinary.collaborationId, undefined);
+  assert.deepEqual(ordinary.sessionIds, [fork.sessionId]);
+  assert.equal(data.sessions.find(session => session.id === fork.sessionId)?.sourceSessionId, f.source);
+  assert.equal(f.launched.length, 0);
+});
+
 test('remote history identifies excerpts for existing records without changing transcript completeness or tenant scope', async t => {
   const f = await fixture(t);
   const excerpt = 'user: 历史问题\n\nassistant: 历史回复';
@@ -944,7 +976,7 @@ async function unsentRemoteFixture(t: TestContext) {
       return method === 'GET' ? center.snapshot() : f.execution.action(body as Parameters<typeof f.execution.action>[0], owner);
     },
     runnerFactory: (update: (job: RunnerJob) => void) => ({ projects: async () => [{ id: 'project-A', cwd: f.root, agent: 'codex' }],
-      start: async (job: RunnerJob) => { launches.push(job); update({ ...job, status: 'completed', sessionId: `result-${launches.length}` }); },
+      start: async (job: RunnerJob) => { launches.push(job); update({ ...job, status: 'completed', sessionId: job.resumeSessionId || `result-${launches.length}` }); },
       respond: async () => {}, stop: async () => {}, reconcile: async () => {}, close() {} })
   };
   const worker = new RemoteCodexWorker(workerOptions);
@@ -999,6 +1031,7 @@ test('oversized remote evidence preserves the journal, reports completion and pe
   const next = await f.service.send(created.sessionId, { requestId: randomUUID(), message: '另一条消息' });
   await restarted.sync();
   assert.equal(f.launches.length, 1);
+  assert.equal(f.launches[0].resumeSessionId, 'existing-native');
   assert.equal(f.database.readTaskCenter('default').executions.find(item => item.id === next.executionId)?.status, 'completed');
 });
 

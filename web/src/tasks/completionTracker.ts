@@ -6,6 +6,7 @@ export interface CompletionNotice {
   title: string;
   taskId?: string;
   sessionId?: string;
+  collaborationId?: string;
 }
 const active = new Set(['queued', 'launching', 'running', 'waiting', 'unknown']);
 
@@ -30,7 +31,7 @@ export function createCompletionTracker() {
     const tasksBefore = new Map(before.tasks.map(task => [task.id, task]));
     for (const task of next.tasks) if (task.status === 'completed' && tasksBefore.has(task.id) && tasksBefore.get(task.id)?.status !== 'completed') {
       finishedTasks.add(task.id);
-      notices.push({ id: `task:${task.id}:${task.revision}`, heading: '任务已完成', title: task.title, taskId: task.id });
+      notices.push({ id: `task:${task.id}:${task.revision}`, heading: '任务已完成', title: task.title, taskId: task.id, collaborationId: task.collaborationId });
     }
     const executionsBefore = new Map((before.executions || []).map(execution => [execution.id, execution]));
     const completedSessions = new Set<string>();
@@ -45,7 +46,7 @@ export function createCompletionTracker() {
       if (finishedTasks.has(execution.taskId)) continue;
       const task = next.tasks.find(item => item.id === execution.taskId);
       const session = next.sessions.find(item => item.id === sessionId);
-      notices.push({ id: `execution:${execution.id}`, heading: sessionId ? '会话本轮已完成' : '任务本轮执行完成', title: session?.title || task?.title || execution.title || 'Agent 执行', ...(sessionId ? { sessionId } : { taskId: execution.taskId }) });
+      notices.push({ id: `execution:${execution.id}`, heading: sessionId ? '会话本轮已完成' : '任务本轮执行完成', title: session?.title || task?.title || execution.title || 'Agent 执行', collaborationId: execution.collaborationId || task?.collaborationId, ...(sessionId ? { sessionId } : { taskId: execution.taskId }) });
     }
     const sessionsBefore = new Map(before.sessions.map(session => [session.id, session]));
     for (const session of next.sessions) {
@@ -57,7 +58,8 @@ export function createCompletionTracker() {
         (execution.conversationId === session.id || execution.historySessionId === session.id) &&
         (active.has(execution.status) || Date.parse(execution.updatedAt) >= Date.parse(old.updatedAt)));
       if (tracked) continue;
-      notices.push({ id: `session:${session.id}:${session.updatedAt}`, heading: '会话本轮已完成', title: session.title, sessionId: session.id });
+      const task = next.tasks.find(item => item.collaborationId && (item.id === session.taskId || item.sessionIds.includes(session.id)));
+      notices.push({ id: `session:${session.id}:${session.updatedAt}`, heading: '会话本轮已完成', title: session.title, sessionId: session.id, collaborationId: task?.collaborationId });
     }
     return notices.filter(notice => { if (delivered.has(notice.id)) return false; delivered.add(notice.id); return true; });
   };

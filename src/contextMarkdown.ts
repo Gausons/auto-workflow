@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { contextContentParts, contextEntryText } from '../shared/contextContent.js';
 import { contextRequirements, selectHandoffRecords } from '../shared/contextSelection.js';
 import { contextBrief } from './contextBrief.js';
+import { writeImmutableContextFile } from './contextFiles.js';
 import type { PromptImageReference } from '../shared/taskTypes.js';
 import type { ContextEntry, SessionContext } from './contextCompiler.js';
 import type { SummaryResult } from './contextModelSummary.js';
@@ -38,13 +39,7 @@ function renderEntry(entry: ContextEntry, index: number, root: string, assets: M
   return lines.join('\n\n');
 }
 
-async function writeImmutable(file: string, content: string) {
-  try { await writeFile(file, content, { flag: 'wx', mode: 0o600 }); }
-  catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-    if (await readFile(file, 'utf8') !== content) throw new Error('会话交接文件校验失败');
-  }
-}
+const writeImmutable = (file: string, content: string) => writeImmutableContextFile(file, content, '会话交接文件校验失败');
 
 /** Keep original evidence immutable; the Agent starts with a bounded reading guide. */
 export async function renderContextMarkdown(snapshot: SessionContext, entries: ContextEntry[], images: PromptImageReference[], root: string, budget: number, localFiles: boolean, modelSummary: SummaryResult, message = '') {

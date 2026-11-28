@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { once } from 'node:events';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
@@ -8,7 +9,7 @@ import { createApp } from '../scripts/testing/database.js';
 
 interface ApiData { token?: string; error?: string; [key: string]: unknown }
 
-test('tenant runtime allows reads during a mutation and still rejects competing writes', async t => {
+test('defect sync protects its settings without blocking independent session and device requests', async t => {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), 'tenant-runtime-'));
   const setupToken = 'tenant-runtime-setup-'.repeat(3);
   const originalFetch = globalThis.fetch;
@@ -29,7 +30,10 @@ test('tenant runtime allows reads during a mutation and still rejects competing 
     JIRA_JQL: 'project = TEST',
     JIRA_EMAIL: 'test@example.com',
     JIRA_API_TOKEN: 'test-token',
-    ENABLE_AI_ASSIGNMENT: 'false'
+    ENABLE_AI_ASSIGNMENT: 'false',
+    LOCAL_EXECUTION_ENABLED: 'false',
+    IDE_HISTORY_CODEX_DIR: path.join(rootDir, 'missing-codex-history'),
+    IDE_HISTORY_CLAUDE_DIR: path.join(rootDir, 'missing-claude-history')
   } });
   app.server.listen(0, '127.0.0.1');
   await once(app.server, 'listening');
@@ -62,6 +66,57 @@ test('tenant runtime allows reads during a mutation and still rejects competing 
   const competingWrite = await request('/api/scheduler', 'POST', { enabled: false }, login.data.token);
   assert.equal(competingWrite.status, 409);
   assert.equal(competingWrite.data.error, 'tenant_busy');
+
+  const post = (route: string, body: unknown) => request(route, 'POST', body, login.data.token);
+  const locations = ['dev-a', 'dev-b'].map(deviceId => ({ deviceId, projectId: 'project', cwd: '/' + deviceId + '/repo' }));
+  await Promise.all(locations.map(async target => {
+    const heartbeat = await post('/api/task-center', {
+      action: 'heartbeat', deviceId: target.deviceId, name: target.deviceId, agents: ['codex'], capabilities: { gitBranches: true },
+      codexProjects: [{ id: target.projectId, name: '项目', cwd: target.cwd }],
+      sessions: [{ nativeId: randomUUID(), agent: 'codex', cwd: target.cwd, title: '来源 ' + target.deviceId }]
+    });
+    assert.equal(heartbeat.status, 200, JSON.stringify(heartbeat.data));
+  }));
+  const history = await request('/api/agent-sessions', 'GET', undefined, login.data.token);
+  const sources = history.data.sessions as { id: string; deviceId: string }[];
+  assert.equal(sources.length, 2);
+  const createdIds = await Promise.all(locations.map(async target => {
+    const directory = await post('/api/task-center/directory-picker', target);
+    assert.equal(directory.status, 200, JSON.stringify(directory.data));
+    const directoryRequestId = directory.data.requestId;
+    assert.equal((await post('/api/task-center/directory-action', { requestId: directoryRequestId, action: 'claim' })).status, 200);
+    const cwd = target.cwd + '-other';
+    assert.equal((await post('/api/task-center/directory-action', { requestId: directoryRequestId, action: 'report', cwd })).status, 200);
+
+    const gitRequestId = randomUUID();
+    const git = await post('/api/task-center/git', { ...target, cwd, requestId: gitRequestId, action: 'list' });
+    assert.equal(git.status, 200, JSON.stringify(git.data));
+    for (const action of ['claim', 'verify', 'report']) {
+      const result = await post('/api/task-center/git-action', { requestId: gitRequestId, action, status: 'completed',
+        result: { repository: true, current: target.deviceId, branches: [target.deviceId], changes: 0 } });
+      assert.equal(result.status, 200, JSON.stringify(result.data));
+    }
+    const branches = await request('/api/task-center/git?requestId=' + gitRequestId, 'GET', undefined, login.data.token);
+    assert.equal((branches.data.result as { current: string }).current, target.deviceId);
+
+    const source = sources.find(item => item.deviceId === target.deviceId);
+    assert.ok(source);
+    const route = '/api/sessions/' + source.id + '/continue-as-new';
+    const input = { ...target, cwd, directoryRequestId, requestId: randomUUID(), targetAgent: 'codex', message: '开始执行' };
+    const [first, replay] = await Promise.all([post(route, input), post(route, input)]);
+    assert.equal(first.status, 202, JSON.stringify(first.data));
+    assert.equal(replay.status, 202, JSON.stringify(replay.data));
+    assert.deepEqual(replay.data, first.data);
+    const continuation = '/api/agent-sessions/' + first.data.sessionId + '/continue';
+    const state = await request(continuation, 'GET', undefined, login.data.token);
+    const jobs = state.data.executions as { id: string; deviceId: string; cwd: string }[];
+    assert.equal(jobs.length, 1);
+    assert.equal(jobs[0]!.deviceId, target.deviceId);
+    assert.equal(jobs[0]!.cwd, cwd);
+    assert.equal((await post('/api/task-center/execution-action', { executionId: jobs[0]!.id, action: 'claim' })).status, 200);
+    return first.data.sessionId;
+  }));
+  assert.notEqual(createdIds[0], createdIds[1]);
   releaseSync?.();
   assert.equal((await syncing).status, 200);
 });

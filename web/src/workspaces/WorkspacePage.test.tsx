@@ -7,7 +7,7 @@ import { WorkspacePage } from './WorkspacePage.js';
 
 const clients: QueryClient[] = [];
 afterEach(() => { cleanup(); clients.forEach(client => client.clear()); clients.length = 0; vi.unstubAllGlobals(); });
-function setup(role = 'owner', failure = false) {
+function setup(role = 'owner', failure = false, path = '/space') {
   const requests: { path: string; body: Record<string, unknown> }[] = [];
   let invited = false;
   const fetchMock = vi.fn(async (input: string, init?: RequestInit) => {
@@ -19,12 +19,14 @@ function setup(role = 'owner', failure = false) {
     } else if (input === '/api/workspaces') data = { currentId: 'team-1', workspaces: [{ id: 'team-1', name: '研发团队', kind: 'team', role }], invitations: [] };
     else if (input === '/api/bootstrap') data = { user: { id: 'me', displayName: '小王' } };
     else if (input === '/api/workspaces/members') data = { members: [{ id: 'me', displayName: '小王', username: 'wang', role, enabled: 1 }, { id: 'other', displayName: '小李', username: 'li', role: 'viewer', enabled: 1 }], invitations: invited ? [{ id: 'invitation', username: 'new-user', role: 'operator', expiresAt: Date.now() + 86400000 }] : [] };
+    else if (input === '/api/workspaces/collaborations/direct') data = { collaboration: { id: 'direct', title: '协同发版', goal: '分别完成接口与页面', participants: [], documents: [], runs: [] } };
+    else if (input === '/api/workspaces/collaborations') data = { collaborations: [] };
     else if (input === '/api/task-center') data = { tasks: [{ id: 'task-1', title: '打磨协作体验', status: 'running', updatedAt: '2026-10-30T08:00:00Z', events: [] }] };
     return new Response(JSON.stringify(data), { status: 200 });
   });
   vi.stubGlobal('fetch', fetchMock);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }); clients.push(client);
-  render(<QueryClientProvider client={client}><MemoryRouter><WorkspacePage /></MemoryRouter></QueryClientProvider>);
+  render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[path]}><WorkspacePage /></MemoryRouter></QueryClientProvider>);
   return { requests, fetchMock };
 }
 it('shows real team tasks, searches and opens the selected task', async () => {
@@ -60,4 +62,16 @@ it('failed invitation remains visible and is never retried automatically', async
   expect(await screen.findByRole('alert')).toHaveProperty('textContent', '服务暂时不可用');
   expect(requests).toHaveLength(1);
   expect(screen.getByLabelText('账号用户名')).toHaveProperty('value', 'new-user');
+});
+
+it('opens a shared collaboration link directly and returns to its list', async () => {
+  const { fetchMock } = setup('viewer', false, '/space?collaboration=direct');
+  const user = userEvent.setup();
+  expect(await screen.findByRole('heading', { name: '协同发版' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: '协作任务' }).getAttribute('aria-pressed')).toBe('true');
+  expect(fetchMock.mock.calls.some(([path]) => path === '/api/workspaces/collaborations')).toBe(false);
+  await user.click(screen.getByRole('button', { name: '← 全部协作任务' }));
+  expect(await screen.findByRole('heading', { name: '暂无协作任务' })).toBeTruthy();
+  await user.click(screen.getByRole('button', { name: '概览' }));
+  expect(await screen.findByRole('button', { name: /打磨协作体验/ })).toBeTruthy();
 });

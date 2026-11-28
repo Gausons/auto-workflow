@@ -32,6 +32,22 @@ export function createDeviceControl(database: ReturnType<typeof openDatabase>, t
   };
   return {
     snapshot,
+    syncSnapshot(userId: string): TaskCenterData {
+      const data = database.readTaskCenter(tenantId);
+      const devices = data.devices.filter(device => device.owner === userId)
+        .map(device => ({ ...device, online: Date.now() - Date.parse(device.lastSeen) < 90_000 }));
+      const owned = new Set(devices.map(device => device.id));
+      const handoffs = data.handoffs.filter(handoff => owned.has(handoff.deviceId));
+      const targets = new Set(handoffs.map(handoff => handoff.targetSessionId));
+      // Sync needs the native session ID to save reference packets. Collaboration
+      // prompts are delivered through the selected device's control endpoint.
+      const sessions = data.sessions.filter(session => owned.has(session.deviceId) && targets.has(session.id))
+        .map(({ id, nativeId, deviceId, agent, title, cwd, updatedAt }) => ({ id, nativeId, deviceId, agent, title, cwd, updatedAt }));
+      return { syncVersion: data.syncVersion, tasks: [], devices, sessions, handoffs,
+        executions: (data.executions || []).filter(job => !job.collaborationId && (owned.has(job.deviceId) || owned.has(job.contextSourceDeviceId || ''))),
+        directoryRequests: data.directoryRequests?.filter(item => owned.has(item.deviceId)),
+        gitRequests: data.gitRequests?.filter(item => owned.has(item.deviceId)) };
+    },
     subscribe(params: URLSearchParams, userId: string, send: (version: number) => void, onError: (error: unknown) => void) {
       let key: string | undefined;
       const check = () => {

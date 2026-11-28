@@ -158,6 +158,9 @@ test('Codex ACP uses the desktop model catalog and routes unsupported new models
   assert.equal(fallbackStarts[0]?.protocol, 'legacy');
   assert.equal(fallbackStarts[0]?.projectId, undefined);
   assert.equal(fallbackStarts[0]?.model, 'gpt-6-sol');
+  await preferred.start({ id: 'resume-model', protocol: 'acp', projectId: project.id, resumeSessionId: 'original', model: 'gpt-6-sol', agent: 'codex' });
+  assert.equal(primaryStarts.at(-1)?.id, 'resume-model');
+  assert.equal(fallbackStarts.length, 1, 'resuming an existing ACP session never starts a replacement App Server thread');
 });
 
 test('desktop model synchronization keeps the currently selected ACP default when supported', async () => {
@@ -254,7 +257,7 @@ test('managed ACP conversations reuse live sessions and load after reconnect wit
   assert.equal(third.sessionId, first.sessionId); assert.doesNotMatch(third.output || '', /REPLAY_SHOULD_NOT_APPEAR/);
 });
 
-test('uncertain managed ACP session creation never falls back to creating another session', async () => {
+test('uncertain conversation and collaboration ACP session creation never falls back to creating another session', async () => {
   class UncertainConnection extends EventEmitter {
     sessionId = null; closed = false; promptStarted = false;
     async initialize() {}
@@ -266,6 +269,8 @@ test('uncertain managed ACP session creation never falls back to creating anothe
   let fallbackStarts = 0;
   const runner = new AcpPreferredRunner({ primary, fallback: { start() { fallbackStarts++; }, close() {} } });
   await runner.start({ id: 'uncertain', agent: 'codex', protocol: 'acp', conversationId: 'managed', cwd: '/repo', prompt: 'continue' });
+  assert.equal(updates.at(-1)?.status, 'unknown');
+  await runner.start({ id: 'uncertain-task', agent: 'codex', protocol: 'acp', collaborationId: 'collaboration', cwd: '/repo', prompt: 'implement' });
   assert.equal(updates.at(-1)?.status, 'unknown'); assert.equal(fallbackStarts, 0); runner.close();
 });
 
@@ -281,15 +286,18 @@ for (const agent of ['codex', 'claude']) for (const phase of ['initialize', 'new
       async prompt() { this.prompts++; this.promptStarted = true; throw acp.RequestError.authRequired(); }
       close() { this.closed = true; }
     }
-    for (const managed of [false, true]) {
+    for (const kind of ['task', 'conversation', 'collaboration']) {
       const connection = new AuthenticationConnection(), updates: Execution[] = [];
       let fallbackStarts = 0;
       const primary = new AcpTaskRunner({ agent, connectionFactory: () => connection, environment: {}, onUpdate: job => updates.push(job) });
       const runner = new AcpPreferredRunner({ primary, fallback: { start() { fallbackStarts++; }, close() {} } });
-      const job = { id: 'auth-job', agent, protocol: 'acp', cwd: '/repo', prompt: '讨论方案', ...(managed ? { conversationId: 'managed' } : {}), ...(phase === 'load' ? { resumeSessionId: 'native-auth' } : {}) };
+      const job = { id: 'auth-job', agent, protocol: 'acp', cwd: '/repo', prompt: '讨论方案', ...(kind === 'conversation' ? { conversationId: 'managed' } : {}),
+        ...(kind === 'collaboration' ? { collaborationId: 'collaboration' } : {}), ...(phase === 'load' ? { resumeSessionId: 'native-auth' } : {}) };
       await runner.start(job); await new Promise(resolve => setImmediate(resolve));
       await runner.start(job);
       assert.equal(updates.at(-1)?.status, 'failed');
+      if (kind === 'collaboration' && phase === 'configure') assert.equal(updates.at(-1)?.sessionId, 'native-auth');
+      assert.equal(updates.at(-1)?.collaborationSessionNotCreated, kind === 'collaboration' && ['initialize', 'new'].includes(phase) ? true : undefined);
       assert.match(updates.at(-1)?.message || '', /目标设备.*需要认证/);
       assert.match(updates.at(-1)?.message || '', /同一系统用户/);
       assert.equal(connection.prompts, phase === 'prompt' ? 1 : 0);
