@@ -11,7 +11,7 @@ const git = async (cwd: string, args: string[]) => (await exec('git', ['-C', cwd
 async function readGitBranchState(cwd: string) {
   const [refs, status] = await Promise.all([
     git(cwd, ['for-each-ref', '--format=%(HEAD)%09%(refname:short)', 'refs/heads/']),
-    git(cwd, ['status', '--porcelain=v1', '-z'])
+    git(cwd, ['--no-optional-locks', 'status', '--porcelain=v1', '-z'])
   ]);
   let current = '';
   const branches = refs.split('\n').filter(Boolean).map(entry => {

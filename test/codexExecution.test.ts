@@ -126,6 +126,7 @@ test('local Git changes delay starts only in the affected repository', { skip: p
   }) });
   t.after(() => { service.close(); db.close(); });
   const change = service.git({ action: 'create', projectId: 'first', branch: 'new-first' });
+  let resumedId: string | undefined;
   try {
     for (let attempt = 0; attempt < 100; attempt++) {
       if (await access(path.join(first, '.git', 'checkout-started')).then(() => true, () => false)) break;
@@ -135,7 +136,7 @@ test('local Git changes delay starts only in the affected repository', { skip: p
     await assert.rejects(service.git({ action: 'switch', projectId: 'first', branch: 'main' }), { statusCode: 409 });
     assert.equal((await service.git({ action: 'create', projectId: 'second', branch: 'new-second' })).current, 'new-second');
     const submit = async (projectId: string) => {
-      const task = await center.command({ action: 'create', title: '任务 ' + projectId }, {});
+      const task = await center.command({ action: 'create', title: '任务 ' + projectId }, { id: 'owner' });
       return service.execute({ taskId: task.taskId, revision: task.revision, projectId });
     };
     const waiting = await submit('first');
@@ -144,11 +145,14 @@ test('local Git changes delay starts only in the affected repository', { skip: p
     assert.deepEqual(started.map(item => item.id), [independent.executionId]);
     assert.equal(db.readTaskCenter('default').executions.find(item => item.id === waiting.executionId)?.status, 'queued');
     await service.action({ action: 'stop', executionId: waiting.executionId });
+    resumedId = (await submit('first')).executionId;
   } finally {
     await writeFile(path.join(first, '.git', 'checkout-release'), '');
     assert.equal((await change).current, 'new-first');
   }
-  assert.equal(started.length, 1);
+  for (let attempt = 0; attempt < 100 && started.length < 2; attempt++) await delay(25);
+  assert.equal(started.length, 2);
+  assert.equal(started[1]?.id, resumedId);
 });
 
 test('creates durable project thread, starts a real turn and opens desktop without overriding permissions/model', async () => {

@@ -63,6 +63,7 @@ const newConversationPath = /^\/api\/sessions\/([a-f0-9]{64})\/continue-as-new$/
 const continuationPath = /^\/api\/agent-sessions\/([a-f0-9]{64})\/continue$/;
 const contextTransferPath = /^\/api\/conversations\/([a-f0-9]{64})\/transfer$/;
 const contextTransferObjectPath = /^\/api\/conversations\/([a-f0-9]{64})\/transfer\/objects\/([a-f0-9]{64})$/;
+// These routes coordinate through transactions or the specific resource they modify.
 const independentWrites = new Set([
   modelConnectionPath,
   '/api/task-center',

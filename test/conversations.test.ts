@@ -51,6 +51,21 @@ async function fixture(t: TestContext) {
   return { root, file, database, history, delivery, source, execution, options, service, launched, finish };
 }
 
+test('parallel context compilation can reuse the same image and snapshot files', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'parallel-context-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
+  const snapshot = freezeContext([{ role: 'user', source: 'source', text: JSON.stringify([
+    { type: 'input_image', image_url: 'data:image/png;base64,' + png }
+  ]) }], ['source']);
+  const results = await Promise.all(['甲', '乙', '甲', '乙'].map(message => contextPrompt(snapshot, message, root)));
+  assert.ok(results[0]?.images.length);
+  assert.equal(results[0]?.markdownPath, results[2]?.markdownPath);
+  assert.match(results[0]!.prompt, /甲$/);
+  assert.match(results[1]!.prompt, /乙$/);
+  assert.deepEqual(await readFile(results[0]!.images[0]!.path), Buffer.from(png, 'base64'));
+});
+
 test('a collaboration session continues through its assignment, while an explicit contextual fork gets a separate task', async t => {
   const f = await fixture(t);
   const center = createTaskCenter({ database: f.database, tenantId: 'default', history: f.history });

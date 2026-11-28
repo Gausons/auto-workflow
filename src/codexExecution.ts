@@ -436,6 +436,7 @@ export function createCodexExecution({ database, tenantId, workspace, history, a
   };
   async function startLocal(job: RunnerJob) {
     if (localBranchChanges.size) {
+      // The queued execution blocks later branch changes in this repository.
       const repo = await gitRoot(job.cwd).catch(() => '');
       await localBranchChanges.get(repo)?.catch(() => {});
       if (closing) return;
